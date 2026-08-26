@@ -1,14 +1,5 @@
 # yurtle-kanban
 
-> ## ⚠️ SUPERSEDED
->
-> **This project is superseded by [`nusy-kanban`](https://crates.io/crates/nusy-kanban)** — the
-> Arrow-native Rust kanban with graph-native PRs, dual boards, and NATS multi-agent
-> coordination. yurtle-kanban (file-based, Git-as-database) served the NuSy project
-> through 2026-03-17, when work tracking cut over to the Arrow store. It remains
-> available unchanged for PyPI users; no further releases are planned.
-> *(This repo stays public because published papers cite it.)*
-
 **File-based kanban using Yurtle (Turtle RDF in Markdown). Git is your database.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
