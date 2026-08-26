@@ -124,6 +124,7 @@ def _generate_template(prefix: str, type_name: str, sections: list[str]) -> str:
     return f"""---
 id: {prefix}-XXX
 title: ""
+type: {type_name}
 status: backlog
 created: YYYY-MM-DD
 priority: medium
@@ -209,10 +210,10 @@ kanban:
     scan_paths:
 {scan_paths_yaml}
 
-  ignore:
-    - "**/archive/**"
-    - "**/templates/**"
-    - "**/_TEMPLATE*"
+    ignore:
+      - "**/archive/**"
+      - "**/templates/**"
+      - "**/_TEMPLATE*"
 """
     config_path = kanban_dir / "config.yaml"
     config_path.write_text(config_content)
@@ -287,7 +288,7 @@ kanban:
     console.print()
     console.print("Next steps:")
     example_type = list(item_types.keys())[0] if item_types else "feature"
-    console.print(f"  1. Create work items: yurtle-kanban create {example_type} 'My item'")
+    console.print(f"  1. Create work items: yurtle-kanban create {example_type} 'My item' --push")
     console.print("  2. View board: yurtle-kanban board")
 
 

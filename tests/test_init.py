@@ -229,3 +229,112 @@ class TestInitScaffolding:
         work_skill = (tmp_path / ".claude" / "skills" / "work" / "SKILL.md").read_text()
         assert "FEAT-" in work_skill
         assert "expedition" not in work_skill.lower()
+
+
+class TestScaffoldIsUsableByTheToolThatWroteIt:
+    """A fresh `init` must produce a board this tool can read back correctly.
+
+    Every assertion here is on the READ-BACK side, not the write side. Reading
+    the generated YAML with `yaml.safe_load` and checking the keys are present
+    would have passed while all three defects below were live: the config's
+    `ignore:` block WAS in the file, under a key the loader never looks at. So
+    these go through KanbanConfig.load and KanbanService — the same path the CLI
+    uses.
+    """
+
+    @staticmethod
+    def _init(tmp_path, monkeypatch, theme="software"):
+        monkeypatch.chdir(tmp_path)
+        import subprocess
+
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
+        runner = CliRunner()
+        result = runner.invoke(main, ["init", "--theme", theme])
+        assert result.exit_code == 0, result.output
+        return result
+
+    def test_scaffolded_template_declares_its_own_type(self, tmp_path, monkeypatch):
+        """Each _TEMPLATE.md must carry `type:`, or a copy of it becomes a task.
+
+        service.py defaults a missing `type` to "task", so a beginner who copies
+        the scaffolded bug template — which is what the README tells them the
+        templates are for — silently files a task.
+        """
+        self._init(tmp_path, monkeypatch)
+
+        expected = {
+            "features": "feature",
+            "bugs": "bug",
+            "epics": "epic",
+            "tasks": "task",
+            "ideas": "idea",
+        }
+        checked = 0
+        for directory, type_name in expected.items():
+            template = tmp_path / "kanban-work" / directory / "_TEMPLATE.md"
+            assert template.exists(), f"missing template: {template}"
+            frontmatter = template.read_text().split("---")[1]
+            parsed = yaml.safe_load(frontmatter)
+            assert parsed.get("type") == type_name, (
+                f"{directory}/_TEMPLATE.md declares type={parsed.get('type')!r}, "
+                f"expected {type_name!r} — a copy of it would be read as a task"
+            )
+            checked += 1
+        assert checked == len(expected), "non-vacuity: not every template was examined"
+
+    def test_scaffolded_config_ignore_survives_the_loader(self, tmp_path, monkeypatch):
+        """The written ignore list must be the one KanbanConfig.load returns.
+
+        The defect this pins: `init` wrote `ignore:` as a sibling of `paths:`
+        while the loader reads `kanban.paths.ignore`, so the whole list was
+        silently discarded and the loader's two-entry default applied instead.
+        """
+        from yurtle_kanban.config import KanbanConfig
+
+        self._init(tmp_path, monkeypatch)
+        config = KanbanConfig.load(tmp_path / ".kanban" / "config.yaml")
+
+        assert "**/_TEMPLATE*" in config.paths.ignore, (
+            f"loader sees ignore={config.paths.ignore!r} — the scaffolded entry was dropped, "
+            "which means every custom ignore rule a user adds there is dropped too"
+        )
+
+    def test_scaffolded_templates_are_not_listed_as_work_items(self, tmp_path, monkeypatch):
+        """A fresh board must be EMPTY.
+
+        The user-visible consequence of the two defects above: `list` on an
+        untouched board showed six phantom entries (FEAT-XXX, BUG-XXX, ...)
+        before the user had created anything.
+        """
+        from yurtle_kanban.config import KanbanConfig
+        from yurtle_kanban.service import KanbanService
+
+        self._init(tmp_path, monkeypatch)
+
+        # Non-vacuity: the templates must actually be on disk, or "no items"
+        # would be trivially true and this test would prove nothing.
+        templates = list((tmp_path / "kanban-work").rglob("_TEMPLATE.md"))
+        assert len(templates) >= 5, f"expected scaffolded templates, found {len(templates)}"
+
+        config = KanbanConfig.load(tmp_path / ".kanban" / "config.yaml")
+        items = KanbanService(config, tmp_path).get_items()
+
+        assert items == [], (
+            f"a fresh board lists {len(items)} item(s): "
+            f"{[i.id for i in items]} — these are the _TEMPLATE.md files"
+        )
+
+    def test_next_steps_teaches_the_safe_create_form(self, tmp_path, monkeypatch):
+        """The post-init hint must carry --push.
+
+        README.md states "Never create items without `--push`", so the first
+        command the tool itself prints must not be the unsafe form.
+        """
+        result = self._init(tmp_path, monkeypatch)
+
+        create_lines = [
+            line for line in result.output.splitlines() if "yurtle-kanban create" in line
+        ]
+        assert create_lines, "non-vacuity: init printed no create example to check"
+        for line in create_lines:
+            assert "--push" in line, f"post-init hint omits --push: {line.strip()!r}"
