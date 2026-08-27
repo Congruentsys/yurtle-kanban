@@ -47,9 +47,10 @@ yurtle-kanban init --theme software
 #          kanban-work/issues/, kanban-work/tasks/, kanban-work/ideas/
 # Each with a _TEMPLATE.md showing the correct frontmatter format
 
-# Create work items
-yurtle-kanban create feature "Add dark mode" --priority high
-yurtle-kanban create bug "Fix login error" --assignee dev-1
+# Create work items — always with --push, which allocates the ID atomically
+# so two people creating at once cannot land on the same one
+yurtle-kanban create feature "Add dark mode" --push --priority high
+yurtle-kanban create bug "Fix login error" --push --assignee dev-1
 
 # View the board
 yurtle-kanban board
