@@ -1199,8 +1199,25 @@ class KanbanService:
             try:
                 allocations = json.loads(lock_file.read_text())
                 for alloc in allocations:
-                    if alloc.get("prefix") == prefix:
-                        max_num = max(max_num, alloc.get("number", 0))
+                    if alloc.get("prefix") != prefix:
+                        continue
+                    # ⚠ The `prefix` field alone is NOT the id space. A
+                    # paper-scoped hypothesis H130.1 is stamped
+                    # `prefix: "H", number: 1`, so matching on the prefix
+                    # counted it toward the DASHED H-NNN space: in a repo with a
+                    # 3-hypothesis paper, the first unparented hypothesis came
+                    # out H-004. Sources 2 and 3 below have always filtered on
+                    # `prefix + "-"`; this one did not, so the three sources
+                    # disagreed about what counts.
+                    #
+                    # A legacy record with no stored id keeps counting — this
+                    # can then only ever SKIP an id, never mint a duplicate.
+                    alloc_id = alloc.get("id")
+                    if alloc_id is not None and not str(alloc_id).startswith(
+                        prefix + "-"
+                    ):
+                        continue
+                    max_num = max(max_num, alloc.get("number", 0))
             except (json.JSONDecodeError, Exception):
                 pass
 
@@ -1235,13 +1252,35 @@ class KanbanService:
         through the same three-source scan as everything else — so an unparented
         hypothesis is not a special case, it is a normal item.
 
-        The two id spaces cannot collide. Paper-scoped ids are `H{paper}.{n}`
-        with a DOT and no dash; `_get_next_id_number` only counts ids matching
-        `prefix + "-"`, so `H130.1` is invisible to this allocator and `H-001`
-        is invisible to `get_next_hypothesis_number`. Paper-scoped numbering
-        keeps working exactly as it does today.
+        The two id spaces do not collide: paper-scoped ids are `H{paper}.{n}`
+        with a DOT and no dash, and all three sources in `_get_next_id_number`
+        now filter on `prefix + "-"`, so `H130.1` is invisible to this allocator
+        and `H-001` is invisible to `get_next_hypothesis_number` (which scans
+        for the `H{paper}.` prefix directly and never reads this one).
+
+        ⚠ That is true BY REPAIR, not by construction — do not restate it as
+        self-evident. Source 1 matched on the `prefix` FIELD alone, and every
+        `--push`-created `H130.1` is stamped `prefix: "H"`, so before the fix
+        the first unparented hypothesis in a repo with a 3-hypothesis paper
+        came out `H-004`. The non-collision is a property this code has to
+        keep, which is why `--paper` is now constrained to a non-negative int:
+        `--paper=-1` yields `H-1.1`, which lands squarely in the dashed space.
         """
         return f"H-{self._get_next_id_number('H'):03d}"
+
+    @staticmethod
+    def _is_deliberately_unparented(item_id: str) -> bool:
+        """True if this hypothesis id declares that it belongs to no paper.
+
+        Paper-scoped ids are `H{paper}.{n}` — a DOT. So an id in the DASHED
+        space is unparented BY ITS FORM, not by an omission someone should fix,
+        and the validators must not call it orphaned.
+
+        This subsumes the pre-existing `H-DRAFT...` convention rather than
+        sitting beside it: that spelling also starts with `H-`, and it meant the
+        same thing — a hypothesis deliberately not attached to a paper.
+        """
+        return item_id.startswith("H-")
 
     def get_next_hypothesis_number(self, paper_num: str) -> int:
         """Get next hypothesis number for a paper.
@@ -3053,18 +3092,15 @@ class KanbanService:
                 "idea": lit_idea.get(lit.id, ""),
             })
 
-        # Orphaned items: hypotheses without paper, experiments without hypothesis
+        # Orphaned items. A paper is OPTIONAL (issue #77), so "has no paper" is
+        # not by itself orphanhood — see _is_deliberately_unparented. An
+        # experiment need not test a filed hypothesis either; a DANGLING
+        # reference is still caught, as an error, further down.
         for h in by_type["hypothesis"]:
             paper = hyp_paper.get(h.id, "")
-            if not paper and not h.id.startswith("H-DRAFT"):
+            if not paper and not self._is_deliberately_unparented(h.id):
                 result["orphaned"].append({
                     "id": h.id, "reason": "No paper assignment",
-                })
-        for e in by_type["experiment"]:
-            hyp = exp_hyp.get(e.id, "")
-            if not hyp:
-                result["orphaned"].append({
-                    "id": e.id, "reason": "No hypothesis link",
                 })
 
         return result
@@ -3089,7 +3125,7 @@ class KanbanService:
         for h in xrefs["hypotheses"]:
             paper = h.get("paper", "")
             if not paper:
-                if not h["id"].startswith("H-DRAFT"):
+                if not self._is_deliberately_unparented(h["id"]):
                     warnings.append({
                         "id": h["id"],
                         "issue": "hypothesis missing paper link",
@@ -3100,15 +3136,12 @@ class KanbanService:
                     "issue": f"references {paper} (not found)",
                 })
 
-        # Check experiments → hypothesis links
+        # Check experiments → hypothesis links. An experiment that names NO
+        # hypothesis is a legitimate standing state (issue #77) — a dangling
+        # reference to one that does not exist is still an error below.
         for e in xrefs["experiments"]:
             hyp = e.get("hypothesis", "")
-            if not hyp:
-                warnings.append({
-                    "id": e["id"],
-                    "issue": "experiment missing hypothesis link",
-                })
-            elif hyp not in all_ids:
+            if hyp and hyp not in all_ids:
                 errors.append({
                     "id": e["id"],
                     "issue": f"references {hyp} (not found)",

@@ -3,7 +3,7 @@ name: hypothesis
 description: Create a formal hypothesis for HDD workflow
 disable-model-invocation: true
 allowed-tools: Bash, Write, Read, Grep, Glob
-argument-hint: "<paper-number> \"hypothesis statement\" --target \"threshold\""
+argument-hint: "\"hypothesis statement\" [--paper <n>] [--target \"threshold\"]"
 ---
 
 # Create Hypothesis
@@ -15,52 +15,55 @@ Create a formal, testable hypothesis as part of HDD.
 A hypothesis is a testable claim with a measurable target. It must be:
 - **Falsifiable**: Can be proven wrong
 - **Measurable**: Has a specific metric and threshold
-- **Linked**: Connected to a paper and (later) an experiment
+
+**A paper is OPTIONAL.** Do not ask the user to create one, and do not invent a
+paper number so the command will run. State the belief first; a paper is
+something you write later, if the work ever earns one.
 
 ## Hypothesis Format
 
 ```
-H{paper}.{n}: [Statement of testable claim] - Target: [threshold]
+H-{nnn}:          [Statement of testable claim] - Target: [threshold]   # unparented
+H{paper}.{n}:     [Statement of testable claim] - Target: [threshold]   # scoped to a paper
 ```
 
 **Examples:**
+- `H-001: Most support tickets come from one feature` - Target: >=60%
 - `H42.1: Redis caching reduces p99 latency by >=50%` - Target: >=50%
-- `H15.2: Static analysis catches >=30% more bugs` - Target: >=30%
 
 ## Steps
 
-### 1. Check Paper Exists
+### 1. Does this belong to a paper?
+
+Usually **no** — that is the default and needs no flag. Pass `--paper <n>` only
+if the user has already named an existing paper this hypothesis belongs to.
+
+### 2. Create via yurtle-kanban
+
+The id is allocated for you. Do not construct one by hand.
 
 ```bash
-# Verify paper exists and get current hypothesis count
-grep "Paper $PAPER_NUMBER" research/papers/
-grep "^| H$PAPER_NUMBER\." research/hypotheses/
+# The ordinary case — no paper
+yurtle-kanban hypothesis create "$STATEMENT" --target "$TARGET"
+
+# Scoped to a paper the user already has
+yurtle-kanban hypothesis create "$STATEMENT" --paper "$PAPER_NUMBER" --target "$TARGET"
 ```
 
-### 2. Determine Hypothesis Number
-
-Check existing hypotheses for this paper and use next number.
-
-### 3. Create via yurtle-kanban
-
-```bash
-yurtle-kanban create --board research hypothesis "H{paper}.{n}: $STATEMENT" --push
-```
-
-Or manually create `research/hypotheses/H{paper}.{n}.md`:
+If you must write the file by hand, `paper:` is omitted entirely when there is
+no paper — never `PAPER-XXX`, and never a number you chose:
 
 ```markdown
 ---
-id: H{paper}.{n}
+id: H-001
 type: hypothesis
-paper: Paper {paper}
 statement: "$STATEMENT"
 target: "$TARGET"
 status: draft
 created: YYYY-MM-DD
 ---
 
-# H{paper}.{n}: $STATEMENT
+# H-001: $STATEMENT
 
 ## Hypothesis
 
@@ -82,16 +85,15 @@ created: YYYY-MM-DD
 
 ## Related
 
-- Paper: Paper {paper}
 - Literature: LIT-XXX
 - Experiment: TBD (created after hypothesis)
 ```
 
-### 4. Commit
+### 3. Commit
 
 ```bash
-git add research/hypotheses/H{paper}.{n}.md
-git commit -m "hyp(HDD): create H{paper}.{n}"
+git add research/hypotheses/H-001-*.md
+git commit -m "hyp(HDD): create H-001"
 ```
 
 ## Hypothesis States
@@ -117,5 +119,5 @@ git commit -m "hyp(HDD): create H{paper}.{n}"
 ## Output
 
 Confirm creation:
-1. Show hypothesis ID (H{paper}.{n})
-2. Suggest next step: `/experiment H{paper}.{n} "design"`
+1. Show the hypothesis ID the tool allocated (`H-001`, or `H{paper}.{n}` if scoped)
+2. Suggest next step: `/experiment <that-id> "design"`
