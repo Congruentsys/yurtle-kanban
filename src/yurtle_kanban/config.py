@@ -395,7 +395,9 @@ class KanbanConfig:
 WIP_NS = "https://yurtle.dev/kanban/wip/"
 
 
-def load_wip_policy(config_dir: Path) -> dict[str, dict[str, int | dict[str, int | None] | None]] | None:
+def load_wip_policy(
+    config_dir: Path,
+) -> dict[str, dict[str, int | dict[str, int | None] | None]] | None:
     """Load WIP policy from a Yurtle file (.yurtle-kanban/wip-policy.md).
 
     The Yurtle file defines WIP limits as RDF triples, making them
@@ -432,7 +434,8 @@ def load_wip_policy(config_dir: Path) -> dict[str, dict[str, int | dict[str, int
         return None
 
     try:
-        from rdflib import Graph as RDFGraph, Namespace
+        from rdflib import Graph as RDFGraph
+        from rdflib import Namespace
 
         g = RDFGraph()
         # Try yurtle-rdflib parser first, fall back to parsing turtle blocks
