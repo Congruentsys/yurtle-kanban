@@ -387,6 +387,11 @@ yurtle-kanban literature create "Entity linking for knowledge graphs" \
     --idea IDEA-R-007 --push
 
 # Phase 1: Formalize a hypothesis (pre-registration!)
+#
+# NOTE: --paper is OPTIONAL, and this worked example is the fuller, paper-scoped
+# form. Without it the hypothesis stands on its own as H-001, and the whole loop
+# below works the same way — a paper is a thing you write when the work earns
+# one, not a container you must create first.
 yurtle-kanban hypothesis create "Entity linking increases graph density >=15%" \
     --paper 121 --target ">=15%" --push
 

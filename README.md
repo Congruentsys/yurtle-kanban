@@ -255,7 +255,7 @@ Columns: Harbor → Provisioning → Underway → Approaching Port → Arrived (
 
 **HDD (Hypothesis-Driven Development):**
 ```
-Idea (IDEA-R-), Literature (LIT-), Paper (PAPER-), Hypothesis (H{paper}.{n}), Experiment (EXPR-), Measure (M-)
+Idea (IDEA-R-), Literature (LIT-), Paper (PAPER-), Hypothesis (H-NNN, or H{paper}.{n} when scoped to a paper), Experiment (EXPR-), Measure (M-)
 Columns: Draft → Active → Complete → Abandoned
 ```
 
@@ -265,7 +265,13 @@ Use HDD for research workflows where experiments validate hypotheses:
 # Add HDD board for research
 yurtle-kanban board-add research --preset hdd --path research/
 
-# Create HDD items with dedicated CLI commands
+# A PAPER IS OPTIONAL. Start with the belief; the paper is a thing you write
+# later, if the work ever earns one.
+yurtle-kanban hypothesis create "Most support tickets come from one feature"
+yurtle-kanban experiment create --title "Count tickets by feature for a month"
+yurtle-kanban measure create "Ticket concentration" --unit percent --category quality
+
+# Scope items to a paper when you have one — ids become H{paper}.{n}
 yurtle-kanban idea create "Research question" --type research --push
 yurtle-kanban literature create "Prior art survey" --idea IDEA-R-001 --push
 yurtle-kanban paper create 130 "Cognitive Signal Fusion" --push

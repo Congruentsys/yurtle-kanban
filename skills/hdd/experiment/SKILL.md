@@ -3,7 +3,7 @@ name: experiment
 description: Create an experiment protocol for HDD - tests enhancement on branch
 disable-model-invocation: true
 allowed-tools: Bash, Write, Read, Grep, Glob
-argument-hint: "<hypothesis-id> \"experiment design description\""
+argument-hint: "\"experiment design description\" [--hypothesis <id>]"
 ---
 
 # Create Experiment
@@ -48,19 +48,28 @@ Build the feature you want to test.
 
 ### 3. Create Experiment File
 
-Create `research/experiments/EXPR-{paper}.md`:
+Prefer the CLI, which allocates the id for you. A hypothesis is **optional** —
+an experiment can stand on its own, and you should not invent a hypothesis (or
+a paper) so the command will run:
+
+```bash
+yurtle-kanban experiment create --title "$TITLE"                          # standalone
+yurtle-kanban experiment create --title "$TITLE" --hypothesis H130.1      # testing one
+```
+
+If you write the file by hand, note that the id is `EXPR-{nnn}` — its **own**
+number, never the paper's — and `paper:`/`hypothesis:` are omitted entirely
+when there is none:
 
 ```markdown
 ---
-id: EXPR-{paper}
+id: EXPR-001
 type: experiment
-paper: Paper {paper}
-hypothesis: H{paper}.{n}
 status: draft
 created: YYYY-MM-DD
 ---
 
-# EXPR-{paper}: $TITLE
+# EXPR-001: $TITLE
 
 ## Purpose
 
@@ -104,7 +113,7 @@ created: YYYY-MM-DD
 
 ```bash
 # Example run command
-./run_experiment.sh --experiment EXPR-{paper}
+./run_experiment.sh --experiment EXPR-{nnn}
 ```
 
 ## Results
@@ -115,15 +124,15 @@ created: YYYY-MM-DD
 
 ## Data Location
 
-`research/experiments/EXPR-{paper}/data/`
+`research/experiments/EXPR-{nnn}/data/`
 ```
 
 ### 4. Pre-Register (Critical!)
 
 Before running:
 ```bash
-git add research/experiments/EXPR-{paper}.md
-git commit -m "exp(HDD): pre-register EXPR-{paper}"
+git add research/experiments/EXPR-{nnn}.md
+git commit -m "exp(HDD): pre-register EXPR-{nnn}"
 git rev-parse HEAD  # Record this hash
 ```
 
@@ -137,7 +146,7 @@ Execute the protocol on the branch. Collect data.
 ```bash
 # Update experiment file
 # Create PR from feature branch
-gh pr create --title "feat(EXPR-{paper}): Validated H{paper}.{n}"
+gh pr create --title "feat(EXPR-{nnn}): Validated H{paper}.{n}"
 
 # After review, merge to main
 git checkout main && git merge exp-{description}
@@ -149,7 +158,7 @@ git checkout main && git merge exp-{description}
 # DO NOT merge
 
 # Create new idea based on learnings
-/idea "Based on EXPR-{paper}: [new approach]"
+/idea "Based on EXPR-{nnn}: [new approach]"
 
 # Archive branch
 git checkout main && git branch -D exp-{description}
@@ -176,7 +185,7 @@ git checkout main && git branch -D exp-{description}
 ## Output
 
 Confirm creation:
-1. Experiment ID (EXPR-{paper})
+1. Experiment ID (EXPR-{nnn})
 2. Feature branch name
 3. Pre-registration status
 4. Link to hypothesis being tested
