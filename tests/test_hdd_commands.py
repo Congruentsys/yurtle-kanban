@@ -437,6 +437,36 @@ class TestHDDHypothesisCreate:
         assert "H130.1" in first.output
         assert "H130.2" in second.output
 
+    def test_measure_template_is_not_touched_by_the_no_paper_branch(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """The no-paper substitution must not reach OTHER item types.
+
+        Caught during this change, not predicted: render() is the shared path
+        for every HDD type, and `measure.md` also contains `H{paper}.{n}` in an
+        example table. Guarding the branch on `"id" in variables` alone fired
+        for `measure create` — which passes an id and no paper — and rewrote
+        that hypothesis placeholder to the MEASURE's own id, so the example row
+        claimed the measure was its own hypothesis.
+
+        Scoping the branch on item_type fixed it. This pins that: the measure
+        template's scaffold must survive untouched.
+        """
+        result = runner.invoke(
+            main,
+            ["measure", "create", "Ticket concentration",
+             "--unit", "percent", "--category", "quality"],
+        )
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "measures").glob("M-001-*.md"))
+        assert written, "expected an M-001 file on disk"
+        body = written[0].read_text()
+
+        # The measure's own id must NOT appear in the hypothesis column of the
+        # example cross-reference table.
+        assert "| EXPR-XXX | M-001 |" not in body
+
     def test_hypothesis_duplicate_rejected(self, runner, temp_repo, hdd_config):
         """Duplicate hypothesis ID should be rejected."""
         runner.invoke(
@@ -534,13 +564,68 @@ class TestHDDExperimentCreate:
         assert result.exit_code == 0
         assert "EXPR-130" in result.output
 
-    def test_experiment_requires_hypothesis(self, runner, temp_repo, hdd_config):
-        """Experiment without --hypothesis should fail."""
+    # INVERTED, not deleted — same reason as the hypothesis one above. A paper
+    # is optional across the HDD family, and an experiment reaches a paper only
+    # THROUGH a hypothesis, so requiring one made the paper mandatory in
+    # disguise.
+    def test_experiment_without_hypothesis_succeeds(self, runner, temp_repo, hdd_config):
+        """No --hypothesis: the experiment stands on its own."""
+        result = runner.invoke(
+            main, ["experiment", "create", "EXPR-130", "--title", "No hyp"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "EXPR-130" in result.output
+
+    def test_experiment_id_is_optional_and_auto_allocated(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """Omitting EXPR_ID allocates the next id, like every other type.
+
+        Requiring the user to invent `EXPR-130` is the same produce-the-artifact-
+        first problem `--paper` was on hypotheses.
+        """
+        result = runner.invoke(main, ["experiment", "create", "--title", "Standalone probe"])
+        assert result.exit_code == 0, result.output
+        assert "EXPR-001" in result.output
+
+    def test_unparented_experiment_file_is_clean(self, runner, temp_repo, hdd_config):
+        """No paper and no hypothesis: still a clean file, no literal braces."""
+        result = runner.invoke(main, ["experiment", "create", "--title", "Standalone"])
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "experiments").glob("EXPR-001-*.md"))
+        assert written, "expected an EXPR-001 file on disk"
+        body = written[0].read_text()
+
+        assert "{paper}" not in body
+        assert "{n}" not in body
+        assert "id: EXPR-001" in body
+        assert "<#EXPR-001>" in body
+        # The hypothesis placeholder must NOT become the experiment's own id —
+        # they are different things, and an experiment attached to itself is
+        # worse than one visibly attached to nothing.
+        assert "hypothesis: EXPR-001" not in body
+
+    def test_experiment_paper_comes_from_the_hypothesis_not_its_own_id(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """Regression: the paper used to be derived from the EXPERIMENT'S id.
+
+        `paper_num = expr_id.replace("EXPR-", "")` meant EXPR-001 produced
+        `paper: PAPER-001` no matter which paper the hypothesis belonged to.
+        """
         result = runner.invoke(
             main,
-            ["experiment", "create", "EXPR-130", "--title", "No hyp"],
+            ["experiment", "create", "EXPR-007", "--hypothesis", "H130.1",
+             "--title", "Paper comes from the hypothesis"],
         )
-        assert result.exit_code != 0
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "experiments").glob("EXPR-007-*.md"))
+        assert written
+        body = written[0].read_text()
+        assert "paper: PAPER-130" in body, body[:400]
+        assert "PAPER-007" not in body
 
     def test_experiment_requires_title(self, runner, temp_repo, hdd_config):
         """Experiment without --title should fail."""
