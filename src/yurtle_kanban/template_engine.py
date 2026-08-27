@@ -97,6 +97,52 @@ class TemplateEngine:
             )
             # Replace {paper} placeholders in body
             content = content.replace("{paper}", paper_val)
+        elif item_type == "hypothesis" and "id" in variables:
+            # NO PAPER (issue #77). The hypothesis template is written around
+            # `H{paper}.{n}`, so leaving these unsubstituted ships a file with
+            # literal braces in its frontmatter and its turtle block — which is
+            # worse than the error we just removed.
+            #
+            # Substitute the id for the whole `H{paper}.{n}` token so the turtle
+            # subject matches the frontmatter id, and blank the paper field
+            # rather than leaving the `PAPER-XXX` scaffold — an unparented
+            # hypothesis has no paper, and a placeholder reads like an unfilled
+            # field rather than an absent one.
+            #
+            # ⚠ SCOPED ON item_type, NOT on the presence of an id. render() is
+            # the SHARED path for every HDD type and `H{paper}.{n}` also appears
+            # in measure.md (an example row) and experiment.md. An id-only guard
+            # fires for `measure create`, which passes an id and no paper, and
+            # rewrote the hypothesis placeholder in the measure's example table
+            # to the MEASURE's own id — so the row claimed the measure was its
+            # own hypothesis. Found by checking which templates carry the token
+            # rather than assuming only this one did.
+            content = content.replace("H{paper}.{n}", str(variables["id"]))
+            content = content.replace("EXPR-{paper}", "EXPR-XXX")
+            content = re.sub(
+                r"^(paper:\s*).*$", r"\g<1>", content, count=1, flags=re.MULTILINE,
+            )
+        elif item_type == "experiment" and "id" in variables:
+            # Same story one type over: an experiment need not belong to a paper
+            # either, and its template is written around `EXPR-{paper}` for its
+            # own id and `H{paper}.{n}` for the hypothesis it tests.
+            #
+            # The experiment's own id is known, so substitute it. The HYPOTHESIS
+            # placeholder is a DIFFERENT thing and must not become the
+            # experiment's id — with no hypothesis it falls back to a scaffold,
+            # so the file reads as "not attached" rather than "attached to
+            # itself".
+            content = content.replace("EXPR-{paper}", str(variables["id"]))
+            content = content.replace(
+                "H{paper}.{n}", str(variables.get("hypothesis_id", "H-XXX")),
+            )
+            content = re.sub(
+                r"^(paper:\s*).*$", r"\g<1>", content, count=1, flags=re.MULTILINE,
+            )
+            if "hypothesis_id" not in variables:
+                content = re.sub(
+                    r"^(hypothesis:\s*).*$", r"\g<1>", content, count=1, flags=re.MULTILINE,
+                )
 
         # Substitute hypothesis number
         if "n" in variables:
