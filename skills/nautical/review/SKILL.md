@@ -24,7 +24,7 @@ ls kanban-work/expeditions/EXP-$ARGUMENTS*.md 2>/dev/null || ls kanban-work/expe
 ```
 
 Read the expedition file and extract:
-- **tags**: Determine required test types (`standard-tests`, `live-being-tests`)
+- **tags**: Determine required test types (`unit-tests`, `integration-tests`)
 - **status**: Current kanban status
 - **branch**: Associated branch name
 
@@ -32,23 +32,28 @@ Read the expedition file and extract:
 
 Based on expedition tags, verify tests exist:
 
-#### If `standard-tests` tag (or no tags = default):
+> **These commands are the common Python layout, not a contract.** Substitute your
+> project's own test command — the structure below (find the tests for this item, run
+> the tier its tags ask for) is what the skill is for; `pytest` and `tests/` are just
+> the most likely spelling.
+
+#### If `unit-tests` tag (or no tags = default):
 ```bash
-# Find unit/integration tests for this expedition
+# Find tests for this expedition
 find . -name "test_*$ARGUMENTS*.py" -o -name "test_exp$ARGUMENTS*.py" | grep -v __pycache__
 
-# Run standard tests
-pytest brain/tests/ -v --tb=short 2>&1 | tail -50
+# Run the unit suite
+pytest tests/ -v --tb=short 2>&1 | tail -50
 ```
 
-#### If `live-being-tests` tag:
+#### If `integration-tests` tag:
 ```bash
-# Find CLI-first live tests
-ls live-being-tests/test_*$ARGUMENTS*.py 2>/dev/null
-ls live-being-tests/test_exp$ARGUMENTS*.py 2>/dev/null
+# Find end-to-end tests for this expedition
+ls tests/integration/test_*$ARGUMENTS*.py 2>/dev/null
+ls tests/integration/test_exp$ARGUMENTS*.py 2>/dev/null
 
-# Run live being tests (may need specific being)
-pytest live-being-tests/test_*$ARGUMENTS*.py -v --tb=short 2>&1 | tail -50
+# Run them
+pytest tests/integration/test_*$ARGUMENTS*.py -v --tb=short 2>&1 | tail -50
 ```
 
 ### 3. Check Documentation
@@ -103,22 +108,19 @@ READY TO MERGE / NEEDS WORK: [specific issues]
 If all checks pass, offer to:
 
 ```bash
-# Update branch with main
+# Update the branch with main
 git fetch origin main
 git rebase origin/main
+git push --force-with-lease origin exp-$ARGUMENTS-branch
 
-# Merge to main
-git checkout main
-git merge --no-ff exp-$ARGUMENTS-branch -m "Merge EXP-$ARGUMENTS: Title"
-
-# Push
-git push origin main
+# Merge through a pull request — NOT by pushing main directly. CLAUDE.md is
+# explicit about this: "never push directly to main", and the review a PR
+# carries is the point of this skill.
+gh pr create --fill                       # if one is not open yet
+gh pr merge --merge --delete-branch       # after someone OTHER than the author approves
 
 # Update kanban
 yurtle-kanban move EXP-$ARGUMENTS done
-
-# Delete feature branch (optional, not expedition branches)
-git branch -d exp-$ARGUMENTS-branch
 ```
 
 ### 6. If Not Ready: List Action Items
@@ -129,7 +131,7 @@ Create a checklist of what needs to be done:
 ## Action Items for EXP-$ARGUMENTS
 
 - [ ] Add unit tests for [specific module]
-- [ ] Add live-being-tests for [specific feature]
+- [ ] Add integration tests for [specific feature]
 - [ ] Update expedition doc with [missing section]
 - [ ] Fix failing test: [test name]
 ```

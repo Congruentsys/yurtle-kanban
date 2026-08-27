@@ -29,15 +29,18 @@ If $ARGUMENTS provided, use that expedition. Otherwise, infer from branch name o
 Run appropriate tests based on what was changed:
 
 ```bash
-# Unit tests for modified modules
-pytest brain/MODULE/tests/ -v
+# Unit tests for the modules you changed
+pytest tests/ -v
 
 # Integration tests if applicable
-pytest brain/tests/ -v -k "integration"
+pytest tests/ -v -k "integration"
 
-# Live being tests if applicable (CLI-first)
-pytest live-being-tests/test_*.py -v
+# End-to-end tests if applicable
+pytest tests/integration/test_*.py -v
 ```
+
+> Substitute your project's own test command — these are the common Python layout,
+> not a contract.
 
 Report test results. If tests fail, DO NOT proceed - fix issues first.
 

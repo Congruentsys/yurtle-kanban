@@ -338,3 +338,72 @@ class TestScaffoldIsUsableByTheToolThatWroteIt:
         assert create_lines, "non-vacuity: init printed no create example to check"
         for line in create_lines:
             assert "--push" in line, f"post-init hint omits --push: {line.strip()!r}"
+
+
+class TestSkillsDoNotAssumeOneConsumersTree:
+    """A skill shipped by a general-purpose tool must run in a stranger's project.
+
+    This is a guard for a class, not for the two files that had it. The skills are
+    installed verbatim into whatever repo runs `init`, so a path that only exists in
+    one particular consumer's tree becomes an instruction the reader cannot follow —
+    they run a command against a directory they do not have, and nothing tells them
+    why. `grep`ping for today's two offenders would pass the moment someone writes a
+    third; the scan below is over every skill we ship.
+
+    The offenders that motivated it, all in the nautical theme, all naming
+    nusy-product-team's own layout:
+
+        skills/nautical/review/SKILL.md   pytest brain/tests/ ...  and the
+                                          live-being-tests/ tier (7 lines)
+        skills/nautical/done/SKILL.md     pytest brain/MODULE/tests/ ... (3 lines)
+
+    NOT included, deliberately: a bare word like "brain" in prose, and a sample URL in
+    a test fixture. The test is for PATHS a skill tells a reader to run against.
+    """
+
+    # Path fragments that belong to one consumer's tree rather than to any project
+    # that installs this tool. Each is anchored so it matches a path, not a word.
+    FOREIGN_TREE_PATHS = (
+        "brain/",
+        "live-being-tests",
+        "beings/",
+    )
+
+    def test_no_shipped_skill_references_a_foreign_tree(self):
+        from pathlib import Path
+
+        # ⚠ THE REPOSITORY'S skills/, deliberately NOT _get_skills_dir().
+        #
+        # _get_skills_dir() resolves sys.prefix/share/yurtle-kanban/skills first —
+        # the INSTALLED copy — so on any machine with the package installed this test
+        # scans build output rather than source. The first version of this test did
+        # exactly that and was vacuous: restoring the pre-fix SKILL.md with its seven
+        # leaking lines left it GREEN, because the copy it was reading had been
+        # refreshed by the install that ran after the edit.
+        #
+        # What is under test is what this repo SHIPS, and that is the source tree.
+        skills_dir = Path(__file__).resolve().parent.parent / "skills"
+        assert skills_dir.is_dir(), f"repo skills dir not found: {skills_dir}"
+
+        skill_files = sorted(skills_dir.rglob("SKILL.md"))
+        # Non-vacuity: a glob that matched nothing would pass this test while
+        # proving nothing at all.
+        assert len(skill_files) >= 15, (
+            f"expected the shipped skill set, found {len(skill_files)} SKILL.md file(s) "
+            f"under {skills_dir} — the scan below would be checking almost nothing"
+        )
+
+        offenders = []
+        for path in skill_files:
+            text = path.read_text(encoding="utf-8")
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                for fragment in self.FOREIGN_TREE_PATHS:
+                    if fragment in line:
+                        offenders.append(
+                            f"{path.relative_to(skills_dir)}:{lineno} contains {fragment!r} — {line.strip()[:90]}"
+                        )
+
+        assert not offenders, (
+            "a shipped skill names a path from one consumer's tree; a stranger following it "
+            "runs a command against a directory they do not have:\n  " + "\n  ".join(offenders)
+        )
