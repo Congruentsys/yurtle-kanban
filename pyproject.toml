@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yurtle-kanban"
-version = "2.0.1"
+version = "2.1.0"
 description = "File-based kanban with a queryable knowledge graph. SPARQL, semantic search, and natural language queries over Yurtle (Turtle RDF in Markdown). Git is your database."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Hank Hancock", email = "hank@example.com" }
+    { name = "Hank Head", email = "hankh1844@gmail.com" }
 ]
 keywords = [
     "kanban",
