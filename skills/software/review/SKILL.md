@@ -86,22 +86,19 @@ READY TO MERGE / NEEDS WORK: [specific issues]
 If all checks pass, offer to:
 
 ```bash
-# Update branch with main
+# Update the branch with main
 git fetch origin main
 git rebase origin/main
+git push --force-with-lease origin feature/feat-XXX-branch
 
-# Merge to main
-git checkout main
-git merge --no-ff feature/feat-XXX-branch -m "Merge $ARGUMENTS: Title"
-
-# Push
-git push origin main
+# Merge through a pull request — NOT by pushing main directly. CLAUDE.md is
+# explicit about this: "never push directly to main", and the review a PR
+# carries is the point of this skill.
+gh pr create --fill                       # if one is not open yet
+gh pr merge --merge --delete-branch       # after someone OTHER than the author approves
 
 # Update kanban
 yurtle-kanban move $ARGUMENTS done
-
-# Delete feature branch
-git branch -d feature/feat-XXX-branch
 ```
 
 ### 6. If Not Ready: List Action Items

@@ -76,29 +76,43 @@ Add new entry at top of CHANGELOG.md (create if doesn't exist):
 
 If release message was provided, include it.
 
-### 5. Commit Release
+### 5. Commit Release on a Branch
+
+A release commit is a commit. It goes through a pull request like every other
+one — CLAUDE.md is explicit: "never push directly to main". This is also how
+releases have actually landed here (v2.0.0 via PR #56, v2.1.0 via PR #70).
 
 ```bash
+git checkout -b chore/release-vX.Y.Z
 git add pyproject.toml CHANGELOG.md
 git commit -m "chore: release vX.Y.Z
 
 [Release description]
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+git push -u origin chore/release-vX.Y.Z
 ```
 
-### 6. Create Git Tag
+### 6. Merge the Release PR
 
 ```bash
+gh pr create --fill
+gh pr merge --merge --delete-branch       # after someone OTHER than the author approves
+```
+
+### 7. Tag the Merged Commit
+
+Tag **after** the merge, so the tag names the commit that is actually on main.
+Tagging before it means re-tagging if review changes anything.
+
+```bash
+git checkout main
+git pull --ff-only origin main
+
 git tag -a vX.Y.Z -m "Release vX.Y.Z
 
 [Release description]"
-```
 
-### 7. Push Release
-
-```bash
-git push origin main
 git push origin vX.Y.Z
 ```
 
