@@ -568,7 +568,6 @@ class KanbanService:
         columns = []
 
         if theme and "columns" in theme:
-            status_map = self._get_column_status_map()
             for col_id, col_def in theme["columns"].items():
                 # Apply override: check col_id directly, then its display name
                 wip_limit = col_def.get("wip_limit")
@@ -595,7 +594,12 @@ class KanbanService:
             columns = [
                 Column(id="backlog", name="Backlog", order=1),
                 Column(id="ready", name="Ready", order=2),
-                Column(id="in_progress", name="In Progress", order=3, wip_limit=overrides.get("in_progress", 3)),
+                Column(
+                    id="in_progress",
+                    name="In Progress",
+                    order=3,
+                    wip_limit=overrides.get("in_progress", 3),
+                ),
                 Column(id="review", name="Review", order=4),
                 Column(id="done", name="Done", order=5),
             ]

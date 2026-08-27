@@ -811,13 +811,13 @@ def export_research_index(board: Board) -> str:
     lines.append("")
 
     lines.append(
-        f"**Legend:** "
-        f"\u2705 Complete | "
-        f"\U0001F4DD Draft/Active | "
-        f"\u270D\uFE0F Writing | "
-        f"\U0001F4CB Planned | "
-        f"\U0001F4A1 Captured | "
-        f"\u274C Abandoned"
+        "**Legend:** "
+        "\u2705 Complete | "
+        "\U0001F4DD Draft/Active | "
+        "\u270D\uFE0F Writing | "
+        "\U0001F4CB Planned | "
+        "\U0001F4A1 Captured | "
+        "\u274C Abandoned"
     )
     lines.append("")
 

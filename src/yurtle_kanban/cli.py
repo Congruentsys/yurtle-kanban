@@ -36,7 +36,13 @@ from .board import (
 )
 from .config import KanbanConfig
 from .epic_commands import epic, voyage
-from .export import export_expedition_index, export_html, export_json, export_markdown, export_research_index
+from .export import (
+    export_expedition_index,
+    export_html,
+    export_json,
+    export_markdown,
+    export_research_index,
+)
 from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure, paper
 from .models import WorkItemStatus, WorkItemType
 from .service import KanbanService
