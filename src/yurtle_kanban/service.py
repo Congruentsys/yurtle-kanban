@@ -1224,6 +1224,21 @@ class KanbanService:
 
         return max_num + 1
 
+    def get_next_unparented_hypothesis_id(self) -> str:
+        """Get the next id for a hypothesis that belongs to no paper.
+
+        Returns the ordinary `H-NNN` form every other work type uses, allocated
+        through the same three-source scan as everything else — so an unparented
+        hypothesis is not a special case, it is a normal item.
+
+        The two id spaces cannot collide. Paper-scoped ids are `H{paper}.{n}`
+        with a DOT and no dash; `_get_next_id_number` only counts ids matching
+        `prefix + "-"`, so `H130.1` is invisible to this allocator and `H-001`
+        is invisible to `get_next_hypothesis_number`. Paper-scoped numbering
+        keeps working exactly as it does today.
+        """
+        return f"H-{self._get_next_id_number('H'):03d}"
+
     def get_next_hypothesis_number(self, paper_num: str) -> int:
         """Get next hypothesis number for a paper.
 

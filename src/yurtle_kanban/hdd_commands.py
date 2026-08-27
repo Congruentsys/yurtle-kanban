@@ -731,7 +731,11 @@ def hypothesis():
 
 @hypothesis.command("create")
 @click.argument("statement")
-@click.option("--paper", "paper_num", required=True, type=int, help="Paper number (e.g., 130)")
+@click.option(
+    "--paper", "paper_num", default=None, type=int,
+    help="Paper number (e.g., 130). Optional — omit it and the hypothesis "
+         "stands on its own as H-001; pass it to scope the id to a paper.",
+)
 @click.option(
     "--id", "hyp_id", default=None,
     help="Explicit ID (e.g., H130.1). Auto-allocates if omitted.",
@@ -750,7 +754,7 @@ def hypothesis():
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def hypothesis_create(
     statement: str,
-    paper_num: int,
+    paper_num: int | None,
     hyp_id: str | None,
     target: str | None,
     source_idea: str | None,
@@ -763,25 +767,44 @@ def hypothesis_create(
 
     STATEMENT is the hypothesis text.
 
+    A paper is OPTIONAL. State the hypothesis first; attach it to a paper later
+    if it ever needs one.
+
     Examples:
+        yurtle-kanban hypothesis create "Most support tickets come from one feature"
         yurtle-kanban hypothesis create "V12 improves accuracy by 15%" --paper 130
         yurtle-kanban hypothesis create "Faster convergence" --paper 130 --id H130.1
-        yurtle-kanban hypothesis create "Better recall" --paper 130 --target ">=85%"
+        yurtle-kanban hypothesis create "Better recall" --target ">=85%"
     """
     service = _get_service()
     engine = _get_engine()
 
-    # Auto-allocate hypothesis number if no explicit ID
+    # Auto-allocate an id if none was given.
+    #
+    # --paper used to be required, which meant the FIRST thing a new user tried
+    # failed: you had to invent a research paper before you were allowed to
+    # state a belief. That inverted the method — the formal artifact demanded
+    # before the informal thing it describes (issue #77).
+    #
+    # The requirement was never about the method; it was about ID ALLOCATION,
+    # because ids are formatted H{paper}.{n}. So an unparented hypothesis simply
+    # takes the ordinary H-NNN form every other work type already uses. The two
+    # spaces cannot collide — `H130.1` has a dot and no dash, `H-001` the
+    # reverse — so paper-scoped numbering is untouched.
     if hyp_id is None:
-        next_n = service.get_next_hypothesis_number(str(paper_num))
-        hyp_id = f"H{paper_num}.{next_n}"
-        hyp_n = str(next_n)
+        if paper_num is None:
+            hyp_id = service.get_next_unparented_hypothesis_id()
+            hyp_n = None
+        else:
+            next_n = service.get_next_hypothesis_number(str(paper_num))
+            hyp_id = f"H{paper_num}.{next_n}"
+            hyp_n = str(next_n)
     else:
         # Extract n from user-provided ID (e.g., H130.1 → "1")
         if "." in hyp_id:
             hyp_n = hyp_id.split(".")[-1]
         else:
-            hyp_n = "1"
+            hyp_n = None if paper_num is None else "1"
 
     # Check for duplicate
     existing = service.get_item(hyp_id)
@@ -791,9 +814,14 @@ def hypothesis_create(
     variables: dict[str, str | list[str]] = {
         "id": hyp_id,
         "title": statement,
-        "paper": str(paper_num),
-        "n": hyp_n,
     }
+    # Only pass paper/n when there IS a paper. The template engine keys off
+    # their presence, and passing "None" as a string would render the literal
+    # word into the frontmatter and the turtle block.
+    if paper_num is not None:
+        variables["paper"] = str(paper_num)
+    if hyp_n is not None:
+        variables["n"] = hyp_n
     if target:
         variables["target"] = target
     if source_idea:
@@ -820,7 +848,10 @@ def hypothesis_create(
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(f"[green]Created{pushed} {result['id']}: {statement}[/green]")
             console.print(f"  File: {result['item'].file_path}")
-            _update_parent(service, f"PAPER-{paper_num}", "hypothesis", result["id"], push=True)
+            # No paper -> no parent to back-reference. Guarding here rather than
+            # inside _update_parent keeps the 'PAPER-None' string from ever existing.
+            if paper_num is not None:
+                _update_parent(service, f"PAPER-{paper_num}", "hypothesis", result["id"], push=True)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -833,7 +864,8 @@ def hypothesis_create(
         )
         console.print(f"[green]Created {item.id}: {statement}[/green]")
         console.print(f"  File: {item.file_path}")
-        _update_parent(service, f"PAPER-{paper_num}", "hypothesis", item.id, push=False)
+        if paper_num is not None:
+            _update_parent(service, f"PAPER-{paper_num}", "hypothesis", item.id, push=False)
 
 
 # ---------------------------------------------------------------------------

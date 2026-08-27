@@ -379,13 +379,63 @@ class TestHDDHypothesisCreate:
         assert result.exit_code == 0
         assert "H130.2" in result.output
 
-    def test_hypothesis_requires_paper(self, runner, temp_repo, hdd_config):
-        """Hypothesis without --paper should fail."""
-        result = runner.invoke(
-            main,
-            ["hypothesis", "create", "No paper given"],
-        )
-        assert result.exit_code != 0
+    # INVERTED, not deleted (issue #77). This used to be
+    # `test_hypothesis_requires_paper`, asserting that `hypothesis create`
+    # without `--paper` FAILS. That was the defect: a new user's first HDD act
+    # was refused until they invented a research paper to hang it on. The old
+    # assertion is kept in inverted form rather than removed, so the change of
+    # contract is legible instead of reading as lost coverage.
+    def test_hypothesis_without_paper_succeeds_and_is_unparented(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """No --paper: the hypothesis stands on its own with an H-NNN id."""
+        result = runner.invoke(main, ["hypothesis", "create", "No paper given"])
+        assert result.exit_code == 0, result.output
+        assert "H-001" in result.output
+
+    def test_unparented_hypothesis_file_has_no_stray_placeholders(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """The template is written around H{paper}.{n}; without a paper it must
+        still render a clean file rather than shipping literal braces."""
+        result = runner.invoke(main, ["hypothesis", "create", "Standalone claim"])
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "hypotheses").glob("H-001-*.md"))
+        assert written, "expected an H-001 file on disk"
+        body = written[0].read_text()
+
+        assert "{paper}" not in body
+        assert "{n}" not in body
+        assert "PAPER-None" not in body
+        # The turtle subject must match the frontmatter id, or the file
+        # describes a different thing than it claims to be.
+        assert "id: H-001" in body
+        assert "<#H-001>" in body
+
+    def test_unparented_and_paper_scoped_ids_do_not_collide(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """H-NNN and H{paper}.{n} are separate spaces and must stay separate.
+
+        The allocator counts only ids matching `H-`, so paper-scoped ids are
+        invisible to it and vice versa. This is what keeps existing
+        paper-scoped numbering working exactly as before.
+        """
+        runner.invoke(main, ["hypothesis", "create", "First standalone"])
+        runner.invoke(main, ["hypothesis", "create", "Scoped", "--paper", "130"])
+        result = runner.invoke(main, ["hypothesis", "create", "Second standalone"])
+
+        assert result.exit_code == 0, result.output
+        # H-002, not H-003: the paper-scoped H130.1 must not advance this counter.
+        assert "H-002" in result.output
+
+    def test_paper_scoped_creation_is_unchanged(self, runner, temp_repo, hdd_config):
+        """Regression guard on the half that was already working."""
+        first = runner.invoke(main, ["hypothesis", "create", "One", "--paper", "130"])
+        second = runner.invoke(main, ["hypothesis", "create", "Two", "--paper", "130"])
+        assert "H130.1" in first.output
+        assert "H130.2" in second.output
 
     def test_hypothesis_duplicate_rejected(self, runner, temp_repo, hdd_config):
         """Duplicate hypothesis ID should be rejected."""

@@ -97,6 +97,22 @@ class TemplateEngine:
             )
             # Replace {paper} placeholders in body
             content = content.replace("{paper}", paper_val)
+        elif "id" in variables:
+            # NO PAPER (issue #77). The hypothesis template is written around
+            # `H{paper}.{n}`, so leaving these unsubstituted ships a file with
+            # literal braces in its frontmatter and its turtle block — which is
+            # worse than the error we just removed.
+            #
+            # Substitute the id for the whole `H{paper}.{n}` token so the turtle
+            # subject matches the frontmatter id, blank the paper field rather
+            # than leaving the `PAPER-XXX` scaffold (an unparented hypothesis
+            # has no paper, and a placeholder reads like an unfilled one), and
+            # leave the experiment id as its own scaffold.
+            content = content.replace("H{paper}.{n}", str(variables["id"]))
+            content = content.replace("EXPR-{paper}", "EXPR-XXX")
+            content = re.sub(
+                r"^(paper:\s*).*$", r"\g<1>", content, count=1, flags=re.MULTILINE,
+            )
 
         # Substitute hypothesis number
         if "n" in variables:
