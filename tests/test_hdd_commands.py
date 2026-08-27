@@ -418,9 +418,10 @@ class TestHDDHypothesisCreate:
     ):
         """H-NNN and H{paper}.{n} are separate spaces and must stay separate.
 
-        The allocator counts only ids matching `H-`, so paper-scoped ids are
-        invisible to it and vice versa. This is what keeps existing
-        paper-scoped numbering working exactly as before.
+        ⚠ This arm reaches SOURCES 2 AND 3 ONLY (parsed items and filenames).
+        It cannot see Source 1, the allocations file, because `create_item`
+        only writes that under `--push`. See the sibling test below for the
+        arm that covers it — this one PASSED while the invariant was false.
         """
         runner.invoke(main, ["hypothesis", "create", "First standalone"])
         runner.invoke(main, ["hypothesis", "create", "Scoped", "--paper", "130"])
@@ -430,12 +431,183 @@ class TestHDDHypothesisCreate:
         # H-002, not H-003: the paper-scoped H130.1 must not advance this counter.
         assert "H-002" in result.output
 
+    def test_paper_scoped_allocations_do_not_advance_the_dashed_counter(
+        self, temp_repo, hdd_config,
+    ):
+        """SOURCE 1 — the arm the test above could not reach.
+
+        `_ID_ALLOCATIONS.json` stamps every `--push`-created `H130.1` as
+        `prefix: "H", number: 1`, and Source 1 matched on that PREFIX FIELD
+        alone while Sources 2 and 3 filtered on `prefix + "-"`. So in any repo
+        that had done paper-scoped work with `--push`, the first unparented
+        hypothesis came out `H-004`, not `H-001` — contradicting the docstring,
+        the `--help` text and the README example all at once.
+
+        Written at the allocator rather than through `--push` deliberately: the
+        defect is in the read, `--push` merely produces the file, and driving
+        real git from a unit test would buy nothing but flakiness.
+        """
+        import json
+
+        alloc = temp_repo / ".kanban" / "_ID_ALLOCATIONS.json"
+        alloc.parent.mkdir(parents=True, exist_ok=True)
+        alloc.write_text(json.dumps([
+            {"id": "H130.1", "prefix": "H", "number": 1},
+            {"id": "H130.2", "prefix": "H", "number": 2},
+            {"id": "H130.3", "prefix": "H", "number": 3},
+        ]))
+
+        service = KanbanService(hdd_config, temp_repo)
+        assert service.get_next_unparented_hypothesis_id() == "H-001"
+
+    def test_dashed_allocations_still_advance_the_dashed_counter(
+        self, temp_repo, hdd_config,
+    ):
+        """NON-VACUITY CONTROL for the arm above.
+
+        Filtering Source 1 must NARROW what counts, not switch it off — the
+        whole reason Source 1 exists is to remember ids allocated but not yet
+        on disk. Without this arm, deleting the `max_num` update entirely would
+        leave the test above green.
+        """
+        import json
+
+        alloc = temp_repo / ".kanban" / "_ID_ALLOCATIONS.json"
+        alloc.parent.mkdir(parents=True, exist_ok=True)
+        alloc.write_text(json.dumps([
+            {"id": "H-007", "prefix": "H", "number": 7},
+        ]))
+
+        service = KanbanService(hdd_config, temp_repo)
+        assert service.get_next_unparented_hypothesis_id() == "H-008"
+
+    def test_legacy_allocation_record_without_an_id_still_counts(
+        self, temp_repo, hdd_config,
+    ):
+        """The filter must fail toward SKIPPING an id, never toward reusing one.
+
+        A record predating the `id` field cannot be classified, so it keeps
+        counting. That can only over-count, and over-counting skips an id —
+        whereas under-counting would mint a duplicate over live work.
+        """
+        import json
+
+        alloc = temp_repo / ".kanban" / "_ID_ALLOCATIONS.json"
+        alloc.parent.mkdir(parents=True, exist_ok=True)
+        alloc.write_text(json.dumps([
+            {"prefix": "H", "number": 5},
+        ]))
+
+        service = KanbanService(hdd_config, temp_repo)
+        assert service.get_next_unparented_hypothesis_id() == "H-006"
+
     def test_paper_scoped_creation_is_unchanged(self, runner, temp_repo, hdd_config):
         """Regression guard on the half that was already working."""
         first = runner.invoke(main, ["hypothesis", "create", "One", "--paper", "130"])
         second = runner.invoke(main, ["hypothesis", "create", "Two", "--paper", "130"])
         assert "H130.1" in first.output
         assert "H130.2" in second.output
+
+    def test_dotted_explicit_id_derives_its_own_paper(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """`--id H130.1` names paper 130; making --paper optional must not orphan it.
+
+        Click used to make this state unreachable by requiring --paper. Once it
+        became optional, `--id H130.1` with no --paper produced a hypothesis
+        whose id ASSERTS membership of paper 130 while `paper:` was blank and
+        no inverse reference was written — which `hdd validate` then correctly
+        flagged. The id already carries the answer, so read it.
+        """
+        _make_paper_file(temp_repo / "research" / "papers", "130")
+        result = runner.invoke(
+            main, ["hypothesis", "create", "Scoped by id alone", "--id", "H130.9"],
+        )
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "hypotheses").glob("H130.9-*.md"))
+        assert written
+        assert "paper: PAPER-130" in written[0].read_text()
+
+    def test_undotted_explicit_id_stays_unparented(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """NON-VACUITY CONTROL: the derivation must key on the DOT.
+
+        Without this, "derive a paper from any explicit id" would pass the arm
+        above while inventing papers for dashed ids too.
+        """
+        result = runner.invoke(
+            main, ["hypothesis", "create", "Explicit dashed", "--id", "H-042"],
+        )
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "hypotheses").glob("H-042-*.md"))
+        assert written
+        body = written[0].read_text()
+        assert "PAPER-" not in body, body[:400]
+
+    def test_negative_paper_is_refused(self, runner, temp_repo, hdd_config):
+        """`--paper=-1` renders `H-1.1`, which lands in the DASHED space.
+
+        A literal counterexample to the "dot, never a dash" separation the two
+        allocators rely on. IntRange(min=0) refuses it; `--paper 0` is still
+        legitimate and is covered below.
+        """
+        result = runner.invoke(
+            main, ["hypothesis", "create", "Negative", "--paper", "-1"],
+        )
+        assert result.exit_code != 0
+
+    def test_paper_zero_is_still_accepted(self, runner, temp_repo, hdd_config):
+        """NON-VACUITY CONTROL: the bound is min=0, not truthiness.
+
+        Guards against "fix" the negative case by testing `if paper_num:`,
+        which would silently orphan every `--paper 0` hypothesis.
+        """
+        result = runner.invoke(
+            main, ["hypothesis", "create", "Zero", "--paper", "0"],
+        )
+        assert result.exit_code == 0, result.output
+        assert "H0.1" in result.output
+
+    def test_unparented_hypothesis_blanks_the_paper_field(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """Pins the `paper:` blanking re.sub in the no-paper branch.
+
+        Removing it leaves the `PAPER-XXX` scaffold, so an ABSENT paper reads
+        as an UNFILLED one. Added because a reviewer's mutation of exactly this
+        line survived the whole suite.
+        """
+        result = runner.invoke(main, ["hypothesis", "create", "No paper"])
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "hypotheses").glob("H-001-*.md"))
+        assert written
+        body = written[0].read_text()
+        assert "PAPER-XXX" not in body, body[:400]
+        assert "PAPER-{paper}" not in body
+
+    def test_unparented_experiment_blanks_the_hypothesis_field(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """Pins the `hypothesis:` scaffold blanking in the experiment branch.
+
+        Same reason as the arm above: the reviewer's mutation of this line
+        survived. An experiment attached to nothing must not ship a frontmatter
+        `hypothesis: H-XXX` that looks like a real, missing item.
+        """
+        result = runner.invoke(
+            main, ["experiment", "create", "--title", "Standalone"],
+        )
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "experiments").glob("EXPR-001-*.md"))
+        assert written
+        body = written[0].read_text()
+        assert "hypothesis: H-XXX" not in body, body[:400]
+        assert "hypothesis: H{paper}.{n}" not in body
 
     def test_measure_template_is_not_touched_by_the_no_paper_branch(
         self, runner, temp_repo, hdd_config,
@@ -626,6 +798,62 @@ class TestHDDExperimentCreate:
         body = written[0].read_text()
         assert "paper: PAPER-130" in body, body[:400]
         assert "PAPER-007" not in body
+        # ⚠ AND the run path must still name the EXPERIMENT. Fixing `paper:`
+        # broke this, and the original version of this test built the very file
+        # carrying the bug while asserting only on PAPER-007 — it walked past
+        # its own evidence. See the dedicated arm below for why.
+        assert "research/runs/EXPR-007/" in body, body[-400:]
+
+    def test_experiment_run_path_names_the_experiment_not_the_paper(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """`EXPR-{paper}` in experiment.md is the EXPERIMENT'S OWN ID.
+
+        The template spells the Data Location run path `EXPR-{paper}`, and on
+        main that was right only BY ACCIDENT: the paper was derived from the
+        experiment's own id, so the two strings coincided. Deriving the paper
+        from the hypothesis — the fix one commit earlier — made the generated
+        doc point at `research/runs/EXPR-130/` while `experiment run` writes to
+        `research/runs/EXPR-001/`.
+
+        Asserted against the id the service actually uses, so this cannot drift
+        back into agreeing with itself.
+        """
+        result = runner.invoke(
+            main,
+            ["experiment", "create", "--hypothesis", "H130.1",
+             "--title", "Auto id under a scoped hypothesis"],
+        )
+        assert result.exit_code == 0, result.output
+
+        written = list((temp_repo / "research" / "experiments").glob("EXPR-001-*.md"))
+        assert written, list((temp_repo / "research" / "experiments").iterdir())
+        body = written[0].read_text()
+        assert "research/runs/EXPR-001/" in body, body[-400:]
+        assert "research/runs/EXPR-130/" not in body
+
+    def test_malformed_hypothesis_id_does_not_mint_a_paper(
+        self, runner, temp_repo, hdd_config,
+    ):
+        """A hypothesis id we cannot parse means we do not know the paper.
+
+        `lstrip("H")` is a character SET, not a prefix: it turned `HH130.1`
+        into a plausible `PAPER-130`, and left `h130.1` as `PAPER-h130` — an
+        unresolvable id written into the RDF as `expr:paper paper:PAPER-h130`.
+        Inventing a wrong paper is worse than recording none.
+        """
+        for bad in ("h130.1", "HH130.1", "X130.1", "H13O.1"):
+            result = runner.invoke(
+                main,
+                ["experiment", "create", "--hypothesis", bad, "--title", f"E {bad}"],
+            )
+            assert result.exit_code == 0, result.output
+            written = sorted(
+                (temp_repo / "research" / "experiments").glob("EXPR-*.md")
+            )[-1].read_text()
+            assert "PAPER-h130" not in written, bad
+            assert "PAPER-130" not in written, bad
+            assert "PAPER-13O" not in written, bad
 
     def test_experiment_requires_title(self, runner, temp_repo, hdd_config):
         """Experiment without --title should fail."""
@@ -1546,11 +1774,20 @@ class TestHDDValidate:
         assert "Warning" in result.output or "warning" in result.output.lower()
 
     def test_validate_strict_fails_on_warnings(self, runner, temp_repo, hdd_config):
-        """--strict should exit 1 when warnings exist."""
-        exp_dir = temp_repo / "research" / "experiments"
-        (exp_dir / "EXPR-999-No-Hyp.md").write_text(
-            "---\nid: EXPR-999\ntitle: \"No Hyp\"\ntype: experiment\n"
-            "status: draft\ncreated: 2026-01-01\ntags: []\n---\n# No Hyp\n"
+        """--strict should exit 1 when warnings exist.
+
+        RETARGETED, not weakened (issue #77). This used to build an experiment
+        with no hypothesis, which is now a legitimate standing state and no
+        longer warns — so the test would have passed only by asserting the
+        blessed workflow is broken. The warning it needs is still available from
+        a real inconsistency: a PAPER-SHAPED id whose paper field is blank
+        claims membership of paper 130 while recording none.
+        """
+        hyp_dir = temp_repo / "research" / "hypotheses"
+        (hyp_dir / "H130.9-Blank-Paper.md").write_text(
+            "---\nid: H130.9\ntitle: \"Blank Paper\"\ntype: hypothesis\n"
+            "status: draft\npaper:\ncreated: 2026-01-01\ntags: []\n---\n"
+            "# Blank Paper\n"
         )
 
         result = runner.invoke(
@@ -1643,8 +1880,18 @@ class TestHDDCrossReferences:
         orphaned_ids = [o["id"] for o in xrefs["orphaned"]]
         assert "H999.1" in orphaned_ids
 
-    def test_orphaned_experiment_detected(self, temp_repo, hdd_config):
-        """Experiment without hypothesis field should appear in orphaned."""
+    def test_standalone_experiment_is_not_orphaned(self, temp_repo, hdd_config):
+        """An experiment with no hypothesis is legitimate, not orphaned.
+
+        INVERTED from test_orphaned_experiment_detected, not deleted — same
+        treatment as test_hypothesis_requires_paper and
+        test_experiment_requires_hypothesis, and for the same reason: it encoded
+        the contract issue #77 changes. Keeping the inversion visible makes the
+        change legible rather than reading as lost coverage.
+
+        REGISTRY.md renders `orphaned`, so leaving this as-was meant the tool
+        printed a new user's first experiment under "Orphaned Items".
+        """
         exp_dir = temp_repo / "research" / "experiments"
         (exp_dir / "EXPR-999-No-Hyp.md").write_text(
             "---\nid: EXPR-999\ntitle: \"No Hyp\"\ntype: experiment\n"
@@ -1655,7 +1902,44 @@ class TestHDDCrossReferences:
         xrefs = service.get_hdd_cross_references()
 
         orphaned_ids = [o["id"] for o in xrefs["orphaned"]]
-        assert "EXPR-999" in orphaned_ids
+        assert "EXPR-999" not in orphaned_ids
+
+    def test_unparented_hypothesis_is_not_orphaned(self, temp_repo, hdd_config):
+        """A dashed H-NNN hypothesis is unparented by FORM, not by omission."""
+        hyp_dir = temp_repo / "research" / "hypotheses"
+        (hyp_dir / "H-001-Standalone.md").write_text(
+            "---\nid: H-001\ntitle: \"Standalone\"\ntype: hypothesis\n"
+            "status: draft\ncreated: 2026-01-01\ntags: []\n---\n# Standalone\n"
+        )
+
+        service = KanbanService(hdd_config, temp_repo)
+        xrefs = service.get_hdd_cross_references()
+
+        orphaned_ids = [o["id"] for o in xrefs["orphaned"]]
+        assert "H-001" not in orphaned_ids
+
+    def test_paper_shaped_id_with_no_paper_IS_still_orphaned(
+        self, temp_repo, hdd_config
+    ):
+        """The exemption is keyed on the id FORM, so it must not blanket-pass.
+
+        `H130.9` claims membership of paper 130. A blank paper field there is a
+        real inconsistency and must still be reported — otherwise
+        _is_deliberately_unparented would have silenced the check entirely
+        rather than narrowed it.
+        """
+        hyp_dir = temp_repo / "research" / "hypotheses"
+        (hyp_dir / "H130.9-Blank-Paper.md").write_text(
+            "---\nid: H130.9\ntitle: \"Blank Paper\"\ntype: hypothesis\n"
+            "status: draft\npaper:\ncreated: 2026-01-01\ntags: []\n---\n"
+            "# Blank Paper\n"
+        )
+
+        service = KanbanService(hdd_config, temp_repo)
+        xrefs = service.get_hdd_cross_references()
+
+        orphaned_ids = [o["id"] for o in xrefs["orphaned"]]
+        assert "H130.9" in orphaned_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1692,8 +1976,14 @@ class TestHDDValidation:
         error_ids = [e["id"] for e in report["errors"]]
         assert "H130.1" in error_ids
 
-    def test_missing_hypothesis_link_warning(self, temp_repo, hdd_config):
-        """Experiment without hypothesis should produce warning."""
+    def test_missing_hypothesis_link_is_not_a_warning(self, temp_repo, hdd_config):
+        """An experiment with no hypothesis must not warn (issue #77).
+
+        INVERTED from test_missing_hypothesis_link_warning. README documents
+        `--strict` as "Warnings = errors (for CI)", so leaving this warning in
+        place meant a new user following the documented happy path landed a red
+        CI gate on their first experiment.
+        """
         exp_dir = temp_repo / "research" / "experiments"
         (exp_dir / "EXPR-999-No-Hyp.md").write_text(
             "---\nid: EXPR-999\ntitle: \"No Hyp\"\ntype: experiment\n"
@@ -1703,7 +1993,28 @@ class TestHDDValidation:
         service = KanbanService(hdd_config, temp_repo)
         report = service.validate_hdd_links()
         warning_ids = [w["id"] for w in report["warnings"]]
-        assert "EXPR-999" in warning_ids
+        assert "EXPR-999" not in warning_ids
+
+    def test_dangling_hypothesis_reference_is_still_an_error(
+        self, temp_repo, hdd_config
+    ):
+        """Silencing "no hypothesis" must not silence "hypothesis not found".
+
+        The two shared one if/elif, so dropping the warning branch could easily
+        have taken the error branch with it. NAMING a hypothesis that does not
+        exist is broken data and stays an error.
+        """
+        exp_dir = temp_repo / "research" / "experiments"
+        (exp_dir / "EXPR-998-Dangling.md").write_text(
+            "---\nid: EXPR-998\ntitle: \"Dangling\"\ntype: experiment\n"
+            "status: draft\nhypothesis: H999.9\ncreated: 2026-01-01\ntags: []\n"
+            "---\n# Dangling\n"
+        )
+
+        service = KanbanService(hdd_config, temp_repo)
+        report = service.validate_hdd_links()
+        error_ids = [e["id"] for e in report["errors"]]
+        assert "EXPR-998" in error_ids
 
     def test_unused_measure_warning(self, temp_repo, hdd_config):
         """Unreferenced measure should produce warning."""

@@ -95,19 +95,32 @@ class TemplateEngine:
                 count=1,
                 flags=re.MULTILINE,
             )
+            # ⚠ `EXPR-{paper}` is the EXPERIMENT'S OWN ID, not a paper
+            # reference. experiment.md spells it that way in two places: the
+            # `id:` field and the Data Location run path. It must be resolved
+            # from the id, and BEFORE the blanket `{paper}` replacement below —
+            # otherwise an experiment whose number differs from its
+            # hypothesis's paper advertises `research/runs/EXPR-130/` while
+            # `experiment run` writes to `research/runs/EXPR-001/`
+            # (service.py keys the run path on the experiment id).
+            #
+            # This was invisible on main because the paper was read off the
+            # experiment's own id (`expr_id.replace("EXPR-", "")`), which made
+            # `EXPR-{paper}` accidentally equal to the id. Correcting the paper
+            # is what exposed the wrong spelling underneath it.
+            if item_type == "experiment" and "id" in variables:
+                content = content.replace("EXPR-{paper}", str(variables["id"]))
             # Replace {paper} placeholders in body
             content = content.replace("{paper}", paper_val)
         elif item_type == "hypothesis" and "id" in variables:
             # NO PAPER (issue #77). The hypothesis template is written around
-            # `H{paper}.{n}`, so leaving these unsubstituted ships a file with
-            # literal braces in its frontmatter and its turtle block — which is
-            # worse than the error we just removed.
+            # `{paper}`, so leaving these unsubstituted ships a file with
+            # literal braces in it — worse than the error we just removed.
             #
-            # Substitute the id for the whole `H{paper}.{n}` token so the turtle
-            # subject matches the frontmatter id, and blank the paper field
-            # rather than leaving the `PAPER-XXX` scaffold — an unparented
-            # hypothesis has no paper, and a placeholder reads like an unfilled
-            # field rather than an absent one.
+            # `EXPR-{paper}` here is the "Experiment ID" row: an unparented
+            # hypothesis has no experiment yet, so it gets the scaffold. The
+            # paper field is BLANKED rather than left as `PAPER-XXX`, because an
+            # absent paper should not read like an unfilled one.
             #
             # ⚠ SCOPED ON item_type, NOT on the presence of an id. render() is
             # the SHARED path for every HDD type and `H{paper}.{n}` also appears
@@ -117,7 +130,14 @@ class TemplateEngine:
             # to the MEASURE's own id — so the row claimed the measure was its
             # own hypothesis. Found by checking which templates carry the token
             # rather than assuming only this one did.
-            content = content.replace("H{paper}.{n}", str(variables["id"]))
+            #
+            # There is deliberately NO `H{paper}.{n}` substitution here. It
+            # looks like it belongs — and it is the line the id-only guard
+            # corrupted the measure with — but it is DEAD: the `id:` line is
+            # substituted above and the turtle block is regenerated wholesale
+            # below, which are that token's only two sites in this template.
+            # Proven by mutation across all eight render cases: removing it
+            # changes no byte of any output. Deleted rather than fenced.
             content = content.replace("EXPR-{paper}", "EXPR-XXX")
             content = re.sub(
                 r"^(paper:\s*).*$", r"\g<1>", content, count=1, flags=re.MULTILINE,

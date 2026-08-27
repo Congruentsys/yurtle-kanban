@@ -291,7 +291,10 @@ def hdd_validate(strict: bool, as_json: bool):
     hyp_warns = [w for w in report["warnings"] if "hypothesis" in w.get("issue", "")]
     hyp_errs = [e for e in report["errors"] if e["id"].startswith("H")]
     if not hyp_warns and not hyp_errs:
-        console.print(f"  [green]OK[/green] {s['hypotheses']} hypotheses — all linked to papers")
+        # "no broken links", NOT "all linked to papers" — a paper is optional
+        # (issue #77), so an unparented hypothesis passing this check is the
+        # expected case, and the old wording asserted something false about it.
+        console.print(f"  [green]OK[/green] {s['hypotheses']} hypotheses — no broken paper links")
     else:
         console.print(f"  [yellow]!![/yellow] {s['hypotheses']} hypotheses")
         for w in hyp_warns:
@@ -303,7 +306,7 @@ def hdd_validate(strict: bool, as_json: bool):
     exp_warns = [w for w in report["warnings"] if "experiment" in w.get("issue", "")]
     exp_errs = [e for e in report["errors"] if e["id"].startswith("EXPR")]
     if not exp_warns and not exp_errs:
-        msg = f"{s['experiments']} experiments — all linked to hypotheses"
+        msg = f"{s['experiments']} experiments — no broken hypothesis links"
         console.print(f"  [green]OK[/green] {msg}")
     else:
         console.print(f"  [yellow]!![/yellow] {s['experiments']} experiments")
@@ -732,13 +735,17 @@ def hypothesis():
 @hypothesis.command("create")
 @click.argument("statement")
 @click.option(
-    "--paper", "paper_num", default=None, type=int,
+    # IntRange(min=0), not bare int: `--paper=-1` renders the id `H-1.1`, which
+    # starts with "H-" and so lands inside the DASHED unparented space the two
+    # allocators are supposed to keep apart. `--paper 0` is legitimate and works.
+    "--paper", "paper_num", default=None, type=click.IntRange(min=0),
     help="Paper number (e.g., 130). Optional — omit it and the hypothesis "
          "stands on its own as H-001; pass it to scope the id to a paper.",
 )
 @click.option(
     "--id", "hyp_id", default=None,
-    help="Explicit ID (e.g., H130.1). Auto-allocates if omitted.",
+    help="Explicit ID (e.g., H130.1). Auto-allocates if omitted. A dotted id "
+         "names its own paper, so --id H130.1 implies --paper 130.",
 )
 @click.option("--target", default=None, help="Target metric value (e.g., '>=50%')")
 @click.option("--source-idea", default=None, help="Source idea ID (e.g., IDEA-R-001)")
@@ -788,9 +795,21 @@ def hypothesis_create(
     #
     # The requirement was never about the method; it was about ID ALLOCATION,
     # because ids are formatted H{paper}.{n}. So an unparented hypothesis simply
-    # takes the ordinary H-NNN form every other work type already uses. The two
-    # spaces cannot collide — `H130.1` has a dot and no dash, `H-001` the
-    # reverse — so paper-scoped numbering is untouched.
+    # takes the ordinary H-NNN form every other work type already uses, and
+    # paper-scoped numbering is untouched (get_next_hypothesis_number scans for
+    # the `H130.` prefix and never reads the dashed allocator).
+    #
+    # A DOTTED --id NAMES ITS OWN PAPER. Making --paper optional opened a state
+    # that click used to make unreachable: `--id H130.1` with no --paper, which
+    # produced a hypothesis whose id ASSERTS membership of paper 130 while
+    # `paper:` was blank and no inverse reference was written to PAPER-130 —
+    # `hdd validate` then called it orphaned. The id already carries the answer,
+    # so read it rather than refusing or silently orphaning.
+    if paper_num is None and hyp_id and "." in hyp_id:
+        head = hyp_id.partition(".")[0]
+        if head.startswith("H") and head[1:].isdigit():
+            paper_num = int(head[1:])
+
     if hyp_id is None:
         if paper_num is None:
             hyp_id = service.get_next_unparented_hypothesis_id()
@@ -928,12 +947,21 @@ def experiment_create(
     # That was wrong whenever the two numbers differed, and meaningless for an
     # auto-allocated id. Paper-scoped hypotheses are `H{paper}.{n}`, so the
     # paper is the part before the dot; an unparented `H-001` names none.
+    #
+    # ⚠ The head is MATCHED, not stripped. `lstrip("H")` is a character SET, so
+    # it ate both H's of a malformed `HH130.1` and produced a plausible
+    # `PAPER-130`; and it left the case alone, so `h130.1` minted
+    # `paper: PAPER-h130` — an unresolvable paper id, written into the RDF
+    # knowledge block as `expr:paper paper:PAPER-h130`. A hypothesis id we
+    # cannot parse means we do not know the paper, which is the same state as
+    # having no hypothesis: leave the paper unset rather than invent one.
     paper_num: str | None = None
     hyp_n: str | None = None
     if hyp_id and "." in hyp_id:
         head, _, tail = hyp_id.partition(".")
-        paper_num = head.lstrip("H") or None
-        hyp_n = tail or None
+        if head.startswith("H") and head[1:].isdigit() and tail:
+            paper_num = head[1:]
+            hyp_n = tail
 
     variables: dict[str, str | list[str]] = {
         "id": expr_id,
