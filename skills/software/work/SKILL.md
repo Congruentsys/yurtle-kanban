@@ -27,7 +27,7 @@ If items are in progress, show them and ask if the user wants to continue or pic
 If no specific item requested:
 
 ```bash
-yurtle-kanban list --status ready --limit 5
+yurtle-kanban list --status ready
 ```
 
 Show the top 5 ready items with their priorities.

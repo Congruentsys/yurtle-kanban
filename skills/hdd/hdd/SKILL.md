@@ -48,12 +48,16 @@ IDEA -> HYPOTHESIS -> EXPERIMENT (on branch) -> RESULTS
 ## yurtle-kanban HDD Board
 
 ```bash
-# Add HDD board
+# Install the HDD skills — /idea /hypothesis /experiment /literature, the ones
+# listed under Related Skills below. They come from init, NOT from board-add.
+yurtle-kanban init --theme hdd
+
+# Optional: keep research items in their own board and directory
 yurtle-kanban board-add research --preset hdd --path research/
 
-# Create items
-yurtle-kanban create --board research idea "Research question"
-yurtle-kanban create --board research hypothesis "Testable claim"
+# Create items — the item TYPE selects the board; there is no --board flag here
+yurtle-kanban create idea "Research question"
+yurtle-kanban create hypothesis "Testable claim"
 
 # View board
 yurtle-kanban board research
