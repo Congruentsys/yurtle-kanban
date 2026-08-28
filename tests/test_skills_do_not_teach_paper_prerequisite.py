@@ -42,7 +42,15 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # command, not the token: `never `PAPER-XXX`` has the token and no command, and
 # `H{paper}.{n}` has neither in command position.
 SLASH_CMDS = "hypothesis|experiment|measure|literature|idea|paper"
-PAPER_TOKEN = r"(?:PAPER-[A-Za-z0-9-]+|\{paper\}|<paper>)"
+# `<paper[a-z-]*>` and not `<paper>`: the original required `>` immediately after
+# `paper`, so every suffixed placeholder slipped through. `<paper-number>` is the
+# spelling this repo actually shipped in hdd/hypothesis/SKILL.md until PR #79, so a
+# revert to it is the likeliest real regression -- and it passed the guard.
+#
+# The class stays deliberately NARROW (lowercase letters and hyphen, no `|` or `>` or
+# whitespace) so it widens the placeholder spelling without reaching past the closing
+# bracket into surrounding prose. The mention-list test below is the control on that.
+PAPER_TOKEN = r"(?:PAPER-[A-Za-z0-9-]+|\{paper\}|<paper[a-z-]*>)"
 RETIRED_PREREQ = re.compile(rf"/(?:{SLASH_CMDS})\s+`?{PAPER_TOKEN}")
 
 
@@ -61,6 +69,28 @@ def test_the_scan_is_not_vacuous():
     # the pattern must be capable of matching the form it exists to refuse
     assert RETIRED_PREREQ.search('/hypothesis PAPER-XXX "claim" --target ">=85%"')
     assert RETIRED_PREREQ.search("/experiment PAPER-104 --hypothesis H-1")
+
+
+def test_the_placeholder_suffix_spellings_are_caught():
+    """`<paper>` is not the only placeholder this repo has actually shipped.
+
+    The original character class required `>` immediately after `paper`, so any
+    suffixed placeholder slipped through -- and `<paper-number>` is not
+    hypothetical: it is the literal spelling `hdd/hypothesis/SKILL.md` carried in
+    its argument-hint until PR #79 changed it. A revert to that form is the most
+    likely real regression, and it passed the guard.
+
+    These sit in their own test rather than inside the non-vacuity one because
+    they assert a different property: that one is "the pattern can match at all",
+    this one is "the pattern covers the spellings that shipped".
+    """
+    for must_catch in (
+        '/hypothesis <paper-number> "claim"',
+        "/experiment <paper-num> x",
+        '/hypothesis <paper> "claim"',
+        '/hypothesis PAPER-XXX "claim"',
+    ):
+        assert RETIRED_PREREQ.search(must_catch), f"retired prerequisite form NOT caught: {must_catch!r}"
 
 
 def test_the_pattern_does_not_match_the_rule_being_taught():
