@@ -24,7 +24,7 @@ Ideas are the starting point of Hypothesis-Driven Development. Capture the thoug
 
 ```bash
 # Create idea with atomic push (multi-agent safe)
-yurtle-kanban create --board research idea "$ARGUMENTS" --push
+yurtle-kanban create idea "$ARGUMENTS" --push
 ```
 
 If not using yurtle-kanban, create manually:

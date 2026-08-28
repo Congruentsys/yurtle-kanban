@@ -63,7 +63,7 @@ Are any of these assigned to this agent or stale? Recommend:
 
 ```bash
 # Show ready items filtered by agent capability if tags exist
-yurtle-kanban list --status ready --limit 5
+yurtle-kanban list --status ready
 ```
 
 ### 7. Generate Sync Summary

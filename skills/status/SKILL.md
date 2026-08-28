@@ -31,7 +31,7 @@ yurtle-kanban list --status in_progress
 ## Ready to Start
 
 ```bash
-yurtle-kanban list --status ready --limit 10
+yurtle-kanban list --status ready
 ```
 
 ## In Review
@@ -43,7 +43,7 @@ yurtle-kanban list --status review
 ## Recently Completed
 
 ```bash
-yurtle-kanban list --status done --limit 5
+yurtle-kanban list --status done
 ```
 
 ## Blocked Items

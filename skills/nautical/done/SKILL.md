@@ -112,7 +112,7 @@ yurtle-kanban move EXP-XXX done
 ### 7. Show Next Work
 
 ```bash
-yurtle-kanban list --status ready --limit 3
+yurtle-kanban list --status ready
 ```
 
 Suggest the next highest-priority item.
