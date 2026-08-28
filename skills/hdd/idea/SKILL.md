@@ -15,8 +15,8 @@ Capture a raw research question or observation as the first step of HDD.
 Ideas are the starting point of Hypothesis-Driven Development. Capture the thought
 (30 seconds) before it's lost. The idea can later become:
 - A literature review (LIT-XXX)
-- A hypothesis (H{paper}.{n})
-- An experiment (EXPR-{paper})
+- A hypothesis (`H-001`, or `H{paper}.{n}` when scoped to a paper)
+- An experiment (`EXPR-001` — its OWN number, never the paper's)
 
 ## Steps
 

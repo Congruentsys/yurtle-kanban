@@ -88,7 +88,7 @@ Based on this review:
 
 ## Next Steps
 
-- [ ] Formalize hypothesis: `/hypothesis PAPER-XXX "claim"`
+- [ ] Formalize hypothesis: `/hypothesis "claim"` (add `--paper <n>` only if a paper exists)
 ```
 
 ### 4. LLM-Assisted Research
