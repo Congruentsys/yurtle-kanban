@@ -35,12 +35,24 @@ IDEA -> HYPOTHESIS -> EXPERIMENT (on branch) -> RESULTS
 
 1. **Capture Idea**: `/idea "Research question"`
 2. **Literature Review**: `/literature IDEA-R-XXX "topic"`
-3. **Formalize Hypothesis**: `/hypothesis PAPER-XXX "claim" --target ">=85%"`
+3. **Formalize Hypothesis**: `/hypothesis "claim" --target ">=85%"`
+
+**A paper is OPTIONAL, and phase 0 is not where you make one.** The shortest
+real cycle starts at step 3 — state the belief, then measure it:
+
+```bash
+yurtle-kanban hypothesis create "Most support tickets come from one feature"
+yurtle-kanban experiment create --title "Count tickets by feature for a month"
+yurtle-kanban measure create "Ticket concentration" --unit percent --category quality
+```
+
+Add `--paper <n>` once a paper actually exists; the ids become `H{paper}.{n}`
+instead of `H-001`. Do not invent a paper number to satisfy a command.
 
 ### Phase 1-4: Build-Measure-Learn
 
 4. **Create Branch + Implement**: `git checkout -b exp-XXX-description`
-5. **Design Experiment**: `/experiment H{paper}.{n} "design"`
+5. **Design Experiment**: `/experiment <hypothesis-id> "design"`
 6. **Run Experiment**: Collect data
 7. **Decide**: Merge (validated) or Learn (refuted)
 8. **Document**: Update files, optionally write paper
