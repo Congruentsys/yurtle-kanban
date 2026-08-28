@@ -42,7 +42,20 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # command, not the token: `never `PAPER-XXX`` has the token and no command, and
 # `H{paper}.{n}` has neither in command position.
 SLASH_CMDS = "hypothesis|experiment|measure|literature|idea|paper"
-PAPER_TOKEN = r"(?:PAPER-[A-Za-z0-9-]+|\{paper\}|<paper>)"
+# `<paper[A-Za-z0-9_-]*>` and not `<paper>`: the original required `>` immediately
+# after `paper`, so every suffixed placeholder slipped through. `<paper-number>` is the
+# spelling this repo actually shipped in hdd/hypothesis/SKILL.md until PR #79, so a
+# revert to it is the likeliest real regression -- and it passed the guard.
+#
+# The suffix class covers the arg-hint styles that actually occur: `-number`, a bare
+# digit (`<paper-N>`), and snake_case (`<paper_number>`). Its false-positive surface was
+# measured against every line of every shipped SKILL.md: 0 new matches (#93 NOTE 1).
+#
+# It still stops at the closing bracket -- no `>`, `|`, whitespace or `.` -- so it cannot
+# reach into surrounding prose, and the literal `paper` stays case-SENSITIVE on purpose:
+# see test_the_uppercase_placeholder_is_a_KNOWN_boundary_not_an_oversight for why
+# `<PAPER-NUMBER>` is a decision rather than a gap. The mention-list test is the control.
+PAPER_TOKEN = r"(?:PAPER-[A-Za-z0-9-]+|\{paper\}|<paper[A-Za-z0-9_-]*>)"
 RETIRED_PREREQ = re.compile(rf"/(?:{SLASH_CMDS})\s+`?{PAPER_TOKEN}")
 
 
@@ -61,6 +74,49 @@ def test_the_scan_is_not_vacuous():
     # the pattern must be capable of matching the form it exists to refuse
     assert RETIRED_PREREQ.search('/hypothesis PAPER-XXX "claim" --target ">=85%"')
     assert RETIRED_PREREQ.search("/experiment PAPER-104 --hypothesis H-1")
+
+
+def test_the_placeholder_suffix_spellings_are_caught():
+    """`<paper>` is not the only placeholder this repo has actually shipped.
+
+    The original character class required `>` immediately after `paper`, so any
+    suffixed placeholder slipped through -- and `<paper-number>` is not
+    hypothetical: it is the literal spelling `hdd/hypothesis/SKILL.md` carried in
+    its argument-hint until PR #79 changed it. A revert to that form is the most
+    likely real regression, and it passed the guard.
+
+    These sit in their own test rather than inside the non-vacuity one because
+    they assert a different property: that one is "the pattern can match at all",
+    this one is "the pattern covers the spellings that shipped".
+    """
+    for must_catch in (
+        '/hypothesis <paper-number> "claim"',
+        "/experiment <paper-num> x",
+        '/hypothesis <paper> "claim"',
+        '/hypothesis PAPER-XXX "claim"',
+        # Reviewer-measured residuals (#93 NOTE 1): a bare digit suffix and the snake_case
+        # arg-hint style, both of which the lowercase-and-hyphen class missed.
+        '/hypothesis <paper-N> "claim"',
+        '/hypothesis <paper_number> "claim"',
+    ):
+        assert RETIRED_PREREQ.search(must_catch), f"retired prerequisite form NOT caught: {must_catch!r}"
+
+
+def test_the_uppercase_placeholder_is_a_KNOWN_boundary_not_an_oversight():
+    """`<PAPER-NUMBER>` is NOT caught, deliberately, and this pins that as a decision.
+
+    Catching it needs the literal `paper` case-folded, which widens the pattern into
+    a different risk class than a character-class change: `re.I` on the whole
+    expression would also fold the slash commands and `PAPER-`, and nobody has
+    measured that false-positive surface. Recorded as a boundary so the next reader
+    finds a decision rather than a gap -- and so that if someone DOES fold the case,
+    this test fails and makes them state the new coverage on purpose.
+    """
+    assert not RETIRED_PREREQ.search('/hypothesis <PAPER-NUMBER> "claim"'), (
+        "the uppercase placeholder is now caught -- that is a widening, not a bug fix: "
+        "measure its false-positive surface against every shipped SKILL.md and update "
+        "this test deliberately"
+    )
 
 
 def test_the_pattern_does_not_match_the_rule_being_taught():
