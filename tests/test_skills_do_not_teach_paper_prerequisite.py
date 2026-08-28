@@ -1,0 +1,95 @@
+"""No shipped skill may present a paper as a PREREQUISITE of a slash command.
+
+PR #90 corrected `/hypothesis PAPER-XXX "claim"` to `/hypothesis "claim"`:
+a paper is optional across the HDD family, and the CLI has never required one. That
+fix is DOC-ONLY and was unpinned — measured on #90's head, replanting the exact
+retired form left the suite at 786 passed, identical to the unmutated run.
+
+This is the third instance of one principle, and the first two already have guards:
+
+    test_skill_commands_execute.py          (#85) a printed command must be one the CLI accepts
+    test_skills_do_not_teach_direct_push.py (#86) no skill may teach a push to main
+    this file                               (#90) no skill may teach a retired ARGUMENT form
+
+The first is the near-miss: its extractor keys on `yurtle-kanban <sub>` invocations,
+so it genuinely covers the three CLI lines #90 ADDS and cannot see the three `/slash`
+lines #90 CORRECTS. The CLI never sees a slash form, so no CLI-shaped guard ever will.
+
+Why this matters more than a stale doc: `init` GENERATES these files into a new user's
+repo. A silent revert here ships wrong instructions into every repo scaffolded
+afterwards, and the reader has no way to know the CLI disagrees.
+
+USE-vs-MENTION IS LOAD-BEARING HERE. A bare scan for `PAPER-XXX` goes RED on
+skills/hdd/hypothesis/SKILL.md:54 — `no paper — never \`PAPER-XXX\`, and never a number
+you chose:` — which is the rule being TAUGHT, not violated. So the match is anchored to
+a paper token in COMMAND-ARGUMENT position directly after a slash command, never to the
+token anywhere on the line.
+
+# detector-validated: plants `/hypothesis PAPER-XXX "claim"` in a shipped SKILL.md and
+# asserts this arm fires naming file:line; separately asserts the negated mention at
+# skills/hdd/hypothesis/SKILL.md:54 does NOT fire. Both directions, or it is a one-way
+# filter that will under-match next time.
+"""
+
+import re
+from pathlib import Path
+
+import pytest
+
+SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+
+# A slash command whose FIRST positional argument is a paper token. The anchor is the
+# command, not the token: `never `PAPER-XXX`` has the token and no command, and
+# `H{paper}.{n}` has neither in command position.
+SLASH_CMDS = "hypothesis|experiment|measure|literature|idea|paper"
+PAPER_TOKEN = r"(?:PAPER-[A-Za-z0-9-]+|\{paper\}|<paper>)"
+RETIRED_PREREQ = re.compile(rf"/(?:{SLASH_CMDS})\s+`?{PAPER_TOKEN}")
+
+
+def _skill_files():
+    assert SKILLS_DIR.is_dir(), f"skills/ not found at {SKILLS_DIR}"
+    files = sorted(SKILLS_DIR.rglob("SKILL.md"))
+    assert files, "no SKILL.md found — the glob is broken, not the skills"
+    return files
+
+
+def test_the_scan_is_not_vacuous():
+    """A pattern that matched nothing anywhere, or a glob that found nothing, passes forever."""
+    files = _skill_files()
+    assert len(files) >= 10, f"only {len(files)} skills found; expected the full shipped set"
+    assert all(f.read_text().strip() for f in files)
+    # the pattern must be capable of matching the form it exists to refuse
+    assert RETIRED_PREREQ.search('/hypothesis PAPER-XXX "claim" --target ">=85%"')
+    assert RETIRED_PREREQ.search("/experiment PAPER-104 --hypothesis H-1")
+
+
+def test_the_pattern_does_not_match_the_rule_being_taught():
+    """USE vs MENTION — the negation at hdd/hypothesis/SKILL.md:54 is correct text.
+
+    If this ever fails, the guard has become a one-way filter that would force an
+    author to delete the very sentence teaching the rule.
+    """
+    for mention in (
+        "no paper — never `PAPER-XXX`, and never a number you chose:",
+        "H{paper}.{n}:     [Statement of testable claim] - Target: [threshold]",
+        "| Hypothesis | H{paper}.{n} | TBD |",
+        'gh pr create --title "feat(EXPR-{nnn}): Validated H{paper}.{n}"',
+        "Add `--paper <n>` once a paper actually exists; the ids become `H{paper}.{n}`",
+        "| `/hypothesis` | Formalize testable claim |",
+    ):
+        assert not RETIRED_PREREQ.search(mention), f"false positive on a legitimate mention: {mention!r}"
+
+
+@pytest.mark.parametrize("path", _skill_files(), ids=lambda p: str(p.relative_to(SKILLS_DIR)))
+def test_skill_does_not_teach_a_paper_prerequisite(path):
+    offenders = [
+        (n, line.strip())
+        for n, line in enumerate(path.read_text().splitlines(), start=1)
+        if RETIRED_PREREQ.search(line)
+    ]
+    assert not offenders, (
+        f"{path.relative_to(SKILLS_DIR.parent)} teaches a paper as a PREREQUISITE of a slash "
+        "command: " + "; ".join(f"line {n}: {t}" for n, t in offenders)
+        + ". A paper is OPTIONAL across the HDD family (#78/#90) and the CLI has never "
+        "required one — drop the paper argument, e.g. `/hypothesis \"claim\" --target \">=85%\"`."
+    )
