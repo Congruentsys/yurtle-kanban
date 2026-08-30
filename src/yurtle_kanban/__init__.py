@@ -21,7 +21,7 @@ Usage:
     yurtle-kanban-mcp
 """
 
-__version__ = "2.0.1"
+__version__ = "2.2.0"
 
 # yurtle-kanban is a graph-native product — rdflib + yurtle-rdflib are required.
 # Register the yurtle_rdflib plugin before any Graph.parse(format="yurtle") calls.
