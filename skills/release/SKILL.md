@@ -126,8 +126,6 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### 8. Confirm Release
-
 ### 8. Publish the GitHub Release — THIS is what triggers PyPI
 
 ⚠ **A tag push does NOT publish.** `.github/workflows/publish.yml` triggers on:
