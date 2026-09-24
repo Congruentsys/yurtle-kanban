@@ -414,7 +414,7 @@ class TestGetTypeDirectory:
         assert "voyages" in str(path)
 
     def test_root_fallback(self, temp_repo):
-        """If nothing matches, fall back to root."""
+        """If nothing matches, fall back under the root, in the type's own folder (#113)."""
         config = KanbanConfig(
             theme="nonexistent",  # No theme loaded → no theme paths
             paths=PathConfig(root="work/", scan_paths=[]),
@@ -422,7 +422,7 @@ class TestGetTypeDirectory:
         svc = KanbanService(config, temp_repo)
         path = svc._get_type_directory(WorkItemType.FEATURE)
 
-        assert path == temp_repo / "work/"
+        assert path == temp_repo / "work" / "features"
 
 
 class TestForceAuditTrail:
@@ -2570,3 +2570,287 @@ class TestFrontmatterEditReplacesWholeValue:
         fm = self._frontmatter(path)
         assert fm["assignee"] == "carol"
         assert fm["status"] == "ready"
+
+
+# ---------------------------------------------------------------------------
+# Issue #113 — each item type goes into its own named folder, and the board
+# always scans the type folders it writes into
+# ---------------------------------------------------------------------------
+
+
+def _v1_yaml(theme: str, root: str, scan_paths: list[str]) -> str:
+    """A v1 single-board config with an explicit root and scan_paths list."""
+    lines = [
+        "kanban:",
+        f"  theme: {theme}",
+        "  paths:",
+        f"    root: {root}",
+        "    scan_paths:",
+    ]
+    lines += [f"      - {p}" for p in scan_paths]
+    return "\n".join(lines) + "\n"
+
+
+def _create_and_list(runner: CliRunner, item_type: str, title: str = "probe") -> str:
+    """`create <type> <title>` then `list --json`; return the list output."""
+    result = runner.invoke(main, ["create", item_type, title], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    listed = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+    assert listed.exit_code == 0, listed.output
+    return listed.output
+
+
+class TestTypeNamedFolders:
+    """Placement: a type always goes to ``<board root>/<type folder>/`` (the theme's
+    per-type folder, else the plural of the type), never nested inside another
+    type's folder and never the bare root. Visibility: the board always scans the
+    type folders it writes into, whatever ``scan_paths`` says (#113)."""
+
+    # noesis-ship: nautical, root kanban-work/, scans only expeditions/tasks/bugs
+    _NOESIS = _v1_yaml(
+        "nautical",
+        "kanban-work/",
+        ["kanban-work/expeditions/", "kanban-work/tasks/", "kanban-work/bugs/"],
+    )
+
+    @pytest.fixture
+    def init_runner(self, tmp_path, monkeypatch):
+        """Factory: `yurtle-kanban init --theme <theme>` in a fresh git repo."""
+        import subprocess
+
+        from yurtle_kanban import config as config_mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True,
+        )
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+
+        def _make(theme: str) -> CliRunner:
+            runner = CliRunner()
+            result = runner.invoke(main, ["init", "--theme", theme], catch_exceptions=False)
+            assert result.exit_code == 0, result.output
+            config_mod._theme_cache.clear()
+            return runner
+
+        yield _make
+        config_mod._theme_cache.clear()
+
+    # -- Do: placement + visibility -----------------------------------------
+
+    @pytest.mark.parametrize(
+        ("item_type", "prefix", "folder"),
+        [
+            ("voyage", "VOY", "voyages"),
+            ("chore", "CHORE", "chores"),
+            ("hazard", "HAZ", "hazards"),
+            ("signal", "SIG", "signals"),
+        ],
+    )
+    def test_noesis_unscanned_theme_type_goes_to_own_named_folder(
+        self, tmp_path, board_runner, item_type, prefix, folder,
+    ):
+        """noesis-ship shape: a theme type whose folder isn't in scan_paths goes to
+        kanban-work/<its folder>/, not nested in kanban-work/expeditions/, and is listed."""
+        runner = board_runner(tmp_path, self._NOESIS)
+
+        listed = _create_and_list(runner, item_type)
+
+        files = _created_files(tmp_path, prefix)
+        assert len(files) == 1, files
+        assert files[0].parent == Path("kanban-work") / folder, (
+            f"{item_type} created at {files[0]}, expected kanban-work/{folder}/"
+        )
+        assert not (tmp_path / "kanban-work" / "expeditions" / folder).exists()
+        assert f"{prefix}-001" in listed, listed
+
+    def test_default_init_software_type_not_in_theme_goes_to_plural_folder(
+        self, tmp_path, init_runner,
+    ):
+        """#111 shape: default `init --theme software`, create expedition (not a
+        software type) → kanban-work/expeditions/EXP-001-….md, not the bare root, and listed."""
+        runner = init_runner("software")
+
+        listed = _create_and_list(runner, "expedition")
+
+        files = _created_files(tmp_path, "EXP")
+        assert files == [Path("kanban-work/expeditions/EXP-001-probe.md")], files
+        assert "EXP-001" in listed, listed
+
+    def test_v1_config_scanning_one_type_folder_still_lists_other_types(
+        self, tmp_path, board_runner,
+    ):
+        """Visibility regardless of scan_paths: root kanban-work/, scan only
+        kanban-work/features/ → create bug lands in kanban-work/bugs/ and IS listed."""
+        runner = board_runner(
+            tmp_path, _v1_yaml("software", "kanban-work/", ["kanban-work/features/"]),
+        )
+
+        listed = _create_and_list(runner, "bug", "x")
+
+        files = _created_files(tmp_path, "BUG")
+        assert len(files) == 1, files
+        assert files[0].parent == Path("kanban-work/bugs"), (
+            f"bug created at {files[0]}, expected kanban-work/bugs/"
+        )
+        assert "BUG-001" in listed, listed
+
+    @pytest.mark.parametrize(
+        ("preset", "item_type", "prefix", "folder"),
+        [
+            ("nautical", "voyage", "VOY", "voyages"),
+            ("nautical", "chore", "CHORE", "chores"),
+            ("software", "feature", "FEAT", "features"),
+            ("software", "bug", "BUG", "bugs"),
+            ("software", "expedition", "EXP", "expeditions"),
+        ],
+    )
+    def test_multi_board_kanban_work_path_types_go_to_named_folders(
+        self, tmp_path, board_runner, preset, item_type, prefix, folder,
+    ):
+        """Multi-board: a board with path kanban-work/ → each type in
+        kanban-work/<type folder>/ (theme's, else the plural), and listed."""
+        config_yaml = (
+            'version: "2.0"\n'
+            "boards:\n"
+            "  - name: main\n"
+            f"    preset: {preset}\n"
+            "    path: kanban-work/\n"
+            "default_board: main\n"
+        )
+        runner = board_runner(tmp_path, config_yaml)
+
+        listed = _create_and_list(runner, item_type)
+
+        files = _created_files(tmp_path, prefix)
+        assert len(files) == 1, files
+        assert files[0].parent == Path("kanban-work") / folder, (
+            f"{item_type} created at {files[0]}, expected kanban-work/{folder}/"
+        )
+        assert f"{prefix}-001" in listed, listed
+
+    # -- Must stay true (controls) -------------------------------------------
+
+    @pytest.mark.parametrize(
+        ("theme", "item_type", "expected"),
+        [
+            ("software", "feature", "kanban-work/features/FEAT-001-probe.md"),
+            ("software", "bug", "kanban-work/bugs/BUG-001-probe.md"),
+            ("nautical", "expedition", "kanban-work/expeditions/EXP-001-probe.md"),
+            ("nautical", "voyage", "kanban-work/voyages/VOY-001-probe.md"),
+            ("hdd", "hypothesis", "research/hypotheses/H-001-probe.md"),
+            ("hdd", "idea", "research/ideas/IDEA-R-001-probe.md"),
+        ],
+    )
+    def test_control_default_init_placement_unchanged(
+        self, tmp_path, init_runner, theme, item_type, expected,
+    ):
+        """Control: a default `init` board places and lists theme types exactly as today."""
+        runner = init_runner(theme)
+
+        listed = _create_and_list(runner, item_type)
+
+        created = sorted(
+            p.relative_to(tmp_path)
+            for p in tmp_path.rglob("*-001-probe.md")
+            if ".kanban" not in p.relative_to(tmp_path).parts
+        )
+        assert created == [Path(expected)], created
+        assert Path(expected).name.split("-probe")[0] in listed, listed
+
+    def test_control_board_scanning_kanban_work_places_voyage_in_voyages(
+        self, tmp_path, board_runner,
+    ):
+        """Control: a nautical board scanning kanban-work/ puts voyages in kanban-work/voyages/."""
+        runner = board_runner(tmp_path, _single_board_yaml("nautical", "kanban-work/"))
+
+        listed = _create_and_list(runner, "voyage")
+
+        assert _created_files(tmp_path, "VOY") == [
+            Path("kanban-work/voyages/VOY-001-probe.md")
+        ]
+        assert "VOY-001" in listed, listed
+
+    @pytest.mark.parametrize(
+        ("item_type", "prefix", "folder"),
+        [
+            ("feature", "FEAT", "features"),
+            ("bug", "BUG", "bugs"),
+            ("task", "TASK", "tasks"),
+        ],
+    )
+    def test_control_carclaw_like_v1_unchanged(
+        self, tmp_path, board_runner, item_type, prefix, folder,
+    ):
+        """Control: carclaw-like v1 (root kanban-work, software, scan_paths under it)."""
+        runner = board_runner(
+            tmp_path,
+            _v1_yaml(
+                "software",
+                "kanban-work",
+                ["kanban-work/features/", "kanban-work/bugs/", "kanban-work/tasks/"],
+            ),
+        )
+
+        listed = _create_and_list(runner, item_type)
+
+        assert _created_files(tmp_path, prefix) == [
+            Path(f"kanban-work/{folder}/{prefix}-001-probe.md")
+        ]
+        assert f"{prefix}-001" in listed, listed
+
+    def test_control_noesis_scanned_types_unchanged(self, tmp_path, board_runner):
+        """Control: noesis-ship's scanned expeditions/ keep placing there, and are listed."""
+        runner = board_runner(tmp_path, self._NOESIS)
+
+        listed = _create_and_list(runner, "expedition")
+
+        assert _created_files(tmp_path, "EXP") == [
+            Path("kanban-work/expeditions/EXP-001-probe.md")
+        ]
+        assert "EXP-001" in listed, listed
+
+    # -- Must stay true: absolute root (review of PR #133) -------------------
+
+    @staticmethod
+    def _abs_root_yaml(root: Path) -> str:
+        """The review repro: software theme, an absolute root, no scan_paths."""
+        return (
+            "kanban:\n"
+            "  theme: software\n"
+            "  paths:\n"
+            f"    root: {root}\n"
+        )
+
+    def test_absolute_root_outside_repo_list_does_not_crash(self, tmp_path, board_runner):
+        """An absolute root outside the repo: `list` exits 0 instead of raising
+        (on main it prints 'No work items found.')."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "abs"
+        outside.mkdir()
+        runner = board_runner(repo, self._abs_root_yaml(outside))
+
+        result = runner.invoke(main, ["list"])
+
+        assert result.exception is None, repr(result.exception)
+        assert result.exit_code == 0, result.output
+
+    def test_absolute_root_inside_repo_lists_created_item(self, tmp_path, board_runner):
+        """An absolute root inside the repo: `list` exits 0, and a created feature is listed."""
+        inside = tmp_path / "abs"
+        inside.mkdir()
+        runner = board_runner(tmp_path, self._abs_root_yaml(inside))
+
+        result = runner.invoke(main, ["list"])
+        assert result.exception is None, repr(result.exception)
+        assert result.exit_code == 0, result.output
+
+        created = runner.invoke(main, ["create", "feature", "probe"])
+        assert created.exception is None, repr(created.exception)
+        assert created.exit_code == 0, created.output
+
+        listed = runner.invoke(main, ["list", "--json"])
+        assert listed.exception is None, repr(listed.exception)
+        assert listed.exit_code == 0, listed.output
+        assert "FEAT-001" in listed.output, listed.output
