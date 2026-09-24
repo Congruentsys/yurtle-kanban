@@ -2461,7 +2461,13 @@ class KanbanService:
             return content
 
         frontmatter = match.group(1)
-        pattern = rf"^{re.escape(field)}:.*(?:\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*$"
+        # A run of blank lines belongs to the value only when a continuation line
+        # follows it (a paragraph break inside a `|` block scalar); blank lines
+        # before the next key or the closing `---` are kept.
+        pattern = (
+            rf"^{re.escape(field)}:.*"
+            r"(?:(?:\n[ \t]*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*$"
+        )
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
             frontmatter = re.sub(
