@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scan_paths` and its `ignore` patterns (so `_TEMPLATE.md` files stay hidden).
   `list`/`show`/`move` apply each board's own `ignore:` to that board, as `board`
   already did (#124).
+  `scan_paths` and its `ignore` patterns (so `_TEMPLATE.md` files stay hidden),
+  and per-board `ignore:` lists are now honoured when scanning.
+- **Editing a multi-line frontmatter value left its old lines behind** (#105).
+  `move -a carol` on an `assignee:` block list produced `carol - alice - bob`;
+  multi-line `status`, `priority_rank` or `value_summary` values were kept or
+  broke the file. Field edits now replace the whole value, including its
+  continuation lines, and leave the next key untouched.
 
 ## [2.2.0] - 2026-08-30
 
