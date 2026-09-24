@@ -7,6 +7,7 @@ variables to produce ready-to-write file content.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import date
 from pathlib import Path
@@ -16,6 +17,15 @@ from yurtle_kanban.turtle_builder import TurtleBlockBuilder
 # HDD item types that get Turtle knowledge blocks generated.
 _HDD_TURTLE_TYPES = {"idea", "literature", "paper", "hypothesis", "experiment", "measure"}
 
+
+
+def _yaml_quoted(value: object) -> str:
+    """A YAML double-quoted scalar that reads back as exactly `value` (#142).
+
+    JSON string syntax is valid YAML: `"`, `\\` and newlines are escaped, so a
+    title like `is "stale" vs "fresh"?` can't break the frontmatter.
+    """
+    return json.dumps(str(value), ensure_ascii=False)
 
 class TemplateEngine:
     """Load and render themed item templates with variable substitution."""
@@ -71,7 +81,7 @@ class TemplateEngine:
             title = variables["title"]
             content = re.sub(
                 r'^(title:\s*)".*"',
-                rf'\g<1>"{title}"',
+                lambda m: m.group(1) + _yaml_quoted(title),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -79,7 +89,7 @@ class TemplateEngine:
             # Also replace the first H1 heading with the title
             content = re.sub(
                 r"^(# ).+$",
-                rf"\g<1>{title}",
+                lambda m: m.group(1) + " ".join(title.splitlines()),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -186,7 +196,7 @@ class TemplateEngine:
         if "unit" in variables:
             content = re.sub(
                 r'^(unit:\s*)".*"',
-                rf'\g<1>"{variables["unit"]}"',
+                lambda m: m.group(1) + _yaml_quoted(variables["unit"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -194,7 +204,7 @@ class TemplateEngine:
             # Also try without quotes
             content = re.sub(
                 r"^(unit:\s*)$",
-                rf'\g<1>"{variables["unit"]}"',
+                lambda m: m.group(1) + _yaml_quoted(variables["unit"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -203,14 +213,14 @@ class TemplateEngine:
         if "category" in variables:
             content = re.sub(
                 r'^(category:\s*)".*"',
-                rf'\g<1>"{variables["category"]}"',
+                lambda m: m.group(1) + _yaml_quoted(variables["category"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
             )
             content = re.sub(
                 r"^(category:\s*)$",
-                rf'\g<1>"{variables["category"]}"',
+                lambda m: m.group(1) + _yaml_quoted(variables["category"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -220,7 +230,7 @@ class TemplateEngine:
         if "target" in variables:
             content = re.sub(
                 r'^(target:\s*)".*"',
-                rf'\g<1>"{variables["target"]}"',
+                lambda m: m.group(1) + _yaml_quoted(variables["target"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
