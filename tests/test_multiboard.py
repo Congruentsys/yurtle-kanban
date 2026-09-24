@@ -2375,3 +2375,247 @@ class TestBoardAddRefusesUncoverableScanPaths:
         assert "research" in boards
         out = self._run(runner, ["list"]).output
         assert "FEAT-001" in out and "FEAT-002" in out, out
+
+
+class TestBoardAddLegacyPathsAndMixedPaths:
+    """board-add must count legacy per-type paths and survive mixed scan paths.
+
+    Single-board ``get_work_paths()`` scans ``paths.features/bugs/epics/tasks``
+    as well as ``scan_paths``/``root``. #122's refusal only looked at
+    ``scan_paths``, so a legacy per-type path outside the default board's path
+    was dropped silently on upgrade. ``board-add`` must refuse that upgrade,
+    name the legacy path, and leave ``.kanban/config.yaml`` byte-identical.
+    Mixed absolute and relative scan paths must get the normal #122 refusal,
+    not a Python traceback. Legacy paths a single board path covers must still
+    upgrade. (#147)
+    """
+
+    _FEAT = TestBoardAddRefusesUncoverableScanPaths._FEAT
+    _ADD_RESEARCH = TestBoardAddRefusesUncoverableScanPaths._ADD_RESEARCH
+    _LEGACY_ATTRS = ["features", "bugs", "epics", "tasks"]
+
+    @pytest.fixture
+    def repo_runner(self, tmp_path, monkeypatch):
+        """Empty git repo as cwd, fresh theme cache, and a CliRunner."""
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+
+        for cmd in (
+            ["git", "init", "-b", "main"],
+            ["git", "config", "user.email", "test@test.com"],
+            ["git", "config", "user.name", "Test"],
+        ):
+            subprocess.run(cmd, cwd=tmp_path, capture_output=True, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        yield tmp_path, CliRunner()
+        config_mod._theme_cache.clear()
+
+    @staticmethod
+    def _invoke(runner, args: list[str], catch_exceptions: bool = False):
+        from yurtle_kanban.cli import main
+
+        return runner.invoke(main, args, catch_exceptions=catch_exceptions)
+
+    @classmethod
+    def _run(cls, runner, args: list[str]):
+        result = cls._invoke(runner, args)
+        assert result.exit_code == 0, f"{args} failed:\n{result.output}"
+        return result
+
+    @staticmethod
+    def _config_path(repo: Path) -> Path:
+        return repo / ".kanban" / "config.yaml"
+
+    @staticmethod
+    def _saved_boards(repo: Path) -> dict[str, dict]:
+        import yaml
+
+        data = yaml.safe_load((repo / ".kanban" / "config.yaml").read_text())
+        assert "boards" in data, f"config not multi-board:\n{data}"
+        return {b["name"]: b for b in data["boards"]}
+
+    @staticmethod
+    def _write_v1(
+        repo: Path,
+        root: str,
+        scan_paths: list[str] | None = None,
+        legacy: dict[str, str] | None = None,
+    ) -> None:
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "kanban:",
+            "  theme: software",
+            "  paths:",
+            f"    root: {root}",
+        ]
+        for attr, p in (legacy or {}).items():
+            lines.append(f"    {attr}: {p}")
+            (repo / p).mkdir(parents=True, exist_ok=True)
+        if scan_paths:
+            lines.append("    scan_paths:")
+            lines.extend(f'    - "{p}"' for p in scan_paths)
+            for p in scan_paths:
+                (repo / p).mkdir(parents=True, exist_ok=True)
+        cfg.write_text("\n".join(lines) + "\n")
+        (repo / root).mkdir(parents=True, exist_ok=True)
+
+    def _write_feat(self, repo: Path, rel: str, item_id: str, title: str) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._FEAT.format(id=item_id, title=title))
+
+    def _legacy_repo(self, repo: Path, attr: str) -> str:
+        """The issue's repro, with the legacy path under ``attr``.
+
+        ``root: a/`` plus ``<attr>: kanban-work/<attr>/``; one item in each.
+        Returns the legacy path.
+        """
+        legacy_path = f"kanban-work/{attr}/"
+        self._write_v1(repo, root="a/", legacy={attr: legacy_path})
+        self._write_feat(repo, "a/FEAT-001.md", "FEAT-001", "Item in root")
+        self._write_feat(repo, f"{legacy_path}FEAT-002.md", "FEAT-002", "Legacy item")
+        return legacy_path
+
+    def _mixed_repo(self, repo: Path) -> str:
+        """root work/, scan_paths a/ and an absolute kanban-work/features/."""
+        abs_path = f"{repo}/kanban-work/features/"
+        self._write_v1(repo, root="work/", scan_paths=["a/", abs_path])
+        self._write_feat(repo, "a/FEAT-001.md", "FEAT-001", "Relative item")
+        self._write_feat(
+            repo, "kanban-work/features/FEAT-002.md", "FEAT-002", "Absolute item"
+        )
+        return abs_path
+
+    # -- 1. legacy per-type paths (the issue's repro, per attribute) ----------
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_legacy_repro_precondition_list_shows_both_items(self, repo_runner, attr):
+        repo, runner = repo_runner
+        self._legacy_repo(repo, attr)
+
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_legacy_board_add_exits_non_zero(self, repo_runner, attr):
+        repo, runner = repo_runner
+        self._legacy_repo(repo, attr)
+
+        result = self._invoke(runner, self._ADD_RESEARCH)
+
+        assert result.exit_code != 0, (
+            f"board-add should refuse: paths.{attr} is outside any single "
+            f"board path:\n{result.output}"
+        )
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_legacy_board_add_names_legacy_path(self, repo_runner, attr):
+        repo, runner = repo_runner
+        legacy_path = self._legacy_repo(repo, attr)
+
+        result = self._invoke(runner, self._ADD_RESEARCH)
+        out = result.output
+
+        assert result.exit_code != 0, out
+        assert legacy_path.rstrip("/") in out, (
+            f"refusal must name the legacy path {legacy_path}:\n{out}"
+        )
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_legacy_config_is_byte_identical_after_refusal(self, repo_runner, attr):
+        repo, runner = repo_runner
+        self._legacy_repo(repo, attr)
+        before = self._config_path(repo).read_bytes()
+
+        self._invoke(runner, self._ADD_RESEARCH)
+
+        assert self._config_path(repo).read_bytes() == before
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_legacy_items_still_listed_after_refusal(self, repo_runner, attr):
+        repo, runner = repo_runner
+        self._legacy_repo(repo, attr)
+
+        self._invoke(runner, self._ADD_RESEARCH)
+
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_legacy_no_research_board_added_after_refusal(self, repo_runner, attr):
+        import yaml
+
+        repo, runner = repo_runner
+        self._legacy_repo(repo, attr)
+
+        self._invoke(runner, self._ADD_RESEARCH)
+
+        data = yaml.safe_load(self._config_path(repo).read_text())
+        assert "boards" not in data, f"config was upgraded to multi-board:\n{data}"
+        assert "research" not in self._config_path(repo).read_text()
+
+    # -- 2. mixed absolute and relative scan paths -----------------------------
+
+    def test_mixed_board_add_refuses_without_traceback(self, repo_runner):
+        repo, runner = repo_runner
+        self._mixed_repo(repo)
+
+        result = self._invoke(runner, self._ADD_RESEARCH, catch_exceptions=True)
+        out = result.output
+
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            f"board-add raised {result.exception!r} instead of refusing:\n{out}"
+        )
+        assert "Traceback" not in out, out
+        assert result.exit_code != 0, out
+
+    def test_mixed_board_add_gives_the_122_refusal_message(self, repo_runner):
+        repo, runner = repo_runner
+        self._mixed_repo(repo)
+
+        result = self._invoke(runner, self._ADD_RESEARCH, catch_exceptions=True)
+        out = result.output
+
+        assert result.exit_code != 0, out
+        names_both = "a/" in out and "kanban-work/features" in out
+        says_no_common_parent = "common parent" in out.lower()
+        assert names_both or says_no_common_parent, (
+            f"refusal must name the uncovered scan paths:\n{out}"
+        )
+
+    def test_mixed_config_is_byte_identical_after_refusal(self, repo_runner):
+        repo, runner = repo_runner
+        self._mixed_repo(repo)
+        before = self._config_path(repo).read_bytes()
+
+        self._invoke(runner, self._ADD_RESEARCH, catch_exceptions=True)
+
+        assert self._config_path(repo).read_bytes() == before
+
+    # -- controls: legacy paths a single board path covers still upgrade -------
+
+    @pytest.mark.parametrize("attr", _LEGACY_ATTRS)
+    def test_control_legacy_path_under_root_upgrades(self, repo_runner, attr):
+        repo, runner = repo_runner
+        self._write_v1(
+            repo, root="kanban-work/", legacy={attr: f"kanban-work/{attr}/"}
+        )
+        self._write_feat(repo, "kanban-work/FEAT-001.md", "FEAT-001", "Root item")
+        self._write_feat(
+            repo, f"kanban-work/{attr}/FEAT-002.md", "FEAT-002", "Legacy item"
+        )
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
+
+        self._run(runner, self._ADD_RESEARCH)
+
+        boards = self._saved_boards(repo)
+        assert boards["default"]["path"].rstrip("/") == "kanban-work"
+        assert "research" in boards
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
