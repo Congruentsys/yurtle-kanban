@@ -219,6 +219,7 @@ class WorkItem:
             "high": 75,
             "medium": 50,
             "low": 25,
+            # not writable since #106/#125, kept so legacy items still rank (#125)
             "backlog": 10,
         }
         return priority_map.get(self.priority or "medium", 50)

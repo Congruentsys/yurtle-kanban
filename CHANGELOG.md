@@ -99,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   YAML would misread them. Inside a flow list, `a, b` stays one element.
   Titles and value summaries escape backslashes and newlines too. Ordinary
   values are written byte-for-byte as before.
+- **Priorities are validated once, in the service** (#125). A hook
+  `create_item` action or a direct service call could still write
+  `priority: urgent`. `create_item`, `create_item_and_push`, `update_item` and
+  template creates now lowercase the priority and reject anything outside
+  critical/high/medium/low, and MCP accepts any case like the CLI. Existing
+  items with legacy values (`P0`, `normal`, `backlog`) still load and rank.
 
 ## [2.2.0] - 2026-08-30
 
