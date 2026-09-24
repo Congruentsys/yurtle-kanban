@@ -1,7 +1,12 @@
 """Tests for the init command scaffolding (Issue #7)."""
 
-import yaml
+import json
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
+import yaml
 from click.testing import CliRunner
 
 from yurtle_kanban.cli import main, _get_templates_dir, _get_skills_dir
@@ -118,17 +123,23 @@ class TestInitScaffolding:
         assert "SIG-XXX" in template
 
     def test_config_yaml_has_scan_paths(self, tmp_path, monkeypatch):
-        """Generated config should include scan_paths for all type dirs."""
+        """Generated config scans the theme root, not one entry per type (#112).
+
+        The per-type folders are still scaffolded on disk; the root scan covers them.
+        """
         monkeypatch.chdir(tmp_path)
         import subprocess
         subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
 
         runner = CliRunner()
-        runner.invoke(main, ["init", "--theme", "software"])
+        result = runner.invoke(main, ["init", "--theme", "software"])
+        assert result.exit_code == 0, result.output
 
-        config_text = (tmp_path / ".kanban" / "config.yaml").read_text()
-        assert "kanban-work/features/" in config_text
-        assert "kanban-work/bugs/" in config_text
+        raw = yaml.safe_load((tmp_path / ".kanban" / "config.yaml").read_text())
+        scan_paths = [p.rstrip("/") for p in raw["kanban"]["paths"]["scan_paths"]]
+        assert "kanban-work" in scan_paths, f"theme root not scanned: {scan_paths!r}"
+        assert (tmp_path / "kanban-work" / "features").is_dir()
+        assert (tmp_path / "kanban-work" / "bugs").is_dir()
 
     def test_config_yaml_has_ignore_templates(self, tmp_path, monkeypatch):
         """Config should ignore _TEMPLATE* files."""
@@ -407,3 +418,249 @@ class TestSkillsDoNotAssumeOneConsumersTree:
             "a shipped skill names a path from one consumer's tree; a stranger following it "
             "runs a command against a directory they do not have:\n  " + "\n  ".join(offenders)
         )
+
+
+class TestInitWritesThemeRoot:
+    """`init` writes the theme's own root as `root:` and scans it (#112).
+
+    Decided in #109 (option A). Before: `init` defaulted `--path` to `work/`, wrote
+    `root: work/`, created an empty `work/` nothing ever read, and listed one
+    scan path per type. After: with no `--path`, `root:` is the common parent of
+    the theme's per-type paths, `scan_paths` is exactly `[<root>]`, and no `work/`
+    appears. An explicit `--path` still wins. Existing configs are untouched, and
+    a fresh init + create + list works for every theme with files landing exactly
+    where they did before. (#112)
+    """
+
+    THEMES_DIR = Path(__file__).resolve().parent.parent / "themes"
+
+    # theme -> (a type of that theme, the ID prefix its file carries)
+    PROBES = {
+        "software": ("feature", "FEAT"),
+        "nautical": ("expedition", "EXP"),
+        "hdd": ("hypothesis", "H"),
+    }
+
+    @pytest.fixture(autouse=True)
+    def _clear_theme_cache(self):
+        import yurtle_kanban.config as config_mod
+
+        config_mod._theme_cache.clear()
+        yield
+        config_mod._theme_cache.clear()
+
+    # ---- helpers -------------------------------------------------------
+
+    @classmethod
+    def _theme_type_paths(cls, theme: str) -> dict[str, str]:
+        data = yaml.safe_load((cls.THEMES_DIR / f"{theme}.yaml").read_text())
+        return {
+            type_id: type_def["path"]
+            for type_id, type_def in (data.get("item_types") or {}).items()
+            if type_def.get("path")
+        }
+
+    @classmethod
+    def _theme_root(cls, theme: str) -> str:
+        """The common parent of the theme's per-type paths, derived from its YAML."""
+        paths = list(cls._theme_type_paths(theme).values())
+        assert paths, f"non-vacuity: theme {theme!r} declares no per-type paths"
+        return os.path.commonpath([p.rstrip("/") for p in paths]) + "/"
+
+    @staticmethod
+    def _norm(p: str) -> str:
+        return str(p).strip().rstrip("/")
+
+    @staticmethod
+    def _run(tmp_path, monkeypatch, *args):
+        monkeypatch.chdir(tmp_path)
+        if not (tmp_path / ".git").exists():
+            subprocess.run(
+                ["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True
+            )
+        result = CliRunner().invoke(main, list(args))
+        assert result.exit_code == 0, (result.output, result.exception)
+        return result
+
+    @classmethod
+    def _listed_ids(cls, tmp_path, monkeypatch) -> list[str]:
+        """IDs `list --json` reports (it prints a plain notice, not JSON, when empty)."""
+        out = cls._run(tmp_path, monkeypatch, "list", "--json").output
+        if "No work items found" in out:
+            return []
+        return [i["id"] for i in json.loads(out)]
+
+    @staticmethod
+    def _config_paths(tmp_path) -> dict:
+        raw = yaml.safe_load((tmp_path / ".kanban" / "config.yaml").read_text())
+        return raw["kanban"]["paths"]
+
+    # ---- the change ----------------------------------------------------
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_expected_theme_roots(self, theme):
+        """Pin the derivation against the values the issue names, so it can't drift."""
+        expected = {"software": "kanban-work/", "nautical": "kanban-work/", "hdd": "research/"}
+        assert self._theme_root(theme) == expected[theme]
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_default_init_writes_theme_root_as_root(self, tmp_path, monkeypatch, theme):
+        self._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        paths = self._config_paths(tmp_path)
+        assert self._norm(paths.get("root")) == self._norm(self._theme_root(theme)), (
+            f"init --theme {theme} wrote root: {paths.get('root')!r}, "
+            f"expected the theme's own root {self._theme_root(theme)!r}"
+        )
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_default_init_scans_exactly_the_root(self, tmp_path, monkeypatch, theme):
+        self._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        scan_paths = self._config_paths(tmp_path).get("scan_paths") or []
+        assert [self._norm(p) for p in scan_paths] == [self._norm(self._theme_root(theme))], (
+            f"init --theme {theme} wrote scan_paths={scan_paths!r}, "
+            f"expected exactly [{self._theme_root(theme)!r}]"
+        )
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_default_init_creates_no_stray_work_dir(self, tmp_path, monkeypatch, theme):
+        self._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        assert not (tmp_path / "work").exists(), (
+            f"init --theme {theme} created a stray work/ that nothing scans"
+        )
+
+    def test_explicit_path_wins(self, tmp_path, monkeypatch):
+        self._run(tmp_path, monkeypatch, "init", "--theme", "software", "--path", "custom/")
+        assert self._norm(self._config_paths(tmp_path).get("root")) == "custom"
+        assert (tmp_path / "custom").is_dir(), "an explicit --path must be created"
+
+    # ---- must stay true ------------------------------------------------
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_fresh_init_create_list_round_trip(self, tmp_path, monkeypatch, theme):
+        """create lands exactly where it does today and list finds it."""
+        item_type, prefix = self.PROBES[theme]
+        self._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        self._run(tmp_path, monkeypatch, "create", item_type, "probe")
+
+        type_dir = self._theme_type_paths(theme)[item_type]
+        expected_file = tmp_path / type_dir / f"{prefix}-001-probe.md"
+        assert expected_file.is_file(), (
+            f"created item not at {type_dir}{prefix}-001-probe.md; found "
+            f"{[str(p.relative_to(tmp_path)) for p in tmp_path.rglob('*probe*')]}"
+        )
+
+        listed = self._listed_ids(tmp_path, monkeypatch)
+        assert listed == [f"{prefix}-001"], listed
+
+    def test_spec_theme_fresh_init_create_list_round_trip(self, tmp_path, monkeypatch):
+        """spec declares no per-type paths; init + create + list must still work."""
+        assert self._theme_type_paths("spec") == {}, "non-vacuity: spec gained paths"
+        self._run(tmp_path, monkeypatch, "init", "--theme", "spec")
+        self._run(tmp_path, monkeypatch, "create", "task", "probe")
+        listed = self._listed_ids(tmp_path, monkeypatch)
+        assert listed == ["TASK-001"], listed
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_scaffolded_type_dirs_and_templates_still_created(self, tmp_path, monkeypatch, theme):
+        self._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        type_paths = self._theme_type_paths(theme)
+        assert type_paths, "non-vacuity"
+        for type_id, type_path in type_paths.items():
+            assert (tmp_path / type_path).is_dir(), f"missing {type_path} ({type_id})"
+            assert (tmp_path / type_path / "_TEMPLATE.md").is_file(), (
+                f"missing {type_path}_TEMPLATE.md ({type_id})"
+            )
+
+    @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
+    def test_scaffolded_templates_not_listed(self, tmp_path, monkeypatch, theme):
+        self._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        assert list(tmp_path.rglob("_TEMPLATE.md")), "non-vacuity: no templates on disk"
+        listed = self._listed_ids(tmp_path, monkeypatch)
+        assert listed == [], f"fresh board lists {listed}"
+
+    def test_reinit_is_idempotent(self, tmp_path, monkeypatch):
+        """Pinned current behaviour: init (re)writes config.yaml unconditionally,
+        so re-running it with the same theme yields the same config."""
+        self._run(tmp_path, monkeypatch, "init", "--theme", "software")
+        first = (tmp_path / ".kanban" / "config.yaml").read_text()
+        self._run(tmp_path, monkeypatch, "init", "--theme", "software")
+        assert (tmp_path / ".kanban" / "config.yaml").read_text() == first
+
+    def test_hand_written_v1_config_still_works_untouched(self, tmp_path, monkeypatch):
+        """An existing `root: work/` + per-type `kanban-work/*` config keeps working."""
+        (tmp_path / ".kanban").mkdir()
+        config_text = (
+            "kanban:\n"
+            "  theme: software\n"
+            "  paths:\n"
+            "    root: work/\n"
+            "    scan_paths:\n"
+            '      - "kanban-work/features/"\n'
+            '      - "kanban-work/bugs/"\n'
+            "    ignore:\n"
+            '      - "**/_TEMPLATE*"\n'
+        )
+        config_file = tmp_path / ".kanban" / "config.yaml"
+        config_file.write_text(config_text)
+        (tmp_path / "kanban-work" / "features").mkdir(parents=True)
+        (tmp_path / "kanban-work" / "bugs").mkdir(parents=True)
+
+        self._run(tmp_path, monkeypatch, "create", "feature", "probe")
+        assert (tmp_path / "kanban-work" / "features" / "FEAT-001-probe.md").is_file()
+        listed = self._listed_ids(tmp_path, monkeypatch)
+        assert listed == ["FEAT-001"], listed
+        assert config_file.read_text() == config_text, "existing config was rewritten"
+
+    # ---- round 2: a custom theme whose type folders sit at the repo root ----
+
+    @classmethod
+    def _write_flat_theme(cls, tmp_path) -> None:
+        """A local `.kanban/themes/flat.yaml`: the software theme with its type
+        folders moved to the repo root (`features/`, `bugs/`), so the per-type
+        paths share NO common parent."""
+        theme = yaml.safe_load((cls.THEMES_DIR / "software.yaml").read_text())
+        theme["name"] = "Flat"
+        theme["item_types"] = {
+            "feature": {**theme["item_types"]["feature"], "path": "features/"},
+            "bug": {**theme["item_types"]["bug"], "path": "bugs/"},
+        }
+        themes_dir = tmp_path / ".kanban" / "themes"
+        themes_dir.mkdir(parents=True)
+        (themes_dir / "flat.yaml").write_text(yaml.safe_dump(theme, sort_keys=False))
+
+    def test_flat_custom_theme_create_lands_at_repo_root_folder(self, tmp_path, monkeypatch):
+        """`create feature` lands at ./features/ exactly as before, not work/features/."""
+        self._write_flat_theme(tmp_path)
+        self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), "non-vacuity: flat not scaffolded"
+
+        self._run(tmp_path, monkeypatch, "create", "feature", "probe")
+        found = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("FEAT-001*"))
+        assert found == ["features/FEAT-001-probe.md"], (
+            f"flat theme: create feature landed at {found}, expected features/FEAT-001-probe.md"
+        )
+        assert self._listed_ids(tmp_path, monkeypatch) == ["FEAT-001"]
+
+    def test_flat_custom_theme_scans_every_scaffolded_folder(self, tmp_path, monkeypatch):
+        """Both scaffolded folders are scanned: a feature and a bug are both listed."""
+        self._write_flat_theme(tmp_path)
+        self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        self._run(tmp_path, monkeypatch, "create", "feature", "probe")
+        self._run(tmp_path, monkeypatch, "create", "bug", "x")
+
+        on_disk = sorted(
+            str(p.relative_to(tmp_path))
+            for p in tmp_path.rglob("*.md")
+            if p.name.startswith(("FEAT-", "BUG-"))
+        )
+        assert on_disk == ["bugs/BUG-001-x.md", "features/FEAT-001-probe.md"], on_disk
+        assert sorted(self._listed_ids(tmp_path, monkeypatch)) == ["BUG-001", "FEAT-001"]
+
+    def test_flat_custom_theme_never_scans_repo_root(self, tmp_path, monkeypatch):
+        """No scan path may be the repo root: it would pull in .claude/**/*.md."""
+        self._write_flat_theme(tmp_path)
+        self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        scan_paths = self._config_paths(tmp_path).get("scan_paths") or []
+        assert scan_paths, "non-vacuity: init wrote no scan_paths"
+        bad = [p for p in scan_paths if self._norm(p) in ("", ".", "./")]
+        assert not bad, f"init --theme flat scans the repo root: {scan_paths!r}"

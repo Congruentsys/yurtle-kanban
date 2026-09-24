@@ -19,6 +19,7 @@ Usage:
 """
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -170,8 +171,11 @@ _TEMPLATE_SECTIONS: dict[str, list[str]] = {
 
 @main.command()
 @click.option("--theme", default="software", help="Theme: software, nautical, or custom")
-@click.option("--path", default="work/", help="Path for work items")
-def init(theme: str, path: str):
+@click.option(
+    "--path", default=None,
+    help="Root for work items (default: the theme's own root, e.g. kanban-work/)",
+)
+def init(theme: str, path: str | None):
     """Initialize yurtle-kanban in the current directory."""
     from .config import _load_builtin_theme
 
@@ -205,8 +209,22 @@ def init(theme: str, path: str):
             if not template_path.exists():
                 template_path.write_text(_generate_template(prefix, type_id, sections))
 
-    # Create config.yaml with auto-populated scan_paths
-    scan_paths_yaml = "\n".join(f'    - "{p}"' for p in scan_paths)
+    # The root is the theme's own root, the common parent of its per-type
+    # folders (kanban-work/, research/), unless --path says otherwise; the
+    # board scans that one root, so new types are covered too (#112)
+    scanned = [path] if path else []
+    if path is None:
+        common = os.path.commonpath([p.rstrip("/") for p in scan_paths]) if scan_paths else ""
+        if common:
+            path, scanned = f"{common}/", [f"{common}/"]
+        elif scan_paths:
+            # Type folders with no common parent (e.g. a custom theme's
+            # `features/` and `bugs/` at the repo root): scan them as they are,
+            # never `./` (that would pull in `.claude/**/*.md`)
+            path, scanned = "work/", scan_paths
+        else:
+            path, scanned = "work/", ["work/"]
+    scan_paths_yaml = "\n".join(f'    - "{p}"' for p in scanned)
     config_content = f"""# yurtle-kanban configuration
 kanban:
   theme: {theme}
@@ -234,9 +252,9 @@ kanban:
             shutil.copy(template_file, templates_dst / template_file.name)
             templates_copied += 1
 
-    # Create root work directory (fallback)
-    work_dir = repo_root / path
-    work_dir.mkdir(parents=True, exist_ok=True)
+    # Create the root directory only when the board scans it
+    if path in scanned:
+        (repo_root / path).mkdir(parents=True, exist_ok=True)
 
     # Install theme-matched Claude Code skills
     skills_src = _get_skills_dir()

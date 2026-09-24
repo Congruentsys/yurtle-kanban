@@ -60,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-line `status`, `priority_rank` or `value_summary` values were kept or
   broke the file. Field edits now replace the whole value, including its
   continuation lines, and leave the next key untouched.
+- **`init` wrote a `root: work/` it never used** (#112, decided in #109). It now
+  defaults `--path` to the theme's own root (`kanban-work/` for software and
+  nautical, `research/` for hdd), writes it as `root:`, scans just that root
+  (so new types are covered) and no longer creates a stray `work/`. `--path`
+  still wins. A fresh `init --theme spec` followed by `create` no longer crashes.
 
 ## [2.2.0] - 2026-08-30
 
