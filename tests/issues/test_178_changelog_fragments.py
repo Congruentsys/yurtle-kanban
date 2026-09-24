@@ -13,6 +13,7 @@ An existing `## [VERSION]` or a bad fragment -> non-zero exit, nothing changed.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -243,9 +244,14 @@ class TestFragmentDocs:
     def test_contributing_mentions_assemble_script(self) -> None:
         assert "scripts/assemble_changelog.py" in (REPO / "CONTRIBUTING.md").read_text()
 
+    # The shipped skills/release/SKILL.md must not change for #178: consumer repos' CHANGELOG
+    # habits are theirs. Pinned by hash (its sha256 on origin/main when #178 was written), so
+    # the test works in a shallow CI checkout and after merge. A deliberate change to the
+    # skill updates this pin.
+    RELEASE_SKILL_SHA256 = "8d0d4b8544561df9b056aa6992ad06a7465b7ff1ee1e223206e185e20a20b3be"
+
     def test_release_skill_unchanged(self) -> None:  # control
-        main = subprocess.run(
-            ["git", "-C", str(REPO), "show", "origin/main:skills/release/SKILL.md"],
-            capture_output=True, check=True,
-        ).stdout
-        assert (REPO / "skills/release/SKILL.md").read_bytes() == main
+        data = (REPO / "skills/release/SKILL.md").read_bytes()
+        assert hashlib.sha256(data).hexdigest() == self.RELEASE_SKILL_SHA256, (
+            "skills/release/SKILL.md changed; #178 must not change the shipped release skill"
+        )
