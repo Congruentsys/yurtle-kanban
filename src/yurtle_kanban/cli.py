@@ -720,6 +720,26 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
                 console.print(f"[red]Invalid WIP limit: {wip}[/red]")
                 sys.exit(1)
 
+    # Upgrading to multi-board turns the single-board config into ONE board that
+    # scans one path; if no path covers every scan path, items would silently
+    # vanish from the board, so refuse and change nothing (#122)
+    if not config.is_multi_board and config.paths.scan_paths:
+        board_path = Path(config._single_board_path())
+        uncovered = [
+            p for p in config.paths.scan_paths
+            if not (Path(p) == board_path or board_path in Path(p).parents)
+        ]
+        if uncovered:
+            console.print(
+                "[red]Can't upgrade to multi-board: a board scans one path, and no "
+                f"single path covers these scan paths: {', '.join(uncovered)}[/red]"
+            )
+            console.print(
+                "[dim]Move them under a common folder (and set paths.root to it), "
+                "then run board-add again. .kanban/config.yaml was not changed.[/dim]"
+            )
+            sys.exit(1)
+
     # Check if board already exists
     if config.is_multi_board and config.get_board(name):
         console.print(f"[red]Board '{name}' already exists[/red]")

@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   yurtle block invalid Turtle, and a crafted name could inject triples. It's now
   escaped per Turtle string rules, and the status-history reader unescapes it.
   Plain names are written exactly as before.
+- **`board-add` silently dropped every item when the single-board scan paths
+  share no common parent** (#122). A multi-board board scans one path, and none
+  covered e.g. `a/` and `b/`. `board-add` now refuses the upgrade, names the
+  scan paths it can't cover, and leaves `.kanban/config.yaml` unchanged.
 
 ## [2.2.0] - 2026-08-30
 
