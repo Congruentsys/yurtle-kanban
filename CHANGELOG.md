@@ -140,6 +140,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crashes on mixed absolute and relative scan paths** (#147, extending #122).
   Either case used to drop items silently or print a traceback. `list` no
   longer crashes on mixed scan paths either.
+- **A non-string priority (e.g. `priority: 1` in a hooks config) now gets the
+  same clear refusal as `urgent`** (#153), not `'int' object has no attribute
+  'strip'`. `indexer.py` is documented as unused and single-board-only.
 
 ## [2.2.0] - 2026-08-30
 
