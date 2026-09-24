@@ -56,10 +56,16 @@ existing helpers (`_add_or_update_frontmatter_field`, `PRIORITIES`, …). Add an
 
 **3. The review, by a DISTINCT session.**
 ```bash
+git -C /tmp/yk-<N> fetch -q origin main && git -C /tmp/yk-<N> rebase origin/main   # see "Rebased" below
 git -C /tmp/yk-<N> push -q -u origin HEAD
 gh pr create --head <branch> --title "<type>: <what> (#<N>)" --body "Fixes #<N>. …"
-claude --dangerously-skip-permissions -p "<brief>" < /dev/null
+claude --dangerously-skip-permissions -p "$(cat <brief file>)" < /dev/null   # run it in the background
 ```
+
+**Build each brief from explicit values** (PR number, issue number, branch, the full head sha, the tests
+commit), written into a template by a small script. Never make it by running `sed` over an earlier brief:
+a substitution like `s/115/117/` also rewrites digits inside the sha, and the reviewer then checks out a
+commit that doesn't exist. Before launching, grep the brief for the full sha.
 End the PR body with the attribution line from the session's system reminder.
 
 The brief tells the reviewer to:
@@ -87,14 +93,23 @@ proves nothing.
 **4. Merge** (from the main checkout):
 ```bash
 gh pr checks <P> --watch                      # all green
-git worktree remove --force /tmp/yk-<N>       # FIRST: the local branch is checked out there, so
-                                              # `--delete-branch` would fail after the merge
+git worktree remove --force /tmp/yk-<N> 2>/dev/null || true
+                                              # FIRST: the local branch is checked out there, so
+                                              # `--delete-branch` would fail after the merge; after
+                                              # a session restart it may already be gone
 gh pr merge <P> --merge --delete-branch       # deletes the remote and local branch
 git checkout -q main && git pull -q
 gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
 Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
 verdict. Done means the merge is on `origin/main` and the issue is closed.
+
+**Rebased after approval?** Every PR adds its entry at the same place under `## [Unreleased]`, so parallel
+PRs conflict in `CHANGELOG.md` as soon as a sibling merges. Before each review, `git rebase origin/main`
+(keep both sides of a CHANGELOG conflict) and push with `--force-with-lease`. If a rebase is needed AFTER an
+`approve`, the verdict doesn't carry to the new head by itself. Run one short distinct-session check that
+`git range-diff <old>~K..<old> <new>~K..<new>` differs only in `CHANGELOG.md`, and that the PR's `src`/`tests`
+patch is unchanged. That session posts a new `reviewed-at-sha: <new>` / `verdict: approve` comment.
 
 **Carry the findings.** Every `(follow-up)` finding becomes an issue (`gh issue create --label bug …`,
 unassigned) with a verified repro, cross-linked to the PR.
