@@ -46,7 +46,7 @@ from .export import (
     export_research_index,
 )
 from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure, paper
-from .models import PRIORITIES, WorkItemStatus, WorkItemType
+from .models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
 from .service import KanbanService
 
 
@@ -384,8 +384,8 @@ def list_items(
         invalid = [p for p in priority_filter if p not in PRIORITIES]
         if invalid:
             console.print(
-                f"[red]Unknown priority: {', '.join(invalid)}."
-                " Valid: critical, high, medium, low[/red]"
+                f"[red]{escape(unknown_priority_message(', '.join(invalid)))}[/red]",
+                soft_wrap=True,
             )
             sys.exit(1)
 
