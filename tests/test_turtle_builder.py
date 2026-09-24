@@ -234,3 +234,129 @@ class TestEdgeCases:
         lines = block.strip().split("\n")
         assert lines[0] == "```turtle"
         assert lines[-1] == "```"
+
+
+# ---------------------------------------------------------------------------
+# Issue #141 — every Turtle literal built from user input parses and round-trips
+# ---------------------------------------------------------------------------
+
+import rdflib  # noqa: E402
+from rdflib import Literal, Namespace  # noqa: E402
+
+from yurtle_kanban.turtle_builder import PREFIXES  # noqa: E402
+
+_RDFS = Namespace(PREFIXES["rdfs"])
+_HYP = Namespace(PREFIXES["hyp"])
+_MEASURE = Namespace(PREFIXES["measure"])
+
+_NASTY_VALUES = [
+    pytest.param('say "hi" there', id="quote"),
+    pytest.param("C:\\data\\x", id="backslash"),
+    pytest.param("ends with backslash\\", id="trailing-backslash"),
+    pytest.param("p\nq", id="newline"),
+    pytest.param("p\r\nq", id="crlf"),
+    pytest.param("p\rq", id="cr"),
+    pytest.param("p\tq", id="tab"),
+    pytest.param('x" .\n<#EVIL> a <#Injected> .\n<#Y> <#z> "', id="injection"),
+    pytest.param("Explore transfer learning", id="plain"),
+]
+
+
+def _parse_block(block: str) -> rdflib.Graph:
+    lines = block.split("\n")
+    assert lines[0] == "```turtle" and lines[-1] == "```", block
+    g = rdflib.Graph()
+    g.parse(data="\n".join(lines[1:-1]), format="turtle", publicID="http://x/")
+    return g
+
+
+def _only_value(g: rdflib.Graph, predicate) -> Literal:
+    values = list(g.objects(None, predicate))
+    assert len(values) == 1, f"{predicate}: {values}"
+    return values[0]
+
+
+class TestTurtleLiteralsRoundTripIssue141:
+    """Every string literal TurtleBlockBuilder writes from a user value parses
+    with rdflib and reads back as exactly that value (#141)."""
+
+    @pytest.mark.parametrize("value", _NASTY_VALUES)
+    @pytest.mark.parametrize(
+        "item_type", ["idea", "literature", "paper", "hypothesis", "experiment", "measure"]
+    )
+    def test_title_label_round_trips(self, builder, item_type, value):
+        block = builder.build(item_type, {"id": "X-001", "title": value})
+        g = _parse_block(block)
+        assert str(_only_value(g, _RDFS.label)) == value
+
+    @pytest.mark.parametrize("value", _NASTY_VALUES)
+    def test_hypothesis_target_round_trips(self, builder, value):
+        block = builder.build(
+            "hypothesis", {"id": "H130.1", "title": "T", "paper": "130", "target": value}
+        )
+        g = _parse_block(block)
+        assert str(_only_value(g, _HYP.target)) == value
+        assert str(_only_value(g, _RDFS.label)) == "T"
+
+    @pytest.mark.parametrize("value", _NASTY_VALUES)
+    def test_measure_unit_round_trips(self, builder, value):
+        block = builder.build(
+            "measure", {"id": "M-001", "title": "T", "unit": value, "category": "c"}
+        )
+        g = _parse_block(block)
+        assert str(_only_value(g, _MEASURE.unit)) == value
+        assert str(_only_value(g, _MEASURE.category)) == "c"
+
+    @pytest.mark.parametrize("value", _NASTY_VALUES)
+    def test_measure_category_round_trips(self, builder, value):
+        block = builder.build(
+            "measure", {"id": "M-001", "title": "T", "unit": "u", "category": value}
+        )
+        g = _parse_block(block)
+        assert str(_only_value(g, _MEASURE.category)) == value
+        assert str(_only_value(g, _MEASURE.unit)) == "u"
+
+    def test_injection_adds_no_triples(self, builder):
+        """A title crafted to close the literal adds no subjects to the graph."""
+        block = builder.build(
+            "idea", {"id": "IDEA-R-001", "title": 'x" .\n<#EVIL> a <#Injected> .\n<#Y> <#z> "'}
+        )
+        g = _parse_block(block)
+        assert set(g.subjects()) == {rdflib.URIRef("http://x/#IDEA-R-001")}
+        assert len(g) == 2
+
+
+class TestTurtlePlainValuesUnchangedIssue141:
+    """Negative controls: plain values are written byte-identically to before (#141)."""
+
+    def test_plain_idea_block_bytes(self, builder):
+        block = builder.build("idea", {"id": "IDEA-R-010", "title": "Explore transfer learning"})
+        assert block == (
+            "```turtle\n"
+            "@prefix idea: <https://nusy.dev/idea/> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            "\n"
+            "<#IDEA-R-010> a idea:Idea ;\n"
+            '    rdfs:label "Explore transfer learning" .\n'
+            "```"
+        )
+
+    def test_plain_measure_lines(self, builder):
+        block = builder.build(
+            "measure",
+            {"id": "M-042", "title": "Response Latency", "unit": "ms", "category": "performance"},
+        )
+        assert '    rdfs:label "Response Latency" ;\n' in block
+        assert '    measure:unit "ms" ;\n' in block
+        assert '    measure:category "performance" .\n' in block
+
+    def test_plain_hypothesis_target_line(self, builder):
+        block = builder.build(
+            "hypothesis",
+            {"id": "H130.1", "title": "Acc", "paper": "130", "target": ">= 95% accuracy"},
+        )
+        assert '    hyp:target ">= 95% accuracy" .\n' in block
+
+    def test_quote_and_backslash_escaping_unchanged(self, builder):
+        block = builder.build("idea", {"id": "IDEA-R-001", "title": 'a "b" C:\\d'})
+        assert r'rdfs:label "a \"b\" C:\\d" .' in block

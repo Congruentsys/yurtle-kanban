@@ -560,3 +560,106 @@ class TestAllFrontmatterValuesRoundTrip:
         assert fm["superseded_by"] == ["FEAT-009"]
         assert fm["resolution"] == "completed"
         assert fm["compute_requirement"] == "gpu"
+
+
+# ---------------------------------------------------------------------------
+# Issue #141 — every string literal WorkItem.to_yurtle writes parses and round-trips
+# ---------------------------------------------------------------------------
+
+_KB = "https://yurtle.dev/kanban/"
+
+_NASTY_TURTLE_VALUES = [
+    pytest.param('say "hi" there', id="quote"),
+    pytest.param("C:\\data\\x", id="backslash"),
+    pytest.param("ends with backslash\\", id="trailing-backslash"),
+    pytest.param("p\nq", id="newline"),
+    pytest.param("p\r\nq", id="crlf"),
+    pytest.param("p\rq", id="cr"),
+    pytest.param("p\tq", id="tab"),
+    pytest.param('x" ;\n   kb:status kb:done ;\n   kb:id "y', id="injection"),
+    pytest.param("plain-value", id="plain"),
+]
+
+
+def _parse_yurtle(text: str):
+    from rdflib import Graph
+
+    if text.startswith("```"):
+        text = "\n".join(text.split("\n")[1:-1])
+    g = Graph()
+    g.parse(data=text, format="turtle", publicID="http://x/")
+    return g
+
+
+def _literals(g, local: str) -> list[str]:
+    from rdflib import URIRef
+
+    return [str(o) for o in g.objects(None, URIRef(_KB + local))]
+
+
+class TestToYurtleLiteralsRoundTripIssue141:
+    """Every string literal WorkItem.to_yurtle writes (kb:id, kb:tag,
+    kb:resolution, kb:computeRequirement) parses with rdflib and reads back as
+    exactly the value on the item (#141)."""
+
+    @pytest.mark.parametrize("value", _NASTY_TURTLE_VALUES)
+    def test_id_round_trips(self, value):
+        g = _parse_yurtle(_ordinary_item(id=value).to_yurtle())
+        assert _literals(g, "id") == [value]
+        assert _literals(g, "status") == [_KB + "ready"]
+
+    @pytest.mark.parametrize("value", _NASTY_TURTLE_VALUES)
+    def test_resolution_round_trips(self, value):
+        g = _parse_yurtle(_ordinary_item(resolution=value).to_yurtle())
+        assert _literals(g, "resolution") == [value]
+        assert _literals(g, "id") == ["FEAT-001"]
+
+    @pytest.mark.parametrize("value", _NASTY_TURTLE_VALUES)
+    def test_compute_requirement_round_trips(self, value):
+        g = _parse_yurtle(_ordinary_item(compute_requirement=value).to_yurtle())
+        assert _literals(g, "computeRequirement") == [value]
+        assert _literals(g, "id") == ["FEAT-001"]
+
+    @pytest.mark.parametrize("value", _NASTY_TURTLE_VALUES)
+    def test_tag_round_trips(self, value):
+        g = _parse_yurtle(_ordinary_item(tags=["backend", value]).to_yurtle())
+        assert sorted(_literals(g, "tag")) == sorted(["backend", value])
+
+    def test_all_nasty_at_once_round_trips(self):
+        """Every literal carrying a newline/CR/tab/quote/backslash at once still parses."""
+        v = 'a"b\\c\nd\re\tf'
+        item = _ordinary_item(
+            id=v + "1", resolution=v + "2", compute_requirement=v + "3", tags=[v + "4"]
+        )
+        g = _parse_yurtle(item.to_yurtle())
+        assert _literals(g, "id") == [v + "1"]
+        assert _literals(g, "resolution") == [v + "2"]
+        assert _literals(g, "computeRequirement") == [v + "3"]
+        assert _literals(g, "tag") == [v + "4"]
+
+
+class TestToYurtlePlainValuesUnchangedIssue141:
+    """Negative controls: plain values are written byte-identically to before (#141)."""
+
+    def test_plain_to_yurtle_bytes(self):
+        assert _ordinary_item().to_yurtle() == (
+            "@prefix kb: <https://yurtle.dev/kanban/> .\n"
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+            "\n"
+            "<> a kb:Feature ;\n"
+            '   kb:id "FEAT-001" ;\n'
+            "   kb:status kb:ready ;\n"
+            "   kb:priority kb:high ;\n"
+            "   kb:assignee <agent-x> ;\n"
+            '   kb:created "2026-01-12"^^xsd:date ;\n'
+            '   kb:tag "backend", "ui-polish" ;\n'
+            "   kb:dependsOn <EXP-001> ;\n"
+            "   kb:related <FEAT-002>, <BUG-003> ;\n"
+            '   kb:resolution "completed" ;\n'
+            "   kb:supersededBy <FEAT-009> ;\n"
+            '   kb:computeRequirement "gpu" .'
+        )
+
+    def test_quote_and_backslash_escaping_unchanged(self):
+        y = _ordinary_item(resolution='a "b" C:\\d').to_yurtle()
+        assert r'   kb:resolution "a \"b\" C:\\d" ;' in y
