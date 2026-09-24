@@ -40,6 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vanish, `yes` became `true`, `null`/`#core` dropped the assignee and `[core]`
   became a list. They are now quoted when needed and read back as the same string.
   Plain names (`agent-x`) are written as before.
+- **`create -p` accepted any text** (#106), so an item created with `-p urgent`
+  could never be found by `list --priority`, which only accepts the four real
+  values. `create` now takes `critical`/`high`/`medium`/`low` (any case), like
+  the template-based creates (#99), and the MCP `create`/`update` tools reject
+  anything else too. All of them share `PRIORITIES`.
 
 ## [2.2.0] - 2026-08-30
 

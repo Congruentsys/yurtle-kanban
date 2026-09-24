@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import KanbanConfig
-from ..models import WorkItemStatus, WorkItemType
+from ..models import PRIORITIES, WorkItemStatus, WorkItemType
 from ..service import KanbanService
 
 logger = logging.getLogger("yurtle-kanban-mcp")
@@ -117,7 +117,7 @@ class KanbanMCPServer:
                         "priority": {
                             "type": "string",
                             "description": "Priority level",
-                            "enum": ["critical", "high", "medium", "low"],
+                            "enum": list(PRIORITIES),
                             "default": "medium",
                         },
                         "assignee": {
@@ -253,7 +253,7 @@ class KanbanMCPServer:
                         "priority": {
                             "type": "string",
                             "description": "New priority level",
-                            "enum": ["critical", "high", "medium", "low"],
+                            "enum": list(PRIORITIES),
                         },
                         "assignee": {
                             "type": "string",
@@ -371,8 +371,17 @@ class KanbanMCPServer:
 
         return {"item": item.to_dict()}
 
+    @staticmethod
+    def _check_priority(priority: str | None) -> dict[str, Any] | None:
+        """Reject a priority outside PRIORITIES; the schema enum is not enforced (#106)."""
+        if priority is not None and priority not in PRIORITIES:
+            return {"error": f"Unknown priority: {priority}. Valid: {', '.join(PRIORITIES)}"}
+        return None
+
     def _create_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Create a new work item."""
+        if error := self._check_priority(args.get("priority")):
+            return error
         item_type = WorkItemType.from_string(args["item_type"])
 
         item = self.service.create_item(
@@ -482,6 +491,8 @@ class KanbanMCPServer:
 
     def _update_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Update a work item's properties."""
+        if error := self._check_priority(args.get("priority")):
+            return error
         item_id = args["item_id"].upper()
 
         item = self.service.update_item(
