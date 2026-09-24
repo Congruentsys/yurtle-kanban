@@ -39,6 +39,27 @@ def yaml_scalar(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)  # a JSON string is a YAML scalar
 
 
+def yaml_flow_item(value: str) -> str:
+    """Render a string as one element of a YAML flow list (`[a, b]`) (#121).
+
+    Inside a flow list a comma or bracket also ends the element, so `a, b`
+    (plain as a scalar) must be quoted here to stay ONE element.
+    """
+    import yaml
+
+    try:
+        if yaml.safe_load(f"k: [{value}]") == {"k": [value]}:
+            return value
+    except yaml.YAMLError:
+        pass
+    return json.dumps(value, ensure_ascii=False)
+
+
+def yaml_flow_list(values: list[str]) -> str:
+    """Render strings as a YAML flow list whose elements read back unchanged."""
+    return "[" + ", ".join(yaml_flow_item(v) for v in values) + "]"
+
+
 class WorkItemStatus(Enum):
     """Standard work item statuses."""
 
@@ -319,7 +340,8 @@ class WorkItem:
         lines = [
             "---",
             f"id: {self.id}",
-            'title: "{}"'.format(self.title.replace('"', '\\"')),
+            # always double-quoted; json.dumps also escapes \\ and newlines (#121)
+            f"title: {json.dumps(self.title, ensure_ascii=False)}",
             f"type: {self.item_type.value}",
             f"status: {self.status.value}",
         ]
@@ -332,30 +354,29 @@ class WorkItem:
         if self.created:
             lines.append(f"created: {self.created.isoformat()}")
         if self.tags:
-            lines.append(f"tags: [{', '.join(self.tags)}]")
+            lines.append(f"tags: {yaml_flow_list(self.tags)}")
 
         # Always include depends_on (even if empty)
         if self.depends_on:
-            lines.append(f"depends_on: [{', '.join(self.depends_on)}]")
+            lines.append(f"depends_on: {yaml_flow_list(self.depends_on)}")
         else:
             lines.append("depends_on: []")
 
         if self.related:
-            lines.append(f"related: [{', '.join(self.related)}]")
+            lines.append(f"related: {yaml_flow_list(self.related)}")
 
         if self.priority_rank is not None:
             lines.append(f"priority_rank: {self.priority_rank}")
         if self.value_summary:
-            escaped = self.value_summary.replace('"', '\\"')
-            lines.append(f'value_summary: "{escaped}"')
+            lines.append(f"value_summary: {json.dumps(self.value_summary, ensure_ascii=False)}")
 
         if self.compute_requirement:
-            lines.append(f"compute_requirement: {self.compute_requirement}")
+            lines.append(f"compute_requirement: {yaml_scalar(self.compute_requirement)}")
 
         if self.resolution:
-            lines.append(f"resolution: {self.resolution}")
+            lines.append(f"resolution: {yaml_scalar(self.resolution)}")
         if self.superseded_by:
-            lines.append(f"superseded_by: [{', '.join(self.superseded_by)}]")
+            lines.append(f"superseded_by: {yaml_flow_list(self.superseded_by)}")
 
         lines.extend(
             [
