@@ -1487,3 +1487,259 @@ class TestBoardAddKeepsDefaultBoardPath:
 
         assert self._saved_boards(repo)["lab"]["path"] == "lab-notes/"
         assert (repo / "lab-notes").is_dir()
+
+
+class TestScanUsesEachBoardsIgnore:
+    """list/show/move must apply each board's OWN ``ignore`` to that board.
+
+    One board's ``ignore:`` patterns must not hide another board's items, and
+    a board with no ``ignore:`` keeps the default ignore (``**/archive/**``).
+    ``list``/``show``/``move`` must agree with ``board`` about which items each
+    board has. (#124)
+    """
+
+    CONFIG = (
+        "version: '2.0'\n"
+        "boards:\n"
+        "- name: alpha\n"
+        "  preset: software\n"
+        "  path: a/\n"
+        '  ignore: ["**/drafts/**"]\n'
+        "- name: beta\n"
+        "  preset: software\n"
+        "  path: b/\n"
+    )
+
+    ITEMS = {
+        "a/tasks/TASK-001.md": "TASK-001",  # alpha, listed
+        "b/drafts/TASK-002.md": "TASK-002",  # beta's draft: beta does not ignore drafts
+        "a/drafts/TASK-003.md": "TASK-003",  # alpha's own draft: ignored by alpha
+        "b/archive/TASK-004.md": "TASK-004",  # beta default ignore covers archive
+    }
+
+    @pytest.fixture
+    def repo_runner(self, tmp_path, monkeypatch):
+        """Git repo with the issue's two-board config and items, as cwd."""
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+
+        for cmd in (
+            ["git", "init", "-b", "main"],
+            ["git", "config", "user.email", "test@test.com"],
+            ["git", "config", "user.name", "Test"],
+        ):
+            subprocess.run(cmd, cwd=tmp_path, capture_output=True, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        yield tmp_path, CliRunner()
+        config_mod._theme_cache.clear()
+
+    @classmethod
+    def _write_repo(cls, repo: Path, config: str | None = None) -> None:
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(config if config is not None else cls.CONFIG)
+        for rel, item_id in cls.ITEMS.items():
+            cls._write_item(repo / rel, item_id)
+
+    @staticmethod
+    def _write_item(path: Path, item_id: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "---\n"
+            f"id: {item_id}\n"
+            f'title: "Item {item_id}"\n'
+            "type: task\n"
+            "status: backlog\n"
+            "priority: medium\n"
+            "assignee: null\n"
+            "created: 2026-09-24\n"
+            "depends_on: []\n"
+            "---\n\n"
+            f"# Item {item_id}\n"
+        )
+
+    @staticmethod
+    def _invoke(runner, args: list[str]):
+        from yurtle_kanban.cli import main
+
+        return runner.invoke(main, args, catch_exceptions=False)
+
+    @classmethod
+    def _run(cls, runner, args: list[str]):
+        result = cls._invoke(runner, args)
+        assert result.exit_code == 0, f"{args} failed:\n{result.output}"
+        return result
+
+    @classmethod
+    def _listed_ids(cls, runner, extra: list[str] | None = None) -> set[str]:
+        import json
+
+        out = cls._run(runner, ["list", "--json", *(extra or [])]).output
+        data = json.loads(out)
+        items = data["items"] if isinstance(data, dict) else data
+        return {i["id"] for i in items}
+
+    @staticmethod
+    def _service(repo: Path) -> KanbanService:
+        config = KanbanConfig.load(repo / ".kanban" / "config.yaml")
+        return KanbanService(config, repo)
+
+    # -- the issue's own repro ------------------------------------------------
+
+    def test_issue_repro_list_shows_other_boards_draft(self, repo_runner):
+        """alpha's ``**/drafts/**`` must not hide beta's b/drafts/TASK-002."""
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        ids = self._listed_ids(runner)
+        assert "TASK-001" in ids
+        assert "TASK-002" in ids, f"beta's draft hidden by alpha's ignore: {ids}"
+
+    def test_issue_repro_show_other_boards_draft(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        result = self._invoke(runner, ["show", "TASK-002"])
+        assert "Item not found" not in result.output, result.output
+        assert result.exit_code == 0
+        assert "Item TASK-002" in result.output
+
+    def test_issue_repro_move_other_boards_draft(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        result = self._invoke(runner, ["move", "TASK-002", "ready", "--no-commit"])
+        assert "not found" not in result.output.lower(), result.output
+        assert result.exit_code == 0, result.output
+        assert "status: ready" in (repo / "b" / "drafts" / "TASK-002.md").read_text()
+
+    # -- each board's own ignore still applies ----------------------------------
+
+    def test_board_own_ignore_still_hides_its_drafts(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        assert "TASK-003" not in self._listed_ids(runner)
+        result = self._invoke(runner, ["show", "TASK-003"])
+        assert "Item not found" in result.output, result.output
+
+    def test_board_without_ignore_keeps_default_archive_ignore(self, repo_runner):
+        """beta sets no ignore, so the default ``**/archive/**`` applies to it."""
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        assert "TASK-004" not in self._listed_ids(runner)
+        result = self._invoke(runner, ["show", "TASK-004"])
+        assert "Item not found" in result.output, result.output
+
+    def test_list_matches_exactly_expected_items(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        assert self._listed_ids(runner) == {"TASK-001", "TASK-002"}
+
+    # -- list agrees with board ---------------------------------------------
+
+    def test_list_agrees_with_board_per_board(self, repo_runner):
+        """Items ``list`` shows == union of what ``board`` shows per board.."""
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        service = self._service(repo)
+        per_board = {
+            name: {i.id for i in service.get_board(board_name=name).items}
+            for name in ("alpha", "beta")
+        }
+        assert per_board["beta"] == {"TASK-002"}
+        assert per_board["alpha"] == {"TASK-001"}
+        assert self._listed_ids(runner, ["--board", "beta"]) == per_board["beta"]
+        assert self._listed_ids(runner, ["--board", "alpha"]) == per_board["alpha"]
+        assert self._listed_ids(runner) == per_board["alpha"] | per_board["beta"]
+
+    def test_board_command_beta_shows_draft(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_repo(repo)
+
+        board_out = self._run(runner, ["board", "beta"]).output
+        assert "TASK-002" in board_out
+        assert "TASK-002" in self._listed_ids(runner)
+
+    def test_service_scan_uses_each_boards_ignore(self, repo_runner):
+        repo, _ = repo_runner
+        self._write_repo(repo)
+
+        ids = {i.id for i in self._service(repo).scan()}
+        assert ids == {"TASK-001", "TASK-002"}
+
+    # -- negative controls (must stay green) -----------------------------------
+
+    def test_control_94_board_add_no_template_phantoms(self, repo_runner):
+        import re
+
+        _, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        out = self._run(runner, ["list"]).output
+        assert not re.findall(r"\b[A-Z]+-XXX\b", out), out
+        assert "IDEA-001" in out
+
+    def test_control_nusy_style_board_ignore_including_defaults(self, repo_runner):
+        """A board whose ignore lists the defaults plus its own keeps working."""
+        repo, runner = repo_runner
+        config = (
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: development\n"
+            "  preset: software\n"
+            "  path: kanban-work/\n"
+            "  ignore:\n"
+            '  - "**/archive/**"\n'
+            '  - "**/templates/**"\n'
+            '  - "**/_TEMPLATE*"\n'
+            "- name: research\n"
+            "  preset: software\n"
+            "  path: research/\n"
+            "  ignore:\n"
+            '  - "**/archive/**"\n'
+            '  - "**/templates/**"\n'
+            "default_board: development\n"
+        )
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(config)
+        self._write_item(repo / "kanban-work/tasks/TASK-010.md", "TASK-010")
+        self._write_item(repo / "kanban-work/tasks/_TEMPLATE.md", "TASK-XXX")
+        self._write_item(repo / "kanban-work/archive/TASK-011.md", "TASK-011")
+        self._write_item(repo / "kanban-work/templates/TASK-012.md", "TASK-012")
+        self._write_item(repo / "research/tasks/TASK-020.md", "TASK-020")
+        self._write_item(repo / "research/archive/TASK-021.md", "TASK-021")
+
+        assert self._listed_ids(runner) == {"TASK-010", "TASK-020"}
+        assert "Item not found" not in self._invoke(runner, ["show", "TASK-020"]).output
+
+    def test_control_single_board_v1_ignore_unchanged(self, repo_runner):
+        repo, runner = repo_runner
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(
+            "kanban:\n"
+            "  theme: software\n"
+            "  paths:\n"
+            "    root: work/\n"
+            "    scan_paths:\n"
+            '    - "work/"\n'
+            "    ignore:\n"
+            '      - "**/drafts/**"\n'
+        )
+        self._write_item(repo / "work/tasks/TASK-030.md", "TASK-030")
+        self._write_item(repo / "work/drafts/TASK-031.md", "TASK-031")
+        self._write_item(repo / "work/archive/TASK-032.md", "TASK-032")
+
+        # v1 ignore is exactly what the config lists (no default merged in).
+        assert self._listed_ids(runner) == {"TASK-030", "TASK-032"}
