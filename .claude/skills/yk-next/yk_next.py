@@ -245,6 +245,5 @@ def claim(
     print("\nNOTHING READY — every open issue is held, assigned, waiting, or already has a PR.")
 
 
-
 if __name__ == "__main__":
     main()
