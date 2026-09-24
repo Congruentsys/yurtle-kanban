@@ -2335,10 +2335,12 @@ class KanbanService:
             new_status.value, new_status.value,
         )
 
-        # Update frontmatter for status and assignee (use board-native name)
-        content = self._update_frontmatter_field(content, "status", native_status)
+        # Update frontmatter for status and assignee (use board-native name).
+        # Add the key when absent — an update-only write would report a
+        # move/assignment it never recorded (issue #97).
+        content = self._add_or_update_frontmatter_field(content, "status", native_status)
         if assignee:
-            content = self._update_frontmatter_field(content, "assignee", assignee)
+            content = self._add_or_update_frontmatter_field(content, "assignee", assignee)
 
         # Create TTL status change entry (use canonical name for RDF consistency)
         timestamp = datetime.now().isoformat(timespec="seconds")

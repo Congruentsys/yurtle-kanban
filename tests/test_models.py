@@ -154,6 +154,7 @@ class TestWorkItem:
         assert 'title: "Test feature"' in md
         assert "type: feature" in md
         assert "status: ready" in md
+        assert "assignee: null" in md
         assert "# Test feature" in md
 
     def test_resolution_fields_default(self):

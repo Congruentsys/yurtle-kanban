@@ -1442,3 +1442,77 @@ class TestBackfillTurtleBlocks:
         assert "```turtle" in content
         assert "LIT-001" in content
         assert "LIT-002" in content
+
+
+class TestMoveAssignMissingKey:
+    """move --assign must record the assignee even when the key is absent (#97)."""
+
+    @staticmethod
+    def _frontmatter(path: Path) -> dict:
+        return yaml.safe_load(path.read_text().split("---", 2)[1])
+
+    def test_create_writes_null_assignee(self, temp_repo, nautical_config):
+        """create emits `assignee: null`, matching the scaffolded templates."""
+        svc = KanbanService(nautical_config, temp_repo)
+        item = svc.create_item(WorkItemType.EXPEDITION, "No assignee")
+
+        assert "\nassignee: null\n" in item.file_path.read_text()
+        assert self._frontmatter(item.file_path)["assignee"] is None
+
+    def test_move_adds_assignee_when_key_absent(self, temp_repo, nautical_config):
+        """A hand-written file with no assignee: key gains one on move -a."""
+        svc = KanbanService(nautical_config, temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-001-probe.md"
+        path.write_text(
+            "---\nid: EXP-001\ntitle: \"probe\"\ntype: expedition\n"
+            "status: backlog\n---\n\n# probe\n"
+        )
+        svc.scan()
+
+        svc.move_item(
+            "EXP-001", WorkItemStatus.READY, commit=False,
+            assignee="agent-x", validate_workflow=False,
+        )
+
+        fm = self._frontmatter(path)
+        assert fm["assignee"] == "agent-x"
+        assert fm["status"] == "ready"
+        assert fm["id"] == "EXP-001"
+        svc.scan()
+        assert [i.id for i in svc.get_items(assignee="agent-x")] == ["EXP-001"]
+
+    def test_move_adds_status_when_key_absent(self, temp_repo, nautical_config):
+        """status gets the same add-if-absent treatment as assignee."""
+        svc = KanbanService(nautical_config, temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-001-probe.md"
+        path.write_text(
+            "---\nid: EXP-001\ntitle: \"probe\"\ntype: expedition\n---\n\n# probe\n"
+        )
+        svc.scan()
+
+        svc.move_item(
+            "EXP-001", WorkItemStatus.READY, commit=False, validate_workflow=False,
+        )
+
+        assert self._frontmatter(path)["status"] == "ready"
+
+    def test_cli_create_then_move_assign_is_listed(
+        self, temp_repo, nautical_config, monkeypatch,
+    ):
+        """The issue's repro: create → move -a → list --assignee finds the item."""
+        runner = CliRunner()
+        monkeypatch.chdir(temp_repo)
+
+        for args in (
+            ["create", "expedition", "probe"],
+            ["move", "EXP-001", "ready", "--no-commit"],
+            ["move", "EXP-001", "in_progress", "-a", "agent-x", "--no-commit"],
+        ):
+            result = runner.invoke(main, args, catch_exceptions=False)
+            assert result.exit_code == 0, result.output
+
+        result = runner.invoke(
+            main, ["list", "--assignee", "agent-x", "--json"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert [i["id"] for i in json.loads(result.output)] == ["EXP-001"]
