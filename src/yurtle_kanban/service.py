@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import os
 import re
 import subprocess
 from datetime import date, datetime
@@ -149,6 +150,7 @@ class KanbanService:
         # Files that look like items (start with `---`) but don't parse, with a
         # reason; the CLI reports them instead of dropping them silently (#139)
         self.parse_warnings: list[tuple[Path, str]] = []
+        self._git_top: Path | None = None  # `git rev-parse --show-toplevel`, cached
         self._board: Board | None = None
         self._workflow_parser = WorkflowParser(repo_root / ".kanban")
         self._workflows: dict[str, WorkflowConfig] = {}
@@ -267,17 +269,38 @@ class KanbanService:
 
         return items
 
-    def _repo_relative(self, path: Path) -> Path | None:
-        """`path` relative to the repo, also when it's reached through a symlink
-        (macOS `/tmp` → `/private/tmp`, #174); None when it lies outside the repo."""
+    def _repo_relative(self, path: Path, root: Path | None = None) -> Path | None:
+        """`path` relative to `root` (default: the repo root), or None when it lies
+        outside. `..` is normalised first (`R/../O/x` is outside R), and a path
+        reached through a symlinked directory (macOS `/tmp` → `/private/tmp`) is
+        tried again with its directory resolved, never the file itself: an item
+        file that is a symlink stays where it is linked from (#174)."""
+        root = self.repo_root if root is None else root
         try:
-            return path.relative_to(self.repo_root)
+            return Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
         except ValueError:
             pass
         try:
-            return path.resolve().relative_to(self.repo_root.resolve())
+            return (path.parent.resolve() / path.name).relative_to(root.resolve())
         except (ValueError, OSError):
             return None
+
+    def _git_toplevel(self) -> Path:
+        """The git work tree holding the repo root; `.kanban/` may sit in a
+        subdirectory of it. Falls back to the repo root when git can't say."""
+        if self._git_top is None:
+            try:
+                out = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=self.repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip()
+                self._git_top = Path(out) if out else self.repo_root
+            except (subprocess.CalledProcessError, OSError):
+                self._git_top = self.repo_root
+        return self._git_top
 
     def _ignore_key(self, path: Path) -> str:
         """What ignore patterns match: repo-relative inside the repo; a board root
@@ -289,11 +312,11 @@ class KanbanService:
     def _outside_repo(self, *paths: Path) -> bool:
         """True, with a warning, when any of `paths` lies outside the git repository,
         so git can't commit it (#174): the caller skips git instead of failing late."""
-        outside = [str(p) for p in paths if self._repo_relative(p) is None]
+        top = self._git_toplevel()
+        outside = [str(p) for p in paths if self._repo_relative(p, top) is None]
         if outside:
             logger.warning(
-                f"Not committed: {', '.join(outside)} is outside the git repository "
-                f"at {self.repo_root}"
+                f"Not committed: {', '.join(outside)} is outside the git repository at {top}"
             )
         return bool(outside)
 
@@ -1218,6 +1241,31 @@ class KanbanService:
         )
         import json as json_mod
 
+        # A board outside the git repository can't be committed or pushed (#174):
+        # create the item and stop, before any pull or ID-allocation record
+        if self._outside_repo(self._get_type_directory(item_type)):
+            item = self.create_item(
+                item_type,
+                title,
+                priority=priority,
+                assignee=assignee,
+                description=description,
+                tags=tags,
+                content=content,
+                item_id=item_id,
+            )
+            return {
+                "success": True,
+                "item": item,
+                "id": item.id,
+                "pushed": False,
+                "committed": False,
+                "message": (
+                    f"Created {item.id}; not committed: the board is outside "
+                    "the git repository"
+                ),
+            }
+
         has_remote = self._has_remote()
         attempts = max_retries if has_remote else 1
 
@@ -1299,22 +1347,7 @@ class KanbanService:
             allocations = allocations[-100:]
             lock_file.write_text(json_mod.dumps(allocations, indent=2))
 
-            # Step 6: Commit both files. A board outside the repo can't be
-            # committed or pushed (#174): the item is created, and that's all.
-            if self._outside_repo(file_path):
-                self._items[current_id] = item
-                self._fire_create_hook(item)
-                return {
-                    "success": True,
-                    "item": item,
-                    "id": current_id,
-                    "pushed": False,
-                    "committed": False,
-                    "message": (
-                        f"Created {current_id}; not committed: the board is outside "
-                        "the git repository"
-                    ),
-                }
+            # Step 6: Commit both files
             try:
                 subprocess.run(
                     ["git", "add", str(file_path), str(lock_file)],

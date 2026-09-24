@@ -14,8 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now matches anchored ignore patterns such as `work/hidden/*`. For a board
   outside the git repository, `move`, `comment` and `rank` skip git with a
   warning (`… is outside the git repository`) instead of `Git commit failed … 128`,
-  and `create --push` creates the item rather than failing. `init --path
-  <outside>` warns that the board will not be git-tracked.
+  and `create --push` creates the item rather than failing (before any pull or
+  ID-allocation record). "Outside" means outside the git work tree (`git rev-parse
+  --show-toplevel`), so `.kanban/` in a subdirectory still commits a sibling board,
+  and a relative `../outside/` root counts as outside. `init --path <outside>` warns
+  that the board will not be git-tracked.
 - **MCP `create_item`/`update_item` crashed on a non-string `priority`** (a JSON
   number, boolean or list) with `'int' object has no attribute 'strip'`; they now
   refuse it with the usual error and write nothing. The "Unknown priority" message
