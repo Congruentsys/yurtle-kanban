@@ -79,6 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`--- # generated`) was silently dropped** (#116). The opening `---` may now
   be followed by a space and a comment, as YAML allows, for both reading and
   writing.
+- **An agent name with a quote, backslash or newline broke the item's status
+  history** (#120). `kb:by "<agent>"` was written unescaped, so `x"y` made the
+  yurtle block invalid Turtle, and a crafted name could inject triples. It's now
+  escaped per Turtle string rules, and the status-history reader unescapes it.
+  Plain names are written exactly as before.
 
 ## [2.2.0] - 2026-08-30
 
