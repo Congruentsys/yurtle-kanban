@@ -8,63 +8,95 @@
 #     splits the conflict mid-class, and "keep both sides" yields broken Python;
 #   - on a conflicted pick git re-opens the message with `#` as comment char and
 #     drops a `#<N>: tests (red)` subject.
-# This script resolves ONLY those safe shapes, from git's index stages:
-#   - the commit's side only APPENDED to the merge base  →  upstream + the
-#     commit's appended text;
-#   - CHANGELOG.md  →  upstream's text + the commit's new lines, inserted above
-#     the first release heading after `## [Unreleased]`.
-# Anything else stops with a non-zero exit, the rebase left stopped for a human.
+# This script resolves ONLY those safe shapes, from git's index stages, and only
+# when all three stages (base, upstream, commit) exist:
+#   - the commit's side only APPENDED to the base  →  upstream + the appended text;
+#   - CHANGELOG.md where the commit only ADDED lines  →  upstream's text + those
+#     lines, above the first release heading after `## [Unreleased]`.
+# Anything else — modify/delete, add/add, edits, binary files — stops with a
+# non-zero exit and the rebase left stopped for a human. It also refuses to run on
+# main, on a dirty worktree, or without a fresh fetch, and it only reports success
+# when the branch really sits on origin/main.
 #
 # Usage (from the feature checkout):  bash .claude/skills/pairit/rebase_append.sh
 set -u
 GITC=(git -c core.commentChar=';')
 
-git fetch -q origin main
+in_rebase() {
+  [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]
+}
+
+branch=$(git branch --show-current)
+if [ -z "$branch" ] || [ "$branch" = main ]; then
+  echo "refusing: run on a feature branch (current: ${branch:-detached HEAD})"; exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "refusing: the worktree has uncommitted changes"; exit 1
+fi
+git fetch -q origin main || { echo "refusing: git fetch origin main failed"; exit 1; }
+
 "${GITC[@]}" rebase origin/main >/dev/null 2>&1
 
 for _ in $(seq 1 50); do
-  git status | grep -q "rebase in progress" || break
-  for f in $(git diff --name-only --diff-filter=U); do
-    python3 - "$f" <<'PY' || { echo "UNRESOLVABLE: $f (rebase left stopped)"; exit 1; }
-import pathlib
+  in_rebase || break
+  python3 - <<'PY' || { echo "UNRESOLVABLE conflict: rebase left stopped for a human"; exit 1; }
 import re
 import subprocess
 import sys
 
-f = sys.argv[1]
+raw = subprocess.run(["git", "ls-files", "-u", "-z"], capture_output=True, check=True).stdout
+stages: dict[bytes, set[str]] = {}
+for entry in raw.split(b"\0"):
+    if not entry:
+        continue
+    meta, path = entry.split(b"\t", 1)
+    stages.setdefault(path, set()).add(meta.split()[2].decode())
 
 
-def show(stage: int) -> str:
-    return subprocess.run(
-        ["git", "show", f":{stage}:{f}"], capture_output=True, text=True
-    ).stdout
+def show(stage: str, path: bytes) -> str:
+    out = subprocess.run(["git", "show", f":{stage}:".encode() + path], capture_output=True, check=True)
+    return out.stdout.decode("utf-8")  # a binary file raises → unresolvable
 
 
-base, up, mine = show(1), show(2), show(3)
-
-if f == "CHANGELOG.md" or f.endswith("/CHANGELOG.md"):
-    base_lines = set(base.splitlines(keepends=True))
-    added = [line for line in mine.splitlines(keepends=True) if line not in base_lines]
-    head = up.find("## [Unreleased]")
-    nxt = re.compile(r"^## \[", re.MULTILINE).search(up, head + 1) if head != -1 else None
-    if nxt is None:
+resolved: dict[bytes, str] = {}
+for path, have in stages.items():
+    if have != {"1", "2", "3"}:  # modify/delete, add/add: never guess
         sys.exit(1)
-    out = up[: nxt.start()].rstrip("\n") + "\n" + "".join(added).rstrip("\n") + "\n\n" + up[nxt.start() :]
-elif mine.startswith(base):
-    # the commit only appended; upstream may have changed anything
-    out = up.rstrip("\n") + "\n\n\n" + mine[len(base):].lstrip("\n")
-else:
-    sys.exit(1)
+    base, up, mine = show("1", path), show("2", path), show("3", path)
+    name = path.decode("utf-8")
+    if name == "CHANGELOG.md" or name.endswith("/CHANGELOG.md"):
+        base_lines = base.splitlines(keepends=True)
+        mine_lines = mine.splitlines(keepends=True)
+        if any(line not in mine_lines for line in base_lines):
+            sys.exit(1)  # the commit edited or removed a line, not a pure addition
+        base_set = set(base_lines)
+        added = [line for line in mine_lines if line not in base_set]
+        head = up.find("## [Unreleased]")
+        nxt = re.compile(r"^## \[", re.MULTILINE).search(up, head + 1) if head != -1 else None
+        if nxt is None:
+            sys.exit(1)
+        resolved[path] = (
+            up[: nxt.start()].rstrip("\n") + "\n" + "".join(added).rstrip("\n") + "\n\n" + up[nxt.start():]
+        )
+    elif mine.startswith(base):
+        resolved[path] = up.rstrip("\n") + "\n\n\n" + mine[len(base):].lstrip("\n")
+    else:
+        sys.exit(1)
 
-pathlib.Path(f).write_text(out)
+# only write once every conflicted file has a safe resolution
+for path, text in resolved.items():
+    with open(path, "wb") as fh:
+        fh.write(text.encode("utf-8"))
+    subprocess.run(["git", "add", "--", path], check=True)
 PY
-    git add "$f"
-  done
   GIT_EDITOR=true "${GITC[@]}" rebase --continue >/dev/null 2>&1
 done
 
-if git status | grep -q "rebase in progress"; then
+if in_rebase; then
   echo "rebase stopped: resolve by hand, then: git -c core.commentChar=';' rebase --continue"
   exit 1
+fi
+if ! git merge-base --is-ancestor origin/main HEAD; then
+  echo "not rebased: $branch does not contain origin/main (did git rebase refuse to start?)"; exit 1
 fi
 git status | head -1
