@@ -23,7 +23,7 @@ pytest's `pythonpath = ["src"]` means a worktree's tests import that worktree's 
 1. TESTS   the test partner (a fresh Agent sub-agent) writes pytest tests from the issue → commit T, proven RED
 2. CODE    the driver writes code to GREEN without editing T's tests, adds a CHANGELOG entry, runs the check
 3. REVIEW  push, open the PR, and a DISTINCT `claude -p` session posts a verdict comment (max 2 rounds)
-4. MERGE   verdict approve at head + CI green → `gh pr merge`; the issue closes through `Fixes #N`
+4. MERGE   verdict approve at head + CI green → `safe_merge.sh <P>`; the issue closes through `Fixes #N`
 ```
 
 **0. Branch.** Use `fix/` for a bug, `feat/` for a feature and `chore/` for anything else.
@@ -92,16 +92,15 @@ proves nothing.
 
 **4. Merge** (from the main checkout):
 ```bash
-gh pr checks <P> --watch                      # all green
-git worktree remove --force /tmp/yk-<N> 2>/dev/null || true
-                                              # FIRST: the local branch is checked out there, so
-                                              # `--delete-branch` would fail after the merge; after
-                                              # a session restart it may already be gone
-gh pr merge <P> --merge --delete-branch       # deletes the remote and local branch
+bash .claude/skills/pairit/safe_merge.sh <P>  # waits for CI; refuses unless EVERY check is SUCCESS
+                                              # or SKIPPED and the head merges cleanly with
+                                              # origin/main; removes the PR's worktree; merges
 git checkout -q main && git pull -q
 gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
-Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
+Never merge by hand: on PR #165 a `gh pr checks … && gh pr merge` chain merged a PR with a failing check,
+because `gh pr checks --json` exits 0 whatever the states are (#167). `safe_merge.sh` reads every check's
+state instead. Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
 verdict. Done means the merge is on `origin/main` and the issue is closed.
 
 **Rebased after approval?** Every PR adds its entry at the same place under `## [Unreleased]`, so parallel
