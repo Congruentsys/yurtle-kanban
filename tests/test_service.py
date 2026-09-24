@@ -3095,3 +3095,282 @@ class TestFrontmatterOpeningLineComment:
         assert (fm["status"], fm["assignee"]) == ("ready", "carol")
         assert "assignee" not in body
         assert body.startswith(self._BODY), body
+
+
+# ---------------------------------------------------------------------------
+# Issue #120 — kb:by in the status-change Turtle is an escaped string literal
+# ---------------------------------------------------------------------------
+
+
+class TestStatusChangeTurtleEscaping:
+    """A status change's kb:by literal is escaped per Turtle string rules, so
+    any agent name keeps the item's yurtle block valid and reads back exactly
+    (#120)."""
+
+    KB = "https://yurtle.dev/kanban/"
+
+    @staticmethod
+    def _run(runner: CliRunner, args: list[str]):
+        """Invoke the CLI; a crash fails as an assertion, not a raw exception."""
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (
+            f"{args} exited {result.exit_code}: {result.exception!r}\n{result.output}"
+        )
+        return result
+
+    @staticmethod
+    def _item_file(repo: Path) -> Path:
+        files = list((repo / "kanban-work" / "features").glob("FEAT-001*.md"))
+        assert len(files) == 1, files
+        return files[0]
+
+    @staticmethod
+    def _status_block(path: Path) -> str:
+        """The ```yurtle block holding the kb:statusChange history."""
+        import re
+
+        text = path.read_text()
+        blocks = [
+            b for b in re.findall(r"```yurtle\n(.*?)```", text, re.DOTALL)
+            if "kb:statusChange" in b
+        ]
+        assert len(blocks) == 1, f"expected one statusChange block:\n{text}"
+        return blocks[0]
+
+    def _graph(self, path: Path):
+        from rdflib import Graph
+
+        block = self._status_block(path)
+        try:
+            return Graph().parse(
+                data=block, format="turtle", publicID=path.resolve().as_uri(),
+            )
+        except Exception as exc:  # rdflib raises BadSyntax (not a ValueError)
+            pytest.fail(
+                f"status-change yurtle block is not valid Turtle: {exc}\n{block}"
+            )
+
+    def _changes(self, path: Path) -> tuple:
+        """The status-change nodes of the item's graph."""
+        from rdflib import URIRef
+
+        g = self._graph(path)
+        return g, list(g.objects(None, URIRef(self.KB + "statusChange")))
+
+    def _by_values(self, path: Path) -> list[str]:
+        from rdflib import Literal, URIRef
+
+        g, nodes = self._changes(path)
+        values = []
+        for node in nodes:
+            bys = list(g.objects(node, URIRef(self.KB + "by")))
+            assert len(bys) == 1, f"node {node} has kb:by {bys}"
+            assert isinstance(bys[0], Literal), bys[0]
+            values.append(str(bys[0]))
+        return values
+
+    def _two_moves(self, runner: CliRunner, agent: str) -> None:
+        self._run(runner, ["create", "feature", "probe"])
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", agent, "--no-commit"])
+        self._run(
+            runner,
+            ["move", "FEAT-001", "in_progress", "-a", agent, "--no-commit", "--force"],
+        )
+
+    # -- the bug: special agent names ----------------------------------------
+
+    @pytest.mark.parametrize(
+        "agent",
+        [
+            pytest.param('x"y', id="double-quote"),
+            pytest.param("a\\b", id="backslash"),
+            pytest.param('say "hi"\\', id="quote-and-trailing-backslash"),
+            pytest.param("x\ny", id="newline"),
+            pytest.param("x\ry", id="carriage-return"),
+        ],
+    )
+    def test_special_agent_block_parses_and_kb_by_exact(
+        self, temp_repo, software_config, monkeypatch, agent,
+    ):
+        """After two `move -a <agent>`, the block parses and both kb:by == agent."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._two_moves(runner, agent)
+
+        assert self._by_values(self._item_file(temp_repo)) == [agent, agent]
+
+    def test_injection_attempt_adds_no_triples(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """An agent shaped like Turtle stays one literal: no extra kb:status."""
+        from rdflib import URIRef
+
+        agent = 'evil" ; kb:status kb:done ; kb:by "x'
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._two_moves(runner, agent)
+
+        path = self._item_file(temp_repo)
+        g, nodes = self._changes(path)
+        assert len(nodes) == 2, nodes
+        status = URIRef(self.KB + "status")
+        for node in nodes:
+            assert len(list(g.objects(node, status))) == 1, list(g.objects(node, status))
+        assert (None, status, URIRef(self.KB + "done")) not in g
+        assert self._by_values(path) == [agent, agent]
+
+    def test_newline_injection_adds_no_triples(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A newline-bearing agent can't smuggle a new statement into the graph."""
+        from rdflib import URIRef
+
+        agent = 'x" ;\n] .\n<> kb:status kb:done .\n<> kb:statusChange [\n kb:by "y'
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._two_moves(runner, agent)
+
+        path = self._item_file(temp_repo)
+        g, nodes = self._changes(path)
+        assert len(nodes) == 2, nodes
+        assert (None, URIRef(self.KB + "status"), URIRef(self.KB + "done")) not in g
+        assert self._by_values(path) == [agent, agent]
+
+    @pytest.mark.parametrize(
+        "agent",
+        [
+            pytest.param('x"y', id="double-quote"),
+            pytest.param("a\\b", id="backslash"),
+            pytest.param('evil" ; kb:status kb:done ; kb:by "x', id="injection"),
+        ],
+    )
+    def test_special_agent_item_still_loads_and_assignee_round_trips(
+        self, temp_repo, software_config, monkeypatch, agent,
+    ):
+        """`show --json` still works and frontmatter assignee == agent (#104)."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._two_moves(runner, agent)
+
+        shown = self._run(runner, ["show", "FEAT-001", "--json"])
+        data = json.loads(shown.output)
+        assert data["id"] == "FEAT-001"
+        assert data["assignee"] == agent
+
+        path = self._item_file(temp_repo)
+        lines = path.read_text().split("\n")
+        fm = yaml.safe_load("\n".join(lines[1:lines.index("---", 1)]))
+        assert fm["assignee"] == agent
+        self._graph(path)  # and the block still parses
+
+    def test_git_user_name_with_quote_is_escaped(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """With no -a, kb:by is the git user.name — escaped just the same."""
+        import subprocess
+
+        name = 'Ann "Nan" O\\Brien'
+        subprocess.run(
+            ["git", "config", "user.name", name],
+            cwd=temp_repo, capture_output=True, check=True,
+        )
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "in_progress", "--no-commit", "--force"])
+
+        assert self._by_values(self._item_file(temp_repo)) == [name, name]
+
+    @pytest.mark.parametrize(
+        "agent",
+        [
+            pytest.param('x"y', id="double-quote"),
+            pytest.param("a\\b", id="backslash"),
+            pytest.param("x\ny", id="newline"),
+            pytest.param("Claude-M5", id="plain-control"),
+        ],
+    )
+    def test_status_history_reads_agent_back_exactly(
+        self, temp_repo, software_config, monkeypatch, agent,
+    ):
+        """The service's own history reader sees by == agent for both moves."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._two_moves(runner, agent)
+
+        history = KanbanService(software_config, temp_repo).get_status_history(
+            "FEAT-001",
+        )
+        assert [(h["status"], h["by"]) for h in history] == [
+            ("ready", agent), ("in_progress", agent),
+        ]
+
+    # -- negative controls (must stay green) ---------------------------------
+
+    def test_control_plain_agent_written_textually_unchanged(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A plain agent is still written exactly `kb:by "Claude-M5" ;`."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._two_moves(runner, "Claude-M5")
+
+        path = self._item_file(temp_repo)
+        block = self._status_block(path)
+        assert block.count('    kb:by "Claude-M5" ;\n') == 2, block
+        assert self._by_values(path) == ["Claude-M5", "Claude-M5"]
+
+    def test_control_plain_git_user_written_textually_unchanged(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """With no -a, the fixture's git user `Test` is written plain."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--no-commit"])
+
+        block = self._status_block(self._item_file(temp_repo))
+        assert '    kb:by "Test" ;\n' in block, block
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            pytest.param("https://evil.com> ; kb:status kb:backlog ; <x", id="angle"),
+            pytest.param('https://x.com/"q', id="quote"),
+            pytest.param("https://x.com/<a", id="lt"),
+            pytest.param("https://x.com/a\nb", id="newline"),
+        ],
+    )
+    def test_control_closed_by_still_rejects_bad_uri(
+        self, temp_repo, software_config, monkeypatch, uri,
+    ):
+        """--closed-by keeps rejecting TTL-breaking URIs (not escaping them)."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        path = self._item_file(temp_repo)
+        before = path.read_text()
+
+        result = runner.invoke(
+            main,
+            ["move", "FEAT-001", "ready", "--no-commit", "--closed-by", uri],
+        )
+        assert "disallowed characters" in result.output, result.output
+        assert "kb:closedBy" not in path.read_text()
+        assert path.read_text() == before
+
+    def test_control_closed_by_plain_uri_still_written(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A clean --closed-by URI is still recorded as kb:closedBy <uri>."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        uri = "https://github.com/repo/pull/42"
+        self._run(
+            runner, ["move", "FEAT-001", "ready", "--no-commit", "--closed-by", uri],
+        )
+        path = self._item_file(temp_repo)
+        assert f"kb:closedBy <{uri}> ;" in self._status_block(path)
+        self._graph(path)
