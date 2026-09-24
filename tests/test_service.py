@@ -2323,6 +2323,9 @@ class TestFrontmatterEditReplacesWholeValue:
         path = self._setup(
             temp_repo, runner,
             "status: backlog\npriority: medium\nassignee: alice\n"
+            # priority_rank seeded so `rank` updates it in place rather than
+            # appending it after the tail keys this test checks.
+            "priority_rank: 5\n"
             "value_summary: >-\n  old value\n  spanning lines\n",
         )
         assert self._frontmatter(path)["value_summary"] == "old value spanning lines"
