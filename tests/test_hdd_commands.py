@@ -2611,6 +2611,31 @@ class TestHDDCreatePriority:
         assert self._written(temp_repo, hdd_config, "IDEA-R-001")["priority"] == "high"
 
     def test_idea_create_default_priority_unchanged(self, runner, temp_repo, hdd_config):
-        runner.invoke(main, ["idea", "create", "plain idea"], catch_exceptions=False)
+        result = runner.invoke(main, ["idea", "create", "plain idea"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
         idea_file = next((temp_repo / "research" / "ideas").glob("IDEA-R-001*.md"))
         assert "\npriority: medium\n" in idea_file.read_text()
+
+    def test_priority_is_validated(self, runner, temp_repo, hdd_config):
+        """Free text would be written into kb:priority terms, so it is rejected."""
+        result = runner.invoke(main, ["idea", "create", "x", "-p", "urgent"])
+        assert result.exit_code == 2
+        assert "urgent" in result.output
+        assert not list((temp_repo / "research" / "ideas").glob("IDEA-*.md"))
+
+    def test_priority_is_case_insensitive(self, runner, temp_repo, hdd_config):
+        result = runner.invoke(main, ["idea", "create", "x", "-p", "HIGH"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        idea_file = next((temp_repo / "research" / "ideas").glob("IDEA-R-001*.md"))
+        assert "\npriority: high\n" in idea_file.read_text()
+
+    def test_title_containing_dashes_is_not_split(self, runner, temp_repo, hdd_config):
+        """Writing priority must not cut the frontmatter at a `---` inside the title."""
+        result = runner.invoke(
+            main, ["literature", "create", "A --- B", "-p", "high"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        text = next((temp_repo / "research" / "literature").glob("LIT-001*.md")).read_text()
+        frontmatter = text.split("\n---\n", 1)[0]
+        assert 'title: "A --- B"' in frontmatter
+        assert "\npriority: high" in frontmatter

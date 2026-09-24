@@ -504,3 +504,9 @@ class TestEpicCreatePriority:
         text = self._epic_text(software_repo)
         assert "\npriority: high\n" in text
         assert "kb:priority kb:high" in text
+
+    def test_invalid_priority_rejected(self, software_runner, software_repo):
+        """`-p "very high"` would write the invalid Turtle `kb:very high`."""
+        result = software_runner.invoke(main, ["epic", "create", "Auth", "-p", "very high"])
+        assert result.exit_code == 2
+        assert not list(software_repo.rglob("EPIC-*.md"))

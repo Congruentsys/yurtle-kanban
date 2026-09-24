@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was whatever the template hardcoded (`medium`) or absent. It is now written
   into the frontmatter, and into any `kb:priority` triple the template carries.
   Note: `epic create` without `-p` now gets its documented default, `high`.
+  `-p` on these commands now only accepts critical/high/medium/low (any
+  case), since the value is written into Turtle, and frontmatter edits split
+  on whole `---` lines, so a title like `"A --- B"` is no longer cut in two.
 
 ## [2.2.0] - 2026-08-30
 

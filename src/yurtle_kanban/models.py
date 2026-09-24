@@ -16,6 +16,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from rdflib import Graph, URIRef
 
+# Priority values a create command may write (they also become kb:priority
+# terms in Turtle blocks, so free text is not allowed there)
+PRIORITIES = ("critical", "high", "medium", "low")
+
 
 class WorkItemStatus(Enum):
     """Standard work item statuses."""

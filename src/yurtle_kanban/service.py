@@ -2401,41 +2401,43 @@ class KanbanService:
 
         item.file_path.write_text(content)
 
-    def _update_frontmatter_field(self, content: str, field: str, value: str) -> str:
-        """Update a single field in the frontmatter."""
-        import re
+    # Frontmatter delimiters are whole `---` lines. Splitting on the substring
+    # instead would cut inside a value such as `title: "A --- B"`.
+    _FRONTMATTER_RE = re.compile(r"\A---[ \t\r]*\n(.*?)^---[ \t\r]*$", re.DOTALL | re.MULTILINE)
 
-        pattern = rf"^{field}:.*$"
-        replacement = f"{field}: {value}"
-        # Only replace in frontmatter (between first two ---)
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            parts[1] = re.sub(pattern, replacement, parts[1], flags=re.MULTILINE)
-            return "---".join(parts)
-        return content
+    def _update_frontmatter_field(self, content: str, field: str, value: str) -> str:
+        """Update a single existing field in the frontmatter."""
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
+            return content
+        frontmatter = re.sub(
+            rf"^{field}:.*$", lambda _: f"{field}: {value}", match.group(1),
+            flags=re.MULTILINE,
+        )
+        return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
 
         If the field exists, update it. If not, insert it before the closing ---.
         """
-        import re
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
             return content
 
-        frontmatter = parts[1]
+        frontmatter = match.group(1)
         pattern = rf"^{field}:.*$"
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
-            frontmatter = re.sub(pattern, f"{field}: {value}", frontmatter, flags=re.MULTILINE)
+            frontmatter = re.sub(
+                pattern, lambda _: f"{field}: {value}", frontmatter, flags=re.MULTILINE,
+            )
         else:
             # Field doesn't exist — append before end
-            frontmatter = frontmatter.rstrip() + f"\n{field}: {value}\n"
+            body = frontmatter.rstrip()
+            frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n"
 
-        parts[1] = frontmatter
-        return "---".join(parts)
+        return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
     def _apply_priority(self, content: str, priority: str | None) -> str:
         """Write the requested priority into pre-rendered template content.
