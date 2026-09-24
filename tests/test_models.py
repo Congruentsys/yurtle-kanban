@@ -799,3 +799,77 @@ class TestYamlForbiddenCharactersRoundTripIssue148:
 
     def test_control_ordinary_item_markdown_unchanged(self):
         assert _ordinary_item().to_markdown() == _ORDINARY_MARKDOWN
+
+
+_SEP_SPACE_FORMS = [
+    pytest.param(f"t {ch} u", id=f"{name}-spaced-mid") for ch, name in
+    [(" ", "LINE-SEP"), (" ", "PARA-SEP")]
+] + [
+    pytest.param(f"a {ch}b", id=f"{name}-space-before") for ch, name in
+    [(" ", "LINE-SEP"), (" ", "PARA-SEP")]
+] + [
+    pytest.param(f" {ch}", id=f"{name}-leading-space-only") for ch, name in
+    [(" ", "LINE-SEP"), (" ", "PARA-SEP")]
+] + [
+    pytest.param(f" {ch} ", id=f"{name}-spaces-both-sides-only") for ch, name in
+    [(" ", "LINE-SEP"), (" ", "PARA-SEP")]
+]
+
+
+class TestLineSeparatorNextToSpaceRoundTripIssue148:
+    """U+2028/U+2029 next to spaces must not be folded as a line break (#148)."""
+
+    _frontmatter = TestYamlForbiddenCharactersRoundTripIssue148._frontmatter
+
+    @pytest.mark.parametrize("value", _SEP_SPACE_FORMS)
+    def test_title_round_trips(self, value):
+        assert self._frontmatter(_ordinary_item(title=value))["title"] == value
+
+    @pytest.mark.parametrize("field_name", _LIST_FIELDS)
+    @pytest.mark.parametrize("value", _SEP_SPACE_FORMS)
+    def test_list_element_round_trips(self, field_name, value):
+        fm = self._frontmatter(_ordinary_item(**{field_name: ["backend", value]}))
+        assert fm[field_name] == ["backend", value]
+
+    @pytest.mark.parametrize(
+        "field_name", ["resolution", "assignee", "compute_requirement", "value_summary"]
+    )
+    @pytest.mark.parametrize("value", _SEP_SPACE_FORMS)
+    def test_scalar_round_trips(self, field_name, value):
+        fm = self._frontmatter(_ordinary_item(**{field_name: value}))
+        assert fm[field_name] == value
+
+    @pytest.mark.parametrize("value", _SEP_SPACE_FORMS)
+    def test_cli_created_item_is_listed(self, value, tmp_path, monkeypatch):
+        """`create feature` with the value as title, tag and assignee; `list` shows it exactly."""
+        import json
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+        from yurtle_kanban.cli import main
+
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        assert runner.invoke(main, ["init"], catch_exceptions=False).exit_code == 0
+
+        title, tag, assignee = f"T{value}T", f"x{value}y", f"a{value}b"
+        result = runner.invoke(
+            main,
+            ["create", "feature", title, "--tags", tag, "--assignee", assignee],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+        result = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        try:
+            items = json.loads(result.output)
+        except json.JSONDecodeError:
+            pytest.fail(f"item vanished from list: {result.output!r}")
+        assert [(i["title"], i["tags"], i["assignee"]) for i in items] == [
+            (title, [tag], assignee)
+        ]
