@@ -329,6 +329,16 @@ kanban:
     console.print("  2. View board: yurtle-kanban board")
 
 
+def _warn_unparseable(service: KanbanService) -> None:
+    """Print one stderr line per file that looks like an item but didn't parse (#139)."""
+    for path, reason in dict.fromkeys(service.parse_warnings):
+        try:
+            shown = path.relative_to(service.repo_root)
+        except ValueError:
+            shown = path
+        click.echo(f"warning: skipped {shown}: {reason}", err=True)
+
+
 @main.command("list")
 @click.option("--status", "-s", help="Filter by status (backlog, ready, in_progress, review, done)")
 @click.option("--type", "-t", "item_type", help="Filter by type (feature, bug, epic, task)")
@@ -385,6 +395,8 @@ def list_items(
         board=board_name,
         priority=priority_filter,
     )
+
+    _warn_unparseable(service)
 
     if not items:
         console.print("[dim]No work items found.[/dim]")
@@ -620,12 +632,14 @@ def board(board_name: str | None, show_all: bool, epic_id: str | None):
                 ]
             render_board(board_data, console)
             console.print()
+        _warn_unparseable(service)
         return
 
     board_data = service.get_board(board_name=board_name)
     if epic_id:
         board_data.items = [i for i in board_data.items if epic_id in i.related]
     render_board(board_data, console)
+    _warn_unparseable(service)
 
 
 @main.command("boards")
