@@ -4508,6 +4508,91 @@ class TestUnparseableWarningFollowups:
         assert "FEAT-002-broken.md" not in out, result.output
         assert "parse" not in out.lower(), result.output
 
+    # ---- Round 2 (review of PR #176) ---------------------------------------
+
+    @staticmethod
+    def _assert_clean_exit_nonzero(result) -> None:
+        assert result.exit_code != 0, result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            f"show crashed: {result.exception!r}\noutput={result.output!r}"
+        )
+
+    @pytest.mark.parametrize("bad", ["[/x", "[x"])
+    def test_show_hint_prints_reason_literally_not_as_rich_markup(
+        self, temp_repo, software_config, monkeypatch, bad,
+    ):
+        """The YAML error quotes `title: [/x` / `title: [x`; the hint must show it
+        verbatim, not crash (MarkupError) or swallow it as a style tag."""
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "FEAT-20-crash.md").write_text(
+            f"---\nid: FEAT-20\ntitle: {bad}\ntype: feature\nstatus: backlog\n"
+            "---\n\n# crash\n"
+        )
+
+        result = CliRunner().invoke(main, ["show", "FEAT-20"])
+
+        self._assert_clean_exit_nonzero(result)
+        out = self._flat(result.output)
+        assert "FEAT-20-crash.md" in out, result.output
+        assert "YAML error" in out, result.output
+        assert f"title: {bad}" in out, result.output
+
+    def test_show_hint_prints_filename_with_brackets_literally(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        path = temp_repo / self.FEATURES / "FEAT-21-a[b].md"
+        try:
+            path.write_text(
+                "---\nid: FEAT-21\ntitle: \"broken\"\ntype: feature\nstatus: backlog\n"
+                "\n# broken\n"
+            )
+        except OSError:
+            pytest.skip("filesystem does not allow '[' in filenames")
+
+        result = CliRunner().invoke(main, ["show", "FEAT-21"])
+
+        self._assert_clean_exit_nonzero(result)
+        out = self._flat(result.output)
+        assert "FEAT-21-a[b].md" in out, result.output
+        assert "no closing ---" in out, result.output
+
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_non_utf8_plain_note_without_frontmatter_is_silent(
+        self, temp_repo, software_config, monkeypatch, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "notes-latin1.md").write_bytes(
+            b"# Notes\n\xff\xfe latin1\n"
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        assert result.stderr == "", result.stderr
+
+    def test_show_json_lists_unparseable_file_and_reason(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "FEAT-002-broken.md").write_text(
+            "---\nid: FEAT-002\ntitle: \"broken\"\ntype: feature\nstatus: backlog\n"
+            "\n# broken\n\nNo closing delimiter anywhere.\n"
+        )
+
+        result = CliRunner().invoke(main, ["show", "FEAT-002", "--json"])
+
+        assert result.exit_code != 0, result.output
+        data = json.loads(result.stdout)
+        entries = data["unparseable"]
+        assert len(entries) == 1, data
+        assert entries[0]["file"].endswith("FEAT-002-broken.md"), data
+        assert "no closing ---" in entries[0]["reason"], data
+
 
 # --- #153: a non-string priority is refused with a ValueError naming it -----
 
