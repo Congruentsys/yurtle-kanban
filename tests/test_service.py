@@ -2790,6 +2790,33 @@ class TestFrontmatterEditEdgeCases:
         assert fm["value_summary"] == "new value"
         self._w._assert_tail_and_body_intact(path)
 
+    def test_lone_cr_between_keys_does_not_swallow_next_key(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`assignee: alice\\rpriority: high` is two keys; editing one keeps the other."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        middle = "status: backlog\nassignee: alice\rpriority: high\n"
+        path = self._w._setup(temp_repo, runner, "status: backlog\npriority: medium\n")
+        path.write_bytes(self._lf_text(middle).encode())
+        # Sanity: the lone CR really is in the file, and it reads as two keys.
+        assert b"alice\rpriority" in path.read_bytes()
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "alice"
+        assert fm["priority"] == "high"
+        assert self._w._show(runner)["priority"] == "high"
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm.get("priority") == "high", f"priority lost: {path.read_bytes()!r}"
+        assert fm["status"] == "ready"
+        data = self._w._show(runner)
+        assert data["assignee"] == "carol"
+        assert data["priority"] == "high"
+        self._w._assert_tail_and_body_intact(path)
+
     # -- negative controls: LF files stay LF, byte-for-byte ------------------
 
     def test_control_lf_rank_update_changes_only_edited_line(
