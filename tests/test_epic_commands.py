@@ -632,3 +632,139 @@ class TestTemplateValuesRoundTrip:
         text = next(software_repo.rglob("EPIC-*.md")).read_text()
         assert 'title: "User Auth Overhaul"\n' in text
         assert "\n# User Auth Overhaul\n" in text
+
+
+# ---------------------------------------------------------------------------
+# Issue #148 — linking an item to an epic keeps its existing 'related' elements
+# ---------------------------------------------------------------------------
+
+
+def _write_feature(repo: Path, related: list[str]) -> Path:
+    """Write FEAT-001 through WorkItem.to_markdown (which quotes per #121)."""
+    path = repo / "work" / "features" / "FEAT-001-linked-item.md"
+    item = WorkItem(
+        id="FEAT-001",
+        title="Linked item",
+        item_type=WorkItemType.FEATURE,
+        status=WorkItemStatus.BACKLOG,
+        file_path=path,
+        priority="medium",
+        related=related,
+    )
+    path.write_text(item.to_markdown())
+    return path
+
+
+def _frontmatter_of(path: Path) -> dict:
+    import yaml
+
+    text = path.read_text()
+    lines = text.split("\n")
+    assert lines[0] == "---", text
+    fm_text = "\n".join(lines[1:lines.index("---", 1)])
+    try:
+        fm = yaml.safe_load(fm_text)
+    except yaml.YAMLError as exc:
+        pytest.fail(f"frontmatter is not valid YAML after linking: {exc}\n{text}")
+    assert isinstance(fm, dict), text
+    return fm
+
+
+_RELATED_MUST_STAY_QUOTED = [
+    pytest.param(["a, b"], id="comma-space"),
+    pytest.param(["team: core"], id="colon-space"),
+    pytest.param(["yes"], id="yes-bool"),
+    pytest.param(["FEAT-002", "a, b", "team: core"], id="mixed"),
+]
+
+
+class TestEpicLinkKeepsRelatedElementsIssue148:
+    """Linking an item to an epic re-writes 'related' so every element survives (#148)."""
+
+    def _create_epic(self, runner) -> None:
+        result = runner.invoke(main, ["epic", "create", "Big Project"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+    @pytest.mark.parametrize("related", _RELATED_MUST_STAY_QUOTED)
+    def test_epic_add_keeps_related_elements(self, software_runner, software_repo, related):
+        """`epic add` appends the epic id; the existing elements read back unchanged."""
+        path = _write_feature(software_repo, related)
+        assert _frontmatter_of(path)["related"] == related  # #121 precondition
+        self._create_epic(software_runner)
+
+        result = software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.output
+
+        fm = _frontmatter_of(path)
+        assert fm["related"] == related + ["EPIC-001"]
+        assert len(fm["related"]) == len(related) + 1
+
+    @pytest.mark.parametrize("related", _RELATED_MUST_STAY_QUOTED)
+    def test_epic_create_items_keeps_related_elements(
+        self, software_runner, software_repo, related
+    ):
+        """`epic create --items` links the same way and keeps the elements too."""
+        path = _write_feature(software_repo, related)
+        result = software_runner.invoke(
+            main,
+            ["epic", "create", "Big Project", "--items", "FEAT-001"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Linked FEAT-001" in result.output
+
+        fm = _frontmatter_of(path)
+        assert fm["related"] == related + ["EPIC-001"]
+
+    @pytest.mark.parametrize("related", _RELATED_MUST_STAY_QUOTED)
+    def test_linked_item_still_listed_with_related(
+        self, software_runner, software_repo, related
+    ):
+        """After linking, the item is still loaded and its related list is intact."""
+        import json
+
+        _write_feature(software_repo, related)
+        self._create_epic(software_runner)
+        software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+
+        result = software_runner.invoke(
+            main, ["show", "FEAT-001", "--json"], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["related"] == related + ["EPIC-001"]
+
+    # -- must stay true (controls) -------------------------------------------
+
+    def test_control_plain_related_written_unquoted(self, software_runner, software_repo):
+        """Ordinary ids stay plain: `related: [FEAT-002, EPIC-001]`, exactly as today."""
+        path = _write_feature(software_repo, ["FEAT-002"])
+        self._create_epic(software_runner)
+        software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+        assert "\nrelated: [FEAT-002, EPIC-001]\n" in path.read_text()
+        assert _frontmatter_of(path)["related"] == ["FEAT-002", "EPIC-001"]
+
+    def test_control_no_related_line_inserted(self, software_runner, software_repo):
+        """An item with no related line gets `related: [EPIC-001]`."""
+        path = _write_feature(software_repo, [])
+        self._create_epic(software_runner)
+        software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+        assert "\nrelated: [EPIC-001]\n" in path.read_text()
+        assert _frontmatter_of(path)["related"] == ["EPIC-001"]
+
+    def test_control_add_idempotent(self, software_runner, software_repo):
+        path = _write_feature(software_repo, ["FEAT-002"])
+        self._create_epic(software_runner)
+        for _ in range(2):
+            software_runner.invoke(
+                main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+            )
+        assert _frontmatter_of(path)["related"] == ["FEAT-002", "EPIC-001"]

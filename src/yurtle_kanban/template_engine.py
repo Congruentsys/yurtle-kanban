@@ -7,11 +7,11 @@ variables to produce ready-to-write file content.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date
 from pathlib import Path
 
+from yurtle_kanban.models import yaml_quote
 from yurtle_kanban.turtle_builder import TurtleBlockBuilder
 
 # HDD item types that get Turtle knowledge blocks generated.
@@ -25,7 +25,7 @@ def _yaml_quoted(value: object) -> str:
     JSON string syntax is valid YAML: `"`, `\\` and newlines are escaped, so a
     title like `is "stale" vs "fresh"?` can't break the frontmatter.
     """
-    return json.dumps(str(value), ensure_ascii=False)
+    return yaml_quote(str(value))
 
 class TemplateEngine:
     """Load and render themed item templates with variable substitution."""

@@ -143,6 +143,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A non-string priority (e.g. `priority: 1` in a hooks config) now gets the
   same clear refusal as `urgent`** (#153), not `'int' object has no attribute
   'strip'`. `indexer.py` is documented as unused and single-board-only.
+- **Epic linking re-wrote `related` unquoted, and characters YAML forbids broke
+  the frontmatter** (#148). Linking an item to an epic split a `related` element
+  like `"a, b"` in two. It now uses the shared flow-list writer. Quoted values
+  escape characters YAML won't take literally (DEL, C1 controls, NEL, U+FFFE),
+  so such a title no longer makes the item vanish. Printable non-ASCII text
+  is written as before.
 
 ## [2.2.0] - 2026-08-30
 
