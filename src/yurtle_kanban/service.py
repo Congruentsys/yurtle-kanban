@@ -82,7 +82,10 @@ def _normalize_paper_num(raw: str | int) -> str:
 # First meaningful line of a Turtle (not YAML) frontmatter block: `@prefix`,
 # `@base`, or SPARQL-style `PREFIX` / `BASE`, after optional blank/`#` lines
 _TURTLE_FRONTMATTER = re.compile(
-    r"\A(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*(?:@prefix\b|@base\b|(?i:prefix|base)[ \t]+\S)"
+    r"\A(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*"
+    # SPARQL-style forms must look like Turtle (`PREFIX ex: <…>`, `BASE <…>`), so a
+    # YAML key such as `base : x` or `Base url: x` isn't taken for Turtle (#158)
+    r"(?:@prefix\b|@base\b|(?i:prefix)[ \t]+[\w.-]*:[ \t]*<|(?i:base)[ \t]+<)"
 )
 
 # Turtle literal escaping lives in models (one escaper for every literal, #141)
@@ -370,7 +373,10 @@ class KanbanService:
             )
 
         except Exception as e:
+            # A file that can't be read or crashes after its frontmatter parsed is
+            # reported like any unparseable item, not dropped silently (#158)
             logger.debug(f"Failed to parse {file_path}: {e}")
+            self.parse_warnings.append((file_path, f"{type(e).__name__}: {e}"))
             return None
 
     def _split_frontmatter(self, content: str) -> tuple[str, str] | None:
