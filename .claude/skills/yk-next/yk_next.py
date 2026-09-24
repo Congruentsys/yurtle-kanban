@@ -10,6 +10,7 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
                  after its second `changes` verdict without wedging the loop.
 2. REVIEW PR     another author's open PR with no verdict at its head sha (reviewer != author).
 3. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet, not held, not waiting.
+   (`--skip-prs` jumps straight to 4, for claiming the next issue while a PR is in review.)
 4. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label,
                  and whose "depends on #N" / "blocked by #N" issues are all closed.
                  `bug` first, then the lower number.
@@ -33,6 +34,7 @@ import re
 import socket
 import subprocess
 import sys
+from collections.abc import Callable
 
 HOSTS = {"m4-mini": "Mini", "mini": "Mini", "m5": "M5", "spark": "DGX"}
 HOLD = {"needs-decision", "question", "wontfix", "duplicate", "invalid", "blocked", "on-hold"}
@@ -44,7 +46,8 @@ CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "S
 # "Blocked-by: #17", "depends on **#12**" (markdown emphasis), "depends on #6 #7"
 DEPENDS = re.compile(
     r"(?:depends[\s-]+on|blocked[\s-]+by|requires)[\s*_`:]*"
-    r"(#\d+(?:[\s*_`]*(?:(?:,|and|&|or)[\s*_`]*)*#\d+)*)",
+    # the list continues on the same line only: a `* #4` bullet below is not part of it
+    r"(#\d+(?:[ \t*_`]*(?:(?:,|and|&|or)[ \t*_`]*)*#\d+)*)",
     re.I,
 )
 PR_FIELDS = (
@@ -124,6 +127,11 @@ def my_pr_state(pr: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="print the decision, claim nothing")
+    ap.add_argument(
+        "--skip-prs", action="store_true",
+        help="go straight to claiming a new issue (pipelining while a PR is in review); "
+        "every claim rule still applies",
+    )
     a = ap.parse_args()
 
     me = gh("api", "user", "--jq", ".login").strip()
@@ -152,6 +160,9 @@ def main() -> None:
     fixed_by_open_pr: set[int] = set()
     for pr in prs:
         fixed_by_open_pr |= issues_fixed_by(pr)
+
+    if a.skip_prs:
+        return claim(a, me, issues, fixed_by_open_pr, issue_blockers, issue_labels)
 
     # 1. my own open PRs — a draft or a held PR (or one whose issue is held) is parked, not resumed
     mine = []
@@ -186,6 +197,18 @@ def main() -> None:
             print(f"\nRESUME ISSUE #{i['number']} — {i['title']}")
             return
 
+    claim(a, me, issues, fixed_by_open_pr, issue_blockers, issue_labels)
+
+
+def claim(
+    a: argparse.Namespace,
+    me: str,
+    issues: list[dict],
+    fixed_by_open_pr: set[int],
+    issue_blockers: Callable[[dict], list[str]],
+    issue_labels: dict[int, set[str]],
+) -> None:
+    """Claim the first eligible issue (step 4); every claim rule applies."""
     # 4. claim a new one
     cands = []
     for i in issues:
@@ -220,6 +243,7 @@ def main() -> None:
         return
 
     print("\nNOTHING READY — every open issue is held, assigned, waiting, or already has a PR.")
+
 
 
 if __name__ == "__main__":
