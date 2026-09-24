@@ -763,13 +763,16 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             if not (Path(p) == board_path or board_path in Path(p).parents)
         ]
         if uncovered:
+            # soft_wrap: never hard-wrap inside a path, or it can't be copied (#147)
             console.print(
                 "[red]Can't upgrade to multi-board: a board scans one path, and no "
-                f"single path covers these scan paths: {', '.join(uncovered)}[/red]"
+                f"single path covers these scan paths: {', '.join(uncovered)}[/red]",
+                soft_wrap=True,
             )
             console.print(
                 "[dim]Move them under a common folder (and set paths.root to it), "
-                "then run board-add again. .kanban/config.yaml was not changed.[/dim]"
+                "then run board-add again. .kanban/config.yaml was not changed.[/dim]",
+                soft_wrap=True,
             )
             sys.exit(1)
 
