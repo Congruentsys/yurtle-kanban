@@ -164,6 +164,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lines keep theirs, and changed lines use the file's majority ending. Epic
   linking and `update` now keep CRLF files CRLF, and `update` keeps the file's
   final newline.
+- **Query and `rank` escaping** (#162). The structured and NL query put
+  assignee and tag values into SPARQL literals raw, so a quote or backslash broke
+  the query and `zz") || contains("", "` matched every item. They're now escaped.
+  `rank --summary` escaped only quotes, so a trailing backslash made the item
+  vanish and `\b` or a newline was misread. It's now fully quoted.
 
 ## [2.2.0] - 2026-08-30
 
