@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values. `create` now takes `critical`/`high`/`medium`/`low` (any case), like
   the template-based creates (#99), and the MCP `create`/`update` tools reject
   anything else too. All of them share `PRIORITIES`.
+- **`board-add` made every existing item vanish from a default-`init` board**
+  (#94). Upgrading to multi-board copied `root` (`work/`) into the default
+  board, but `init` keeps items in `kanban-work/*`. The default board now gets
+  the directory the old config really scanned: the scan path containing its
+  `root`, else the common parent of its `scan_paths`. It also keeps those
+  `scan_paths` and its `ignore` patterns (so `_TEMPLATE.md` files stay hidden),
+  and per-board `ignore:` lists are now honoured when scanning.
 
 ## [2.2.0] - 2026-08-30
 
