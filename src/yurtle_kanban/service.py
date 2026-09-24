@@ -927,8 +927,11 @@ class KanbanService:
                         return self._scanned_type_dir(
                             type_def["path"], [board.get_path()], board.path,
                         )
+            # A type no board's theme defines goes to the named board, else the
+            # default_board (where unrouted work goes, #144), else the first board
             board_root = (
                 (self.config.get_board(board_name) if board_name else None)
+                or (None if board_name else self.config.get_default_board())
                 or (self.config.boards[0] if self.config.boards else None)
             )
             root = board_root.path if board_root else "work/"
