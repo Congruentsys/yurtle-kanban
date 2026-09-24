@@ -44,7 +44,7 @@ from .export import (
     export_research_index,
 )
 from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure, paper
-from .models import WorkItemStatus, WorkItemType
+from .models import PRIORITIES, WorkItemStatus, WorkItemType
 from .service import KanbanService
 
 
@@ -338,9 +338,8 @@ def list_items(
 
     priority_filter = None
     if priority:
-        valid_priorities = {"critical", "high", "medium", "low"}
         priority_filter = [p.strip().lower() for p in priority.split(",")]
-        invalid = [p for p in priority_filter if p not in valid_priorities]
+        invalid = [p for p in priority_filter if p not in PRIORITIES]
         if invalid:
             console.print(
                 f"[red]Unknown priority: {', '.join(invalid)}."
@@ -370,7 +369,11 @@ def list_items(
 @main.command()
 @click.argument("item_type")
 @click.argument("title")
-@click.option("--priority", "-p", default="medium", help="Priority: critical, high, medium, low")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--assignee", "-a", help="Assignee")
 @click.option("--description", "-d", help="Description")
 @click.option("--tags", help="Comma-separated tags")
