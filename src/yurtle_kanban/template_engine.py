@@ -250,9 +250,11 @@ class TemplateEngine:
         if item_type in _HDD_TURTLE_TYPES:
             turtle_block = self._turtle_builder.build(item_type, variables)
             if turtle_block:
+                # A function replacement: a string one would re-read the block's
+                # escapes (`\n` in a literal) as regex escapes (#141)
                 content = re.sub(
                     r"```turtle\n.*?```",
-                    turtle_block,
+                    lambda _: turtle_block,
                     content,
                     count=1,
                     flags=re.DOTALL,

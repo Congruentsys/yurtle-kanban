@@ -126,6 +126,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backslash crashed the create. Template titles, units, categories and targets
   are now written as escaped YAML double-quoted strings, and backslashes are
   never treated as regex escapes. Ordinary values render exactly as before.
+- **Turtle literals built from titles, targets, units, ids and tags weren't
+  newline-safe** (#141). A title like `p\nq` produced invalid Turtle and the
+  item lost its knowledge graph. There's now one ECHAR-complete escaper
+  (`models.turtle_string`, from #120) used everywhere, and the HDD template
+  engine inserts the generated block without re-reading its escapes. Ordinary
+  values are written byte-for-byte as before.
 
 ## [2.2.0] - 2026-08-30
 

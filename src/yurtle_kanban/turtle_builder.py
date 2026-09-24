@@ -12,15 +12,14 @@ from __future__ import annotations
 
 import re
 
+from .models import turtle_string
+
 _SAFE_LOCAL_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _escape_turtle_string(value: str) -> str:
-    """Escape special characters for Turtle string literals.
-
-    Backslashes and double-quotes must be escaped inside "..." strings.
-    """
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    """Escape a value for a Turtle "..." literal (the shared escaper, #141)."""
+    return turtle_string(value)
 
 
 def _validate_turtle_local_name(value: str) -> str:

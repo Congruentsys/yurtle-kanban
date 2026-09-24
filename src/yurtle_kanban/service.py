@@ -35,6 +35,8 @@ from .models import (
     WorkItem,
     WorkItemStatus,
     WorkItemType,
+    turtle_string,
+    turtle_unescape,
     yaml_scalar,
 )
 from .turtle_builder import PREFIXES
@@ -83,21 +85,9 @@ _TURTLE_FRONTMATTER = re.compile(
     r"\A(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*(?:@prefix\b|@base\b|(?i:prefix|base)[ \t]+\S)"
 )
 
-# Turtle short-string escaping (ECHAR) for literals the status history writes,
-# e.g. `kb:by "<agent>"`: an agent like `x"y` or one with a newline must stay one
-# literal, never break the block or inject triples (#120)
-_TURTLE_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
-_TURTLE_UNESCAPES = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f"}
-
-
-def _turtle_string(value: str) -> str:
-    """Escape a value for use inside a Turtle "..." literal."""
-    return "".join(_TURTLE_ESCAPES.get(ch, ch) for ch in value)
-
-
-def _turtle_unescape(value: str) -> str:
-    """Invert _turtle_string (and Turtle's other single-character escapes)."""
-    return re.sub(r"\\(.)", lambda m: _TURTLE_UNESCAPES.get(m.group(1), m.group(1)), value)
+# Turtle literal escaping lives in models (one escaper for every literal, #141)
+_turtle_string = turtle_string
+_turtle_unescape = turtle_unescape
 
 
 class KanbanService:

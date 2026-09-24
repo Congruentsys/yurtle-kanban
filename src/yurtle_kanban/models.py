@@ -8,6 +8,7 @@ Each WorkItem corresponds to a Yurtle markdown file.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
@@ -21,6 +22,23 @@ if TYPE_CHECKING:
 # terms in Turtle blocks, so free text is not allowed there)
 PRIORITIES = ("critical", "high", "medium", "low")
 
+
+# Turtle short-string escaping (ECHAR): the one escaper for every Turtle literal
+# built from user input — titles, targets, units, ids, agents (#120, #141). A
+# value with `"`, `\\`, a newline or a CR must stay one literal and never break
+# the block or inject triples.
+_TURTLE_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_TURTLE_UNESCAPES = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f"}
+
+
+def turtle_string(value: str) -> str:
+    """Escape a value for use inside a Turtle "..." literal."""
+    return "".join(_TURTLE_ESCAPES.get(ch, ch) for ch in value)
+
+
+def turtle_unescape(value: str) -> str:
+    """Invert turtle_string (and Turtle's other single-character escapes)."""
+    return re.sub(r"\\(.)", lambda m: _TURTLE_UNESCAPES.get(m.group(1), m.group(1)), value)
 
 def yaml_scalar(value: str) -> str:
     """Render a string as a frontmatter value that YAML reads back unchanged (#104).
@@ -272,8 +290,8 @@ class WorkItem:
 
     @staticmethod
     def _esc(value: str) -> str:
-        """Escape a string for Turtle string literals."""
-        return value.replace("\\", "\\\\").replace('"', '\\"')
+        """Escape a value for a Turtle "..." literal (the shared escaper, #141)."""
+        return turtle_string(value)
 
     @staticmethod
     def _safe_uri(value: str) -> str:
