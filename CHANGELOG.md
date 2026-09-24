@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse it with the usual error and write nothing. The "Unknown priority" message
   is now worded the same by the CLI, the MCP server and the service:
   `Unknown priority: <value>; valid: critical, high, medium, low` (#171).
+- **A title, description, assignee, tag or comment with undecodable bytes crashed
+  or left a 0-byte item file.** Invalid UTF-8 in argv becomes a lone surrogate
+  (`\udcff`), which can't be written. `create`, `update`, `comment` and the
+  MCP tools now refuse it up front, `<field> contains invalid UTF-8`, and write
+  nothing (#172).
 - **`move --assign` reported an assignment it never wrote** whenever the item
   had no `assignee:` key, so `list --assignee` lost track of claimed work
   (#97). `move` now adds `status:`/`assignee:` when absent instead of only
