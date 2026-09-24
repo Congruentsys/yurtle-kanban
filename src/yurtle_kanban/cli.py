@@ -19,6 +19,7 @@ Usage:
 """
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -170,8 +171,11 @@ _TEMPLATE_SECTIONS: dict[str, list[str]] = {
 
 @main.command()
 @click.option("--theme", default="software", help="Theme: software, nautical, or custom")
-@click.option("--path", default="work/", help="Path for work items")
-def init(theme: str, path: str):
+@click.option(
+    "--path", default=None,
+    help="Root for work items (default: the theme's own root, e.g. kanban-work/)",
+)
+def init(theme: str, path: str | None):
     """Initialize yurtle-kanban in the current directory."""
     from .config import _load_builtin_theme
 
@@ -205,8 +209,13 @@ def init(theme: str, path: str):
             if not template_path.exists():
                 template_path.write_text(_generate_template(prefix, type_id, sections))
 
-    # Create config.yaml with auto-populated scan_paths
-    scan_paths_yaml = "\n".join(f'    - "{p}"' for p in scan_paths)
+    # The root is the theme's own root, the common parent of its per-type
+    # folders (kanban-work/, research/), unless --path says otherwise; the
+    # board scans that one root, so new types are covered too (#112)
+    if path is None:
+        common = os.path.commonpath([p.rstrip("/") for p in scan_paths]) if scan_paths else ""
+        path = f"{common}/" if common else "work/"
+    scan_paths_yaml = f'    - "{path}"'
     config_content = f"""# yurtle-kanban configuration
 kanban:
   theme: {theme}
