@@ -1,6 +1,7 @@
 """Tests for KanbanService — ID allocation and item creation."""
 
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -2570,6 +2571,305 @@ class TestFrontmatterEditReplacesWholeValue:
         fm = self._frontmatter(path)
         assert fm["assignee"] == "carol"
         assert fm["status"] == "ready"
+
+
+# ---------------------------------------------------------------------------
+# Issue #128 — frontmatter edit edge cases: a comment inside a block list,
+# and CRLF files keeping their own line ending
+# ---------------------------------------------------------------------------
+
+
+class TestFrontmatterEditEdgeCases:
+    """A comment inside a value's block is consumed with it; CRLF files stay CRLF (#128)."""
+
+    # Reuse the #105 class's helpers (setup, split, YAML check, tail/body check).
+    _w = TestFrontmatterEditReplacesWholeValue()
+    _BODY = TestFrontmatterEditReplacesWholeValue._BODY
+
+    _TAIL = "created: 2026-09-24\ntags:\n  - one\n  - two\n"
+
+    def _lf_text(self, middle: str) -> str:
+        """The exact file text `_setup` writes for `middle` (LF endings)."""
+        return (
+            "---\n"
+            "id: FEAT-001\n"
+            'title: "probe"\n'
+            "type: feature\n"
+            f"{middle}"
+            f"{self._TAIL}"
+            "---\n" + self._BODY
+        )
+
+    def _setup_crlf(self, repo: Path, runner: CliRunner, middle: str) -> Path:
+        """Like the #105 `_setup`, but the whole file is written with CRLF endings."""
+        path = self._w._setup(repo, runner, middle)
+        raw = self._lf_text(middle).replace("\n", "\r\n").encode()
+        path.write_bytes(raw)
+        # Sanity: every line really is CRLF before the edit, and it still parses.
+        assert not re.search(rb"(?<!\r)\n", path.read_bytes())
+        self._w._frontmatter(path)
+        return path
+
+    @staticmethod
+    def _assert_all_crlf(path: Path) -> None:
+        data = path.read_bytes()
+        bare = [
+            data[max(0, m.start() - 30): m.start() + 1]
+            for m in re.finditer(rb"(?<!\r)\n", data)
+        ]
+        assert not bare, (
+            f"{len(bare)} bare LF line ending(s) in a CRLF file, first near: "
+            f"{bare[:3]}"
+        )
+        assert b"\r\r\n" not in data, data
+        assert data.endswith(b"\r\n"), data[-40:]
+
+    @staticmethod
+    def _front_lines(front: str) -> list[str]:
+        return [line.strip() for line in front.split("\n")]
+
+    # -- 1. a comment line inside a block list --------------------------------
+
+    @pytest.mark.parametrize(
+        "assignee_block",
+        [
+            pytest.param("assignee:\n  - a\n# c\n  - b\n", id="column0-comment"),
+            pytest.param("assignee:\n  - a\n  # c\n  - b\n", id="indented-comment"),
+            pytest.param("assignee:\n- a\n# c\n- b\n", id="column0-items-column0-comment"),
+        ],
+    )
+    def test_move_assign_consumes_comment_inside_block_list(
+        self, temp_repo, software_config, monkeypatch, assignee_block,
+    ):
+        """`move -a carol` over a block list with a comment line inside it yields carol."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._w._setup(
+            temp_repo, runner, f"status: backlog\npriority: medium\n{assignee_block}",
+        )
+        assert self._w._frontmatter(path)["assignee"] == ["a", "b"]
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm["status"] == "ready"
+        front, _ = self._w._split(path)
+        lines = self._front_lines(front)
+        assert "- a" not in lines, front
+        assert "- b" not in lines, front
+        assert self._w._show(runner)["assignee"] == "carol"
+        assert self._w._listed_for(runner, "carol") == ["FEAT-001"]
+        self._w._assert_tail_and_body_intact(path)
+
+    @pytest.mark.parametrize(
+        "assignee_block",
+        [
+            pytest.param("assignee: alice\n", id="after-single-line-value"),
+            pytest.param("assignee:\n  - a\n  - b\n", id="after-block-list"),
+        ],
+    )
+    def test_control_top_level_comment_between_keys_kept(
+        self, temp_repo, software_config, monkeypatch, assignee_block,
+    ):
+        """A column-0 comment followed by the next KEY is not part of the value: kept."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._w._setup(
+            temp_repo, runner,
+            f"status: backlog\npriority: medium\n{assignee_block}# about created\n",
+        )
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        front, _ = self._w._split(path)
+        assert "\nassignee: carol\n# about created\ncreated: 2026-09-24\n" in (
+            f"\n{front}\n"
+        ), front
+        assert self._w._frontmatter(path)["assignee"] == "carol"
+        self._w._assert_tail_and_body_intact(path)
+
+    # -- 2. CRLF files keep CRLF ---------------------------------------------
+
+    def test_crlf_move_updates_status_and_assignee(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`move ready -a carol` on a CRLF file replaces both values; no bare LF appears."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup_crlf(
+            temp_repo, runner, "status: backlog\npriority: medium\nassignee: alice\n",
+        )
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        self._assert_all_crlf(path)
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm["status"] == "ready"
+        assert fm["priority"] == "medium"
+        assert self._w._show(runner)["assignee"] == "carol"
+        self._w._assert_tail_and_body_intact(path)
+
+    def test_crlf_move_replaces_block_list_assignee(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """Replacing a multi-line (block list) value in a CRLF file keeps CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup_crlf(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee:\n  - alice\n  - bob\n",
+        )
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        self._assert_all_crlf(path)
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        front, _ = self._w._split(path)
+        assert "alice" not in front and "bob" not in front, front
+        self._w._assert_tail_and_body_intact(path)
+
+    def test_crlf_move_appends_missing_assignee(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`move -a carol` on a CRLF file with no `assignee:` appends it with CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup_crlf(temp_repo, runner, "status: backlog\npriority: medium\n")
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        self._assert_all_crlf(path)
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm["status"] == "ready"
+        assert fm["tags"] == ["one", "two"]
+        assert self._w._show(runner)["assignee"] == "carol"
+        assert self._w._split(path)[1].startswith(self._BODY)
+
+    def test_crlf_rank_appends_missing_priority_rank(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`rank` on a CRLF file with no `priority_rank:` appends it with CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup_crlf(
+            temp_repo, runner, "status: backlog\npriority: medium\nassignee: alice\n",
+        )
+
+        self._w._run(runner, ["rank", "FEAT-001", "3", "--no-commit"])
+
+        self._assert_all_crlf(path)
+        fm = self._w._frontmatter(path)
+        assert fm["priority_rank"] == 3
+        assert fm["tags"] == ["one", "two"]
+        assert self._w._show(runner)["priority_rank"] == 3
+        assert self._w._split(path)[1] == self._BODY
+
+    def test_crlf_rank_updates_existing_fields(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`rank --summary` replacing existing single- and multi-line values keeps CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup_crlf(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\n"
+            "priority_rank: 5\nvalue_summary: >-\n  old value\n  spanning lines\n",
+        )
+
+        self._w._run(
+            runner, ["rank", "FEAT-001", "2", "--summary", "new value", "--no-commit"],
+        )
+
+        self._assert_all_crlf(path)
+        fm = self._w._frontmatter(path)
+        assert fm["priority_rank"] == 2
+        assert fm["value_summary"] == "new value"
+        self._w._assert_tail_and_body_intact(path)
+
+    def test_lone_cr_between_keys_does_not_swallow_next_key(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`assignee: alice\\rpriority: high` is two keys; editing one keeps the other."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        middle = "status: backlog\nassignee: alice\rpriority: high\n"
+        path = self._w._setup(temp_repo, runner, "status: backlog\npriority: medium\n")
+        path.write_bytes(self._lf_text(middle).encode())
+        # Sanity: the lone CR really is in the file, and it reads as two keys.
+        assert b"alice\rpriority" in path.read_bytes()
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "alice"
+        assert fm["priority"] == "high"
+        assert self._w._show(runner)["priority"] == "high"
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        fm = self._w._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm.get("priority") == "high", f"priority lost: {path.read_bytes()!r}"
+        assert fm["status"] == "ready"
+        data = self._w._show(runner)
+        assert data["assignee"] == "carol"
+        assert data["priority"] == "high"
+        self._w._assert_tail_and_body_intact(path)
+
+    # -- negative controls: LF files stay LF, byte-for-byte ------------------
+
+    def test_control_lf_rank_update_changes_only_edited_line(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """On an LF file, `rank` changes exactly the priority_rank line, nothing else."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        middle = "status: backlog\npriority: medium\nassignee: alice\npriority_rank: 5\n"
+        path = self._w._setup(temp_repo, runner, middle)
+        before = self._lf_text(middle).encode()
+        assert path.read_bytes() == before
+
+        self._w._run(runner, ["rank", "FEAT-001", "3", "--no-commit"])
+
+        assert path.read_bytes() == before.replace(
+            b"\npriority_rank: 5\n", b"\npriority_rank: 3\n",
+        )
+
+    def test_control_lf_rank_append_adds_only_one_line(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """On an LF file, `rank` appending priority_rank adds one LF line before `---`."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        middle = "status: backlog\npriority: medium\nassignee: alice\n"
+        path = self._w._setup(temp_repo, runner, middle)
+
+        self._w._run(runner, ["rank", "FEAT-001", "3", "--no-commit"])
+
+        expected = self._lf_text(middle).replace(
+            "  - two\n---\n", "  - two\npriority_rank: 3\n---\n", 1,
+        )
+        assert path.read_bytes() == expected.encode()
+
+    def test_control_lf_move_introduces_no_cr(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """On an LF file, `move -a` writes no CR anywhere and keeps the frontmatter exact."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._w._setup(
+            temp_repo, runner, "status: backlog\npriority: medium\nassignee: alice\n",
+        )
+
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        data = path.read_bytes()
+        assert b"\r" not in data
+        expected_head = self._lf_text(
+            "status: ready\npriority: medium\nassignee: carol\n",
+        ).encode()
+        assert data.startswith(expected_head), data
 
 
 # ---------------------------------------------------------------------------

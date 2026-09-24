@@ -1496,7 +1496,7 @@ class KanbanService:
             logger.warning(f"Parent file {parent.file_path} missing — skipping")
             return False
 
-        content = parent.file_path.read_text()
+        content, eol = self._read_item_text(parent.file_path)
         match = self._TURTLE_BLOCK_RE.search(content)
         if not match:
             logger.warning(f"No turtle block in {parent_id} — skipping inverse reference")
@@ -1517,7 +1517,7 @@ class KanbanService:
         # Replace the turtle block in the file
         new_block = match.group(1) + new_inner + "\n" + match.group(3)
         new_content = content[: match.start()] + new_block + content[match.end() :]
-        parent.file_path.write_text(new_content)
+        self._write_item_text(parent.file_path, new_content, eol)
 
         # Re-parse graph for the updated parent
         parent.graph = self._parse_graph(new_content)
@@ -1691,7 +1691,7 @@ class KanbanService:
         """
         results: list[dict[str, Any]] = []
         for item in self.get_items():
-            content = item.file_path.read_text()
+            content, eol = self._read_item_text(item.file_path)
             frontmatter = self._parse_frontmatter(content)
             if not frontmatter:
                 continue
@@ -1745,7 +1745,7 @@ class KanbanService:
                 else:
                     block = self._serialize_as_turtle_block(missing)
                     new_content = self._insert_turtle_block(content, block)
-                item.file_path.write_text(new_content)
+                self._write_item_text(item.file_path, new_content, eol)
                 item.graph = self._parse_graph(new_content) or Graph()
 
             results.append({
@@ -2440,7 +2440,7 @@ class KanbanService:
         artifact (e.g., a PR URL), making closure provenance graph-queryable.
         When gates_skipped=True, a kb:gatesSkipped triple is recorded.
         """
-        content = item.file_path.read_text()
+        content, eol = self._read_item_text(item.file_path)
 
         # Determine board-native status name (e.g., 'active' for HDD)
         board_config = self._get_board_for_item(item)
@@ -2515,7 +2515,7 @@ class KanbanService:
 ```"""
             content = content.rstrip() + "\n\n" + new_block + "\n"
 
-        item.file_path.write_text(content)
+        self._write_item_text(item.file_path, content, eol)
 
     # Frontmatter is closed by the first line that STARTS with `---` (the same
     # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
@@ -2528,6 +2528,25 @@ class KanbanService:
     _FRONTMATTER_RE = re.compile(
         r"\A---(?: +#[^\n]*|[ \t\r]*)\n(.*?)^---", re.DOTALL | re.MULTILINE,
     )
+
+    @staticmethod
+    def _read_item_text(path: Path) -> tuple[str, str]:
+        """Read an item file as LF text plus its own line ending (#128).
+
+        `read_text()` silently turns CRLF into LF, so every edit used to rewrite a
+        CRLF file as LF. Edits work on LF text; `_write_item_text` restores CRLF.
+        """
+        raw = path.read_bytes().decode("utf-8")
+        eol = "\r\n" if "\r\n" in raw else "\n"
+        # A lone `\r` is a line break too, as it is for read_text() and the
+        # frontmatter parser; otherwise an edit's `.*` would span it and drop
+        # the key after it
+        return re.sub(r"\r\n?", "\n", raw), eol
+
+    @staticmethod
+    def _write_item_text(path: Path, text: str, eol: str) -> None:
+        """Write LF text back with the file's own line ending (#128)."""
+        path.write_bytes((text.replace("\n", eol) if eol != "\n" else text).encode("utf-8"))
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
@@ -2542,12 +2561,13 @@ class KanbanService:
             return content
 
         frontmatter = match.group(1)
-        # A run of blank lines belongs to the value only when a continuation line
-        # follows it (a paragraph break inside a `|` block scalar); blank lines
-        # before the next key or the closing `---` are kept.
+        # A run of blank lines or column-0 `#` comments belongs to the value only
+        # when a continuation line follows it (a paragraph break inside a `|`
+        # block scalar, a comment inside a block list, #128); blank lines and
+        # comments before the next key or the closing `---` are kept.
         pattern = (
             rf"^{re.escape(field)}:.*"
-            r"(?:(?:\n[ \t]*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*$"
+            r"(?:(?:\n[ \t]*|\n#.*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*$"
         )
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
@@ -2641,7 +2661,7 @@ class KanbanService:
 
     def _update_item_with_comment(self, item: WorkItem, comment: Comment) -> None:
         """Update item file to include new comment."""
-        content = item.file_path.read_text()
+        content, eol = self._read_item_text(item.file_path)
 
         # Add comment section if not exists
         if "## Comments" not in content:
@@ -2651,7 +2671,7 @@ class KanbanService:
         timestamp = comment.created_at.strftime("%Y-%m-%d %H:%M")
         content += f"\n### {comment.author} ({timestamp})\n\n{comment.content}\n"
 
-        item.file_path.write_text(content)
+        self._write_item_text(item.file_path, content, eol)
 
     def get_status_history(self, item_id: str) -> list[dict[str, Any]]:
         """Get status history for an item.
@@ -2930,14 +2950,14 @@ class KanbanService:
             item.value_summary = value_summary
 
         # Update file using field-level updates (preserves existing content)
-        content = item.file_path.read_text()
+        content, eol = self._read_item_text(item.file_path)
         content = self._add_or_update_frontmatter_field(content, "priority_rank", str(rank))
         if value_summary is not None:
             escaped = value_summary.replace('"', '\\"')
             content = self._add_or_update_frontmatter_field(
                 content, "value_summary", f'"{escaped}"'
             )
-        item.file_path.write_text(content)
+        self._write_item_text(item.file_path, content, eol)
 
         if commit:
             self._git_commit(

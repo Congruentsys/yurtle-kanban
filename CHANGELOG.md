@@ -105,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template creates now lowercase the priority and reject anything outside
   critical/high/medium/low, and MCP accepts any case like the CLI. Existing
   items with legacy values (`P0`, `normal`, `backlog`) still load and rank.
+- **Frontmatter edits orphaned list items after a comment line and turned CRLF
+  files into LF** (#128). A column-0 `# comment` inside a block list now stays
+  with its value when more items follow. A comment before the next key is kept.
+  Every edit of an existing item file (move, rank, comments, parent links,
+  backfill) now keeps the file's own line endings.
 
 ## [2.2.0] - 2026-08-30
 
