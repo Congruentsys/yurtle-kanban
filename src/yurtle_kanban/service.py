@@ -219,7 +219,12 @@ class KanbanService:
         return items
 
     def _should_ignore(self, path: Path) -> bool:
-        """Check if a path should be ignored."""
+        """Check a path against the single-board ``paths.ignore`` patterns.
+
+        Single-board only. Multi-board scanning applies each board's own
+        ``BoardConfig.ignore`` via ``_should_ignore_for_board`` (#124), so
+        ``paths.ignore`` does not govern it (#129).
+        """
         path_str = str(path.relative_to(self.repo_root))
         for pattern in self.config.paths.ignore:
             if fnmatch.fnmatch(path_str, pattern):

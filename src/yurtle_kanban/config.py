@@ -67,6 +67,7 @@ class PathConfig:
 
     root: str | None = "work/"
     scan_paths: list[str] = field(default_factory=list)
+    # Single-board only: multi-board scanning uses each BoardConfig.ignore (#124, #129)
     ignore: list[str] = field(default_factory=lambda: ["**/archive/**", "**/templates/**"])
 
     # Type-specific paths (optional)
