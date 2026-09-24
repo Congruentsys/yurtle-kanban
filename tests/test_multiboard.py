@@ -2000,3 +2000,237 @@ class TestCreateHonoursDefaultBoard:
 
         rel = type_dir.resolve().relative_to(repo.resolve()).as_posix()
         assert rel.startswith("dev/"), f"explicit dev should win, got {rel}"
+
+
+class TestBoardAddRefusesUncoverableScanPaths:
+    """board-add must refuse an upgrade that would drop scanned items.
+
+    A multi-board board scans exactly one ``path``. When a single-board (v1)
+    config's ``scan_paths`` share no common parent (e.g. ``a/`` and ``b/``),
+    no single board path covers them, and upgrading would silently lose every
+    item. ``board-add`` must exit non-zero, name the scan paths it can't
+    cover, and leave ``.kanban/config.yaml`` byte-identical. Configs a single
+    path *can* cover must still upgrade as before. (#122)
+    """
+
+    _FEAT = (
+        "---\n"
+        "id: {id}\n"
+        'title: "{title}"\n'
+        "type: feature\n"
+        "status: backlog\n"
+        "priority: medium\n"
+        "assignee: null\n"
+        "created: 2026-09-24\n"
+        "depends_on: []\n"
+        "---\n\n# {title}\n"
+    )
+
+    @pytest.fixture
+    def repo_runner(self, tmp_path, monkeypatch):
+        """Empty git repo as cwd, fresh theme cache, and a CliRunner."""
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+
+        for cmd in (
+            ["git", "init", "-b", "main"],
+            ["git", "config", "user.email", "test@test.com"],
+            ["git", "config", "user.name", "Test"],
+        ):
+            subprocess.run(cmd, cwd=tmp_path, capture_output=True, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        yield tmp_path, CliRunner()
+        config_mod._theme_cache.clear()
+
+    @staticmethod
+    def _invoke(runner, args: list[str]):
+        from yurtle_kanban.cli import main
+
+        return runner.invoke(main, args, catch_exceptions=False)
+
+    @classmethod
+    def _run(cls, runner, args: list[str]):
+        result = cls._invoke(runner, args)
+        assert result.exit_code == 0, f"{args} failed:\n{result.output}"
+        return result
+
+    @staticmethod
+    def _config_path(repo: Path) -> Path:
+        return repo / ".kanban" / "config.yaml"
+
+    @staticmethod
+    def _saved_boards(repo: Path) -> dict[str, dict]:
+        import yaml
+
+        data = yaml.safe_load((repo / ".kanban" / "config.yaml").read_text())
+        assert "boards" in data, f"config not multi-board:\n{data}"
+        return {b["name"]: b for b in data["boards"]}
+
+    @staticmethod
+    def _write_v1(repo: Path, root: str, scan_paths: list[str] | None) -> None:
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "kanban:",
+            "  theme: software",
+            "  paths:",
+            f"    root: {root}",
+        ]
+        if scan_paths:
+            lines.append("    scan_paths:")
+            lines.extend(f'    - "{p}"' for p in scan_paths)
+            for p in scan_paths:
+                (repo / p).mkdir(parents=True, exist_ok=True)
+        cfg.write_text("\n".join(lines) + "\n")
+        (repo / root).mkdir(parents=True, exist_ok=True)
+
+    def _write_feat(self, repo: Path, rel: str, item_id: str, title: str) -> None:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._FEAT.format(id=item_id, title=title))
+
+    def _issue_repo(self, repo: Path) -> None:
+        """The issue's repro: root work/, scan_paths a/ and b/, one item in each."""
+        self._write_v1(repo, root="work/", scan_paths=["a/", "b/"])
+        self._write_feat(repo, "a/FEAT-001.md", "FEAT-001", "Item in a")
+        self._write_feat(repo, "b/FEAT-002.md", "FEAT-002", "Item in b")
+
+    _ADD_RESEARCH = ["board-add", "research", "--preset", "hdd", "--path", "research/"]
+
+    # -- the issue's own repro ------------------------------------------------
+
+    def test_issue_repro_precondition_list_shows_both_items(self, repo_runner):
+        repo, runner = repo_runner
+        self._issue_repo(repo)
+
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
+
+    def test_board_add_exits_non_zero(self, repo_runner):
+        repo, runner = repo_runner
+        self._issue_repo(repo)
+
+        result = self._invoke(runner, self._ADD_RESEARCH)
+
+        assert result.exit_code != 0, (
+            f"board-add should refuse uncoverable scan_paths:\n{result.output}"
+        )
+
+    def test_board_add_names_uncovered_scan_paths(self, repo_runner):
+        repo, runner = repo_runner
+        self._issue_repo(repo)
+
+        result = self._invoke(runner, self._ADD_RESEARCH)
+        out = result.output
+
+        assert result.exit_code != 0, out
+        names_both = "a/" in out and "b/" in out
+        says_no_common_parent = "common parent" in out.lower()
+        assert names_both or says_no_common_parent, (
+            f"refusal must name the uncovered scan paths a/ and b/:\n{out}"
+        )
+
+    def test_config_is_byte_identical_after_refusal(self, repo_runner):
+        repo, runner = repo_runner
+        self._issue_repo(repo)
+        before = self._config_path(repo).read_bytes()
+
+        self._invoke(runner, self._ADD_RESEARCH)
+
+        assert self._config_path(repo).read_bytes() == before
+
+    def test_items_still_listed_after_refusal(self, repo_runner):
+        repo, runner = repo_runner
+        self._issue_repo(repo)
+
+        self._invoke(runner, self._ADD_RESEARCH)
+
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
+
+    def test_no_research_board_added_after_refusal(self, repo_runner):
+        import yaml
+
+        repo, runner = repo_runner
+        self._issue_repo(repo)
+
+        self._invoke(runner, self._ADD_RESEARCH)
+
+        data = yaml.safe_load(self._config_path(repo).read_text())
+        assert "boards" not in data, f"config was upgraded to multi-board:\n{data}"
+        assert "research" not in self._config_path(repo).read_text()
+
+    # -- controls: coverable configs must still upgrade (#94) ------------------
+
+    def test_control_default_init_upgrades_to_kanban_work(self, repo_runner):
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+
+        self._run(runner, self._ADD_RESEARCH)
+
+        boards = self._saved_boards(repo)
+        assert boards["default"]["path"].rstrip("/") == "kanban-work"
+        assert "research" in boards
+        assert "IDEA-001" in self._run(runner, ["list"]).output
+
+    def test_control_explicit_root_with_scan_paths_under_it(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_v1(
+            repo,
+            root="kanban-work/",
+            scan_paths=["kanban-work/features/", "kanban-work/ideas/"],
+        )
+        self._run(runner, ["create", "idea", "Hand config item"])
+
+        self._run(runner, self._ADD_RESEARCH)
+
+        assert self._saved_boards(repo)["default"]["path"].rstrip("/") == "kanban-work"
+        assert "IDEA-001" in self._run(runner, ["list"]).output
+
+    def test_control_root_inside_scan_path(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_v1(repo, root="work/sub/", scan_paths=["work/"])
+        self._write_feat(repo, "work/FEAT-001-Outer-item.md", "FEAT-001", "Outer item")
+
+        self._run(runner, self._ADD_RESEARCH)
+
+        assert "FEAT-001" in self._run(runner, ["list"]).output
+        assert "FEAT-001" in self._run(runner, ["list", "--board", "default"]).output
+
+    def test_control_v1_without_scan_paths_upgrades_using_root(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_v1(repo, root="work/", scan_paths=None)
+        self._write_feat(repo, "work/FEAT-001.md", "FEAT-001", "Root item")
+        assert "FEAT-001" in self._run(runner, ["list"]).output
+
+        self._run(runner, self._ADD_RESEARCH)
+
+        boards = self._saved_boards(repo)
+        assert boards["default"]["path"].rstrip("/") == "work"
+        assert "research" in boards
+        assert "FEAT-001" in self._run(runner, ["list"]).output
+
+    def test_control_scan_paths_sharing_a_parent_upgrade(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_v1(
+            repo,
+            root="work/",
+            scan_paths=["kanban-work/features/", "kanban-work/bugs/"],
+        )
+        self._write_feat(repo, "kanban-work/features/FEAT-001.md", "FEAT-001", "Feature")
+        self._write_feat(repo, "kanban-work/bugs/FEAT-002.md", "FEAT-002", "Other")
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
+
+        self._run(runner, self._ADD_RESEARCH)
+
+        boards = self._saved_boards(repo)
+        assert boards["default"]["path"].rstrip("/") == "kanban-work"
+        assert "research" in boards
+        out = self._run(runner, ["list"]).output
+        assert "FEAT-001" in out and "FEAT-002" in out, out
