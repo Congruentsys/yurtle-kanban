@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case), since the value is written into Turtle. Frontmatter edits now find the
   closing `---` by line, so writing a field no longer cuts a title like
   `"A --- B"` in two (reading such an item back is still #103).
+- **`create` could write an item where its own board never looks** (#102). Theme
+  per-type paths (`kanban-work/features/`, …) took priority over the configured
+  root, so on a board with `root: work/` (or a multi-board `path: work/`) every
+  created item was invisible to `board`/`list`. A theme path is now kept only
+  when a scanned path contains it, which covers every board laid out like its
+  theme, including a default `init`. Otherwise the type folder is placed under the
+  board's scanned root. The broader config-model question is #109.
 
 ## [2.2.0] - 2026-08-30
 
