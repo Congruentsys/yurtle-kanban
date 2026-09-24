@@ -268,15 +268,11 @@ class KanbanConfig:
         """Load v2 multi-board configuration."""
         boards = [BoardConfig.from_dict(b) for b in data.get("boards", [])]
 
-        # Aggregate scan_paths from all boards for Priority 3 fallback, and the
-        # boards' ignore patterns: scanning checks paths.ignore, so a per-board
-        # `ignore:` (e.g. `**/_TEMPLATE*` carried over by board-add, #94) must
-        # reach it
+        # Aggregate scan_paths from all boards for Priority 3 fallback. Ignore
+        # patterns stay per board: scan() applies each board's own (#124)
         all_scan_paths: list[str] = []
-        all_ignore: list[str] = []
         for board in boards:
             all_scan_paths.extend(board.scan_paths)
-            all_ignore.extend(p for p in board.ignore if p not in all_ignore)
 
         return cls(
             version=CONFIG_VERSION_MULTI,
@@ -288,7 +284,6 @@ class KanbanConfig:
             paths=PathConfig(
                 root=boards[0].path if boards else "work/",
                 scan_paths=all_scan_paths,
-                ignore=all_ignore or ["**/archive/**", "**/templates/**"],
             ),
         )
 

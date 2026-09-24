@@ -50,8 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   board, but `init` keeps items in `kanban-work/*`. The default board now gets
   the directory the old config really scanned: the scan path containing its
   `root`, else the common parent of its `scan_paths`. It also keeps those
-  `scan_paths` and its `ignore` patterns (so `_TEMPLATE.md` files stay hidden),
-  and per-board `ignore:` lists are now honoured when scanning.
+  `scan_paths` and its `ignore` patterns (so `_TEMPLATE.md` files stay hidden).
+  `list`/`show`/`move` apply each board's own `ignore:` to that board, as `board`
+  already did (#124).
 
 ## [2.2.0] - 2026-08-30
 
