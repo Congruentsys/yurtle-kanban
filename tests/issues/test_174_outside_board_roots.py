@@ -256,3 +256,159 @@ def test_init_path_outside_repo_warns(tmp_path, monkeypatch, caplog):
 def test_control_init_path_in_repo_no_warning(tmp_path, monkeypatch, caplog):
     seen = _init_cli(tmp_path / "repo", "work/", monkeypatch, caplog)
     assert "not be git-tracked" not in seen, seen
+
+
+# --- Round 2 (PR #195 review) -------------------------------------------------
+
+# 1. A relative root with `..` that leads outside the repo is outside it too.
+
+
+@pytest.fixture
+def dotdot_board(tmp_path: Path) -> tuple[Path, Path]:
+    repo, outside = tmp_path / "repo", tmp_path / "outside"
+    _item(outside / "features" / "FEAT-001-out.md", "FEAT-001")
+    _init_repo(repo, _single_yaml("../outside/", []))
+    return repo, outside
+
+
+@pytest.mark.parametrize("op", ["move", "comment"])
+def test_dotdot_root_op_skips_git_with_note(dotdot_board, caplog, op):
+    repo, outside = dotdot_board
+    service = _service(repo)
+    service.scan()
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        _do(service, op)
+    _check_file(outside / "features" / "FEAT-001-out.md", op)
+    assert COMMIT_FAILED not in caplog.text, caplog.text
+    assert OUTSIDE_NOTE in caplog.text, f"no '{OUTSIDE_NOTE}' warning:\n{caplog.text}"
+
+
+def test_dotdot_root_create_push_succeeds(dotdot_board, caplog):
+    repo, outside = dotdot_board
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        result = _service(repo).create_item_and_push(WorkItemType.FEATURE, "pushed")
+    assert result["success"] is True, result
+    assert result["pushed"] is False, result
+    assert OUTSIDE_NOTE in result["message"], result
+    assert COMMIT_FAILED not in caplog.text, caplog.text
+    assert list(outside.rglob(f"{result['id']}-*.md")), "item file not written"
+
+
+def test_dotdot_init_path_warns(tmp_path, monkeypatch, caplog):
+    seen = _init_cli(tmp_path / "repo", "../outside/", monkeypatch, caplog)
+    assert "not be git-tracked" in seen, seen
+
+
+# 2. `.kanban/` in a subdirectory of the git repo: a board elsewhere in that repo
+#    is git-tracked (git toplevel, not repo_root, decides).
+
+
+@pytest.fixture
+def subdir_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+    top = tmp_path / "A"
+    proj, shared = top / "proj", top / "shared"
+    _item(shared / "features" / "FEAT-001-sh.md", "FEAT-001")
+    proj.mkdir(parents=True)
+    return top, proj, shared
+
+
+def _commit_subdir(top: Path, proj: Path, root: str) -> None:
+    (proj / ".kanban").mkdir()
+    (proj / ".kanban" / "config.yaml").write_text(_single_yaml(root, []))
+    _init_repo(top, "")  # git init + initial commit of everything at the top
+    (top / ".kanban" / "config.yaml").unlink()
+    (top / ".kanban").rmdir()
+
+
+SUBDIR_ROOTS = ["absolute", "dotdot"]
+
+
+def _subdir_root(shared: Path, kind: str) -> str:
+    return f"{shared}/" if kind == "absolute" else "../shared/"
+
+
+@pytest.mark.parametrize("kind", SUBDIR_ROOTS)
+def test_control_subdir_kanban_comment_commits(subdir_repo, caplog, kind):
+    top, proj, shared = subdir_repo
+    _commit_subdir(top, proj, _subdir_root(shared, kind))
+    service = _service(proj)
+    service.scan()
+    before = _commits(top)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        _do(service, "comment")
+    assert OUTSIDE_NOTE not in caplog.text, caplog.text
+    assert _commits(top) == before + 1, f"comment not committed:\n{caplog.text}"
+
+
+@pytest.mark.parametrize("kind", SUBDIR_ROOTS)
+def test_control_subdir_kanban_create_push_commits(subdir_repo, caplog, kind):
+    top, proj, shared = subdir_repo
+    _commit_subdir(top, proj, _subdir_root(shared, kind))
+    before = _commits(top)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        result = _service(proj).create_item_and_push(WorkItemType.FEATURE, "pushed")
+    assert result["success"] is True, result
+    assert OUTSIDE_NOTE not in (result.get("message") or ""), result
+    assert OUTSIDE_NOTE not in caplog.text, caplog.text
+    assert _commits(top) == before + 1, f"create --push not committed: {result}"
+
+
+def test_control_subdir_init_path_in_git_repo_no_warning(tmp_path, monkeypatch, caplog):
+    top = tmp_path / "A"
+    proj = top / "proj"
+    proj.mkdir(parents=True)
+    _git(top, "init", "-b", "main")
+    monkeypatch.chdir(proj)
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        result = CliRunner().invoke(
+            main, ["init", "--theme", "software", "--path", f"{top / 'shared'}/"],
+        )
+    assert result.exit_code == 0, result.output
+    seen = _flat(result.output + caplog.text)
+    assert "not be git-tracked" not in seen, seen
+
+
+# 3. Symlinked board path whose item file is itself a symlink to a file outside
+#    the repo: it is keyed by its in-repo path (only the parent is resolved).
+
+
+@pytest.fixture
+def linked_item(linked, tmp_path: Path) -> tuple[Path, Path]:
+    real, link = linked
+    target = _item(tmp_path / "elsewhere" / "FEAT-009.md", "FEAT-009", "ext")
+    (real / "work" / "features" / "FEAT-009.md").symlink_to(target)
+    return real, link
+
+
+def test_symlinked_item_file_matches_anchored_ignore(linked_item):
+    real, link = linked_item
+    _init_repo(real, _single_yaml(f"{link / 'work'}/", ["work/features/*"]))
+    ids = _ids(_service(real))
+    assert "FEAT-001" not in ids, f"control: sibling not ignored: {ids}"
+    assert "FEAT-009" not in ids, f"symlinked item file missed work/features/*: {ids}"
+
+
+def test_symlinked_item_file_comment_not_outside(linked_item, caplog):
+    real, link = linked_item
+    _init_repo(real, _single_yaml(f"{link / 'work'}/", ["work/hidden/*"]))
+    service = _service(real)
+    service.scan()
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        service.add_comment("FEAT-009", "hello there", "tester")
+    assert OUTSIDE_NOTE not in caplog.text, caplog.text
+
+
+# 4. `_commit_and_push_file` (HDD parent/link push) on an outside file.
+
+
+@pytest.mark.parametrize("kind", ["absolute", "dotdot"])
+def test_commit_and_push_file_outside_repo(outside_board, caplog, kind):
+    repo, outside = outside_board
+    target = outside / "features" / "FEAT-001-out.md"
+    path = target if kind == "absolute" else repo / ".." / "outside" / target.relative_to(outside)
+    target.write_text(target.read_text() + "\nedit\n")
+    with caplog.at_level(logging.WARNING, logger=LOGGER):
+        ok = _service(repo)._commit_and_push_file(path, "link parent")
+    assert ok is False
+    assert COMMIT_FAILED not in caplog.text, caplog.text
+    assert OUTSIDE_NOTE in caplog.text, f"no '{OUTSIDE_NOTE}' warning:\n{caplog.text}"
