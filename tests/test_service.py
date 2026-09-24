@@ -2437,3 +2437,136 @@ class TestFrontmatterEditReplacesWholeValue:
         assert fm["reviewers"] == ["x", "y"]
         assert fm["status"] == "ready"
         self._assert_tail_and_body_intact(path)
+
+    # -- round 2: block scalars with blank lines, column-0 lists ------------
+
+    @pytest.mark.parametrize(
+        "gap",
+        [
+            pytest.param("\n", id="empty-line"),
+            pytest.param("  \n", id="whitespace-only-line"),
+        ],
+    )
+    def test_rank_replaces_literal_block_with_paragraph_break(
+        self, temp_repo, software_config, monkeypatch, gap,
+    ):
+        """A `value_summary: |` with a blank line inside is one value, replaced whole."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\n"
+            "priority_rank: 5\n"
+            f"value_summary: |\n  para one\n{gap}  para two\n",
+        )
+        assert self._frontmatter(path)["value_summary"] == "para one\n\npara two\n"
+
+        self._run(
+            runner, ["rank", "FEAT-001", "2", "--summary", "fresh", "--no-commit"],
+        )
+
+        data = self._show(runner)
+        assert data["value_summary"] == "fresh"
+        assert data["priority_rank"] == 2
+        assert "FEAT-001" in self._run(runner, ["list"]).output
+        fm = self._frontmatter(path)
+        assert fm["value_summary"] == "fresh"
+        assert fm["assignee"] == "alice"
+        front, _ = self._split(path)
+        assert "para one" not in front
+        assert "para two" not in front
+        self._assert_tail_and_body_intact(path)
+
+    def test_move_assign_replaces_literal_block_with_paragraph_break(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`move -a carol` over a two-paragraph `assignee: |` yields exactly carol."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\n"
+            "assignee: |\n  alice\n\n  bob\n",
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        assert self._show(runner)["assignee"] == "carol"
+        assert self._listed_for(runner, "carol") == ["FEAT-001"]
+        fm = self._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        front, _ = self._split(path)
+        assert "alice" not in front
+        assert "bob" not in front
+        self._assert_tail_and_body_intact(path)
+
+    def test_move_assign_replaces_column0_block_list(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`assignee:\\n- alice\\n- bob` (items at column 0) is replaced whole."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee:\n- alice\n- bob\n",
+        )
+        assert self._frontmatter(path)["assignee"] == ["alice", "bob"]
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        assert self._show(runner)["assignee"] == "carol"
+        assert self._listed_for(runner, "carol") == ["FEAT-001"]
+        fm = self._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        front, _ = self._split(path)
+        assert "- alice" not in front
+        assert "- bob" not in front
+        self._assert_tail_and_body_intact(path)
+
+    def test_control_blank_line_after_value_kept(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A blank line between the edited value and the next key survives the edit."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\n\n",
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        front, _ = self._split(path)
+        assert "\nassignee: carol\n\ncreated: 2026-09-24\n" in f"\n{front}\n"
+        assert self._frontmatter(path)["assignee"] == "carol"
+        self._assert_tail_and_body_intact(path)
+
+    def test_control_blank_line_before_closer_kept(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A blank line right before the closing `---` survives editing the last key."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        path = self._item_file(temp_repo)
+        path.write_text(
+            "---\n"
+            "id: FEAT-001\n"
+            'title: "probe"\n'
+            "type: feature\n"
+            "status: backlog\n"
+            "priority: medium\n"
+            "created: 2026-09-24\n"
+            "assignee: alice\n"
+            "\n"
+            "---\n" + self._BODY
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        front, body = self._split(path)
+        assert front.endswith("\nassignee: carol\n"), repr(front)
+        assert body.startswith(self._BODY), body
+        fm = self._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm["status"] == "ready"
