@@ -76,16 +76,22 @@ The brief tells the reviewer to:
   Non-blocking findings are marked `(follow-up)`.
 
 **At most two rounds.** After a `changes` verdict, fix the findings as a new commit (step 2), push and review
-again. A second `changes` stops the item: comment why on the issue, label it `needs-decision`, and leave the
-PR open.
+again. A second `changes` stops the item. Comment why on the issue, then park both the issue and the PR:
+`gh issue edit <N> --add-label needs-decision` and `gh pr edit <P> --add-label needs-decision`. The picker
+skips a held PR, so the loop moves on and doesn't reopen it.
+
+The verdict comment is posted under the same GitHub account as the PR, so GitHub can't enforce reviewer ≠
+author. The distinct `claude -p` session is what makes the review independent, and the comment's author
+proves nothing.
 
 **4. Merge** (from the main checkout):
 ```bash
-gh pr checks <P> --watch          # all green
-gh pr merge <P> --merge --delete-branch
+gh pr checks <P> --watch                      # all green
+git worktree remove --force /tmp/yk-<N>       # FIRST: the local branch is checked out there, so
+                                              # `--delete-branch` would fail after the merge
+gh pr merge <P> --merge --delete-branch       # deletes the remote and local branch
 git checkout -q main && git pull -q
-git worktree remove /tmp/yk-<N> && git branch -D <branch> 2>/dev/null
-gh issue view <N> --json state --jq .state   # CLOSED (via "Fixes #N")
+gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
 Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
 verdict. Done means the merge is on `origin/main` and the issue is closed.

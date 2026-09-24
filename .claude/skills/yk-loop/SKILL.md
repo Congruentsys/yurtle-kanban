@@ -1,6 +1,6 @@
 ---
 name: yk-loop
-description: The yurtle-kanban work loop. IN-SESSION it runs the picker (yk-next), carries what it hands you — finishes open PRs, reviews others' PRs, lands issues with pairit — then picks again. Stops on NOTHING READY, a picker error, or the same item failing twice. Never ScheduleWakeup; never end the turn between items. Ported from rachael-lab's rachael-loop (2026-09-24).
+description: The yurtle-kanban work loop. IN-SESSION it runs the picker (yk-next), carries what it hands you — finishes open PRs, reviews others' PRs, lands issues with pairit — then picks again. Stops on NOTHING READY, a picker error, or the same item picked a third time without progress. Never ScheduleWakeup; never end the turn between items. Ported from rachael-lab's rachael-loop (2026-09-24).
 disable-model-invocation: false
 allowed-tools: Bash(.venv/bin/*), Bash(python3 *), Bash(git *), Bash(gh *), Bash(claude *), Agent
 ---
@@ -41,6 +41,9 @@ implementer sub-agent, and merges.
 
 **Report through GitHub.** The PR, its verdict comment and the closed issue are the record. For each landed
 item, give the Captain one line (`#N → PR #P merged: <what changed>`) and keep going.
+
+**One loop per GitHub account.** The picker knows you only by your `gh` login, so a second loop (or a
+person) working on the same account would resume the same PRs and issues.
 
 **Never `ScheduleWakeup`, and never end the turn to report between items.** The only wait inside the loop is
 `gh pr checks <P> --watch`.

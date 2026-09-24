@@ -5,9 +5,11 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
 
 1. RESUME PR     my own open PR that needs something: changes requested, CI red, a merge
                  conflict, no review at its head sha, or approved + green (so: merge it).
-                 CI still running is WAIT.
+                 CI still running is WAIT. A PR that is a draft, or carries a hold label (on
+                 itself or on the issue it fixes), is SKIPPED — that is how pairit parks a PR
+                 after its second `changes` verdict without wedging the loop.
 2. REVIEW PR     another author's open PR with no verdict at its head sha (reviewer != author).
-3. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet.
+3. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet, not held, not waiting.
 4. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label,
                  and whose "depends on #N" / "blocked by #N" issues are all closed.
                  `bug` first, then the lower number.
@@ -17,6 +19,9 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
 
 A review verdict is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
 `verdict: approve|changes` (pairit step 3). It only counts at the PR's CURRENT head.
+
+Identity is the gh login, so run ONE loop per GitHub account: two sessions on one account would
+both resume the same PR, and the claim race cannot tell them apart.
 
 Usage: python3 .claude/skills/yk-next/yk_next.py [--dry-run]
 """
@@ -35,10 +40,12 @@ VERDICT = re.compile(
     r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I,
 )
 CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
-DEPENDS = re.compile(r"(?:depends on|blocked by|requires)\s+#(\d+)", re.I)
-BRANCH_ISSUE = re.compile(r"(?:^|/)(\d+)-")
+# "depends on #5", "Depends on: #5", "blocked by #8, #9", "depends on #6 and #7"
+DEPENDS = re.compile(
+    r"(?:depends on|blocked by|requires)\s*:?\s*(#\d+(?:\s*(?:,|and|&|or)?\s*#\d+)*)", re.I,
+)
 PR_FIELDS = (
-    "number,title,author,headRefName,headRefOid,isDraft,mergeable,"
+    "number,title,author,labels,headRefName,headRefOid,isDraft,mergeable,"
     "statusCheckRollup,comments,closingIssuesReferences"
 )
 
@@ -71,9 +78,14 @@ def verdict_at_head(pr: dict) -> str | None:
 
 
 def ci_state(pr: dict) -> str:
-    """green | red | pending, from the status-check rollup (no checks at all counts as green)."""
-    state = "green"
-    for c in pr.get("statusCheckRollup") or []:
+    """green | red | pending, from the status-check rollup.
+
+    No checks at all is `pending`: this repo always runs CI, and right after a push the rollup
+    is empty until Actions registers its runs.
+    """
+    rollup = pr.get("statusCheckRollup") or []
+    state = "green" if rollup else "pending"
+    for c in rollup:
         concl = (c.get("conclusion") or c.get("state") or "").upper()
         status = (c.get("status") or "COMPLETED").upper()
         if concl in CI_FAILED:
@@ -81,6 +93,14 @@ def ci_state(pr: dict) -> str:
         if status != "COMPLETED" or concl in ("PENDING", "EXPECTED", ""):
             state = "pending"
     return state
+
+
+def depends_on(body: str) -> set[int]:
+    return {int(n) for grp in DEPENDS.findall(body or "") for n in re.findall(r"#(\d+)", grp)}
+
+
+def held(labels: set[str]) -> list[str]:
+    return ["held: " + ",".join(sorted(labels & HOLD))] if labels & HOLD else []
 
 
 def my_pr_state(pr: dict) -> str:
@@ -108,20 +128,41 @@ def main() -> None:
 
     prs = gh_json("pr", "list", "--state", "open", "--limit", "100", "--json", PR_FIELDS)
     prs.sort(key=lambda p: p["number"])
+    issues = gh_json("issue", "list", "--state", "open", "--limit", "300",
+                     "--json", "number,title,labels,assignees,body")
+    issues.sort(key=lambda i: i["number"])
+    open_nums = {i["number"] for i in issues}
+    issue_labels = {i["number"]: {lbl["name"] for lbl in i["labels"]} for i in issues}
+
+    def issues_fixed_by(pr: dict) -> set[int]:
+        # GitHub's own link (pairit always writes `Fixes #N`). Guessing from branch names
+        # misreads `chore/100-col-lint` or a date branch and silently skips that issue.
+        return {i["number"] for i in pr.get("closingIssuesReferences") or []}
+
+    def issue_blockers(i: dict) -> list[str]:
+        why = held(issue_labels[i["number"]])
+        waits = sorted((depends_on(i.get("body") or "") & open_nums) - {i["number"]})
+        if waits:
+            why.append("waits on " + ",".join(f"#{n}" for n in waits))
+        return why
+
     fixed_by_open_pr: set[int] = set()
     for pr in prs:
-        fixed_by_open_pr |= {i["number"] for i in pr.get("closingIssuesReferences") or []}
-        m = BRANCH_ISSUE.search(pr["headRefName"])
-        if m:
-            fixed_by_open_pr.add(int(m.group(1)))
+        fixed_by_open_pr |= issues_fixed_by(pr)
 
-    # 1. my own open PRs
-    mine = [(p, my_pr_state(p)) for p in prs if p["author"]["login"] == me]
-    for p, state in mine:
-        print(f"  my PR #{p['number']:<4} {state:17} {p['title'][:70]}")
-    actionable = [(p, s) for p, s in mine if s != "wait-ci"]
-    if actionable or mine:
-        p, state = (actionable or mine)[0]
+    # 1. my own open PRs — a draft or a held PR (or one whose issue is held) is parked, not resumed
+    mine = []
+    for p in (p for p in prs if p["author"]["login"] == me):
+        labels = {lbl["name"] for lbl in p.get("labels") or []}
+        for n in issues_fixed_by(p):
+            labels |= issue_labels.get(n, set())
+        skip = held(labels) + (["draft"] if p.get("isDraft") else [])
+        state = "SKIP: " + "; ".join(skip) if skip else my_pr_state(p)
+        print(f"  my PR #{p['number']:<4} {state:24.24} {p['title'][:66]}")
+        if not skip:
+            mine.append((p, state))
+    if mine:
+        p, state = next(((p, s) for p, s in mine if s != "wait-ci"), mine[0])
         print(f"\nRESUME PR #{p['number']} [{state}] — {p['title']}\n  branch: {p['headRefName']}")
         return
 
@@ -132,32 +173,26 @@ def main() -> None:
                   f"\n  head: {p['headRefOid'][:12]}  branch: {p['headRefName']}")
             return
 
-    issues = gh_json("issue", "list", "--state", "open", "--limit", "300",
-                     "--json", "number,title,labels,assignees,body")
-    open_nums = {i["number"] for i in issues}
-
-    # 3. an issue I already hold, with no PR yet
-    for i in sorted(issues, key=lambda i: i["number"]):
+    # 3. an issue I already hold, with no PR yet — unless it has since been held or blocked
+    for i in issues:
         if me in {x["login"] for x in i["assignees"]} and i["number"] not in fixed_by_open_pr:
+            why = issue_blockers(i)
+            if why:
+                print(f"  my issue #{i['number']:<4} SKIP: {'; '.join(why)}  {i['title'][:60]}")
+                continue
             print(f"\nRESUME ISSUE #{i['number']} — {i['title']}")
             return
 
     # 4. claim a new one
     cands = []
     for i in issues:
-        labels = {lbl["name"] for lbl in i["labels"]}
         why = []
         if i["assignees"]:
             why.append("assigned to " + ",".join(x["login"] for x in i["assignees"]))
         if i["number"] in fixed_by_open_pr:
             why.append("an open PR fixes it")
-        if labels & HOLD:
-            why.append("held: " + ",".join(sorted(labels & HOLD)))
-        deps = {int(n) for n in DEPENDS.findall(i.get("body") or "")}
-        waits = sorted((deps & open_nums) - {i["number"]})
-        if waits:
-            why.append("waits on " + ",".join(f"#{n}" for n in waits))
-        cands.append((0 if "bug" in labels else 1, i["number"], i, why))
+        why += issue_blockers(i)
+        cands.append((0 if "bug" in issue_labels[i["number"]] else 1, i["number"], i, why))
     cands.sort(key=lambda c: c[:2])
 
     print("CANDIDATES:")
