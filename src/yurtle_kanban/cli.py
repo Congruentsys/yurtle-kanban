@@ -169,6 +169,11 @@ _TEMPLATE_SECTIONS: dict[str, list[str]] = {
 }
 
 
+
+def _within(path: Path, root: Path) -> bool:
+    """True when `path` is `root` or lies under it (both repo-relative)."""
+    return path == root or root in path.parents
+
 @main.command()
 @click.option("--theme", default="software", help="Theme: software, nautical, or custom")
 @click.option(
@@ -196,6 +201,14 @@ def init(theme: str, path: str | None):
     dirs_created = []
     for type_id, type_def in item_types.items():
         type_path = type_def.get("path")
+        if type_path and path and not _within(Path(type_path), Path(path)):
+            # An explicit --path is the board root: scaffold each type folder
+            # where `create` will write (#134). Like #102/#113's placement, a
+            # theme path already under the root (e.g. `--path .`) is kept; one
+            # outside it moves to <root>/<type folder>/.
+            parts = Path(type_path).parts
+            folder = Path(*parts[1:]) if len(parts) > 1 else Path(type_path)
+            type_path = f"{(Path(path) / folder).as_posix()}/"
         if type_path:
             type_dir = repo_root / type_path
             type_dir.mkdir(parents=True, exist_ok=True)
