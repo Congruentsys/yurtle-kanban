@@ -117,6 +117,12 @@ class LineEndings:
 
     def apply(self, text: str) -> str:
         """Re-end LF `text`: untouched lines keep their ending, others the majority."""
+        used = {e for e in self.endings if e}
+        if len(used) <= 1:
+            # One ending throughout (every real file): no per-line mapping needed,
+            # and difflib is quadratic on long runs of identical lines
+            eol = used.pop() if used else self.majority
+            return text.replace("\n", eol) if eol != "\n" else text
         import difflib
 
         new_lines = text.split("\n")
