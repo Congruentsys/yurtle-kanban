@@ -855,3 +855,59 @@ class TestEpicLinkKeepsLineEndingsIssue151:
             ln for ln in before if not ln.startswith(b"related:")
         ]
         assert _frontmatter_of(path)["related"] == related + ["EPIC-001"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #161 — `related` ids never go through a re.sub replacement string
+# ---------------------------------------------------------------------------
+
+_RELATED_REPLACEMENT_VALUES = [
+    pytest.param(["H1\\"], id="trailing-backslash"),
+    pytest.param(["H1\\b"], id="backslash-b"),
+    pytest.param(["A\\d"], id="backslash-d"),
+    pytest.param(["X\\g<0>Y"], id="group-ref"),
+    pytest.param(["FEAT-002", "X&Y", "A\\d"], id="mixed"),
+]
+
+
+class TestEpicRelatedReplacementValuesIssue161:
+    """Linking keeps `related` ids with `\\`, `\\g<0>`, `&` exactly (#161)."""
+
+    @pytest.mark.parametrize("related", _RELATED_REPLACEMENT_VALUES)
+    def test_epic_add_keeps_related_ids_exactly(self, software_runner, software_repo, related):
+        """`epic add` rewrites an existing `related:` line; every id reads back exactly."""
+        path = _write_feature(software_repo, related)
+        assert _frontmatter_of(path)["related"] == related  # precondition
+        result = software_runner.invoke(main, ["epic", "create", "Big Project"])
+        assert result.exit_code == 0, (result.output, result.exception)
+
+        result = software_runner.invoke(main, ["epic", "add", "EPIC-001", "FEAT-001"])
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            result.output, repr(result.exception),
+        )
+        assert result.exit_code == 0, result.output
+        assert _frontmatter_of(path)["related"] == related + ["EPIC-001"]
+
+    @pytest.mark.parametrize("related", _RELATED_REPLACEMENT_VALUES)
+    def test_epic_create_items_keeps_related_ids_exactly(
+        self, software_runner, software_repo, related,
+    ):
+        """`epic create --items` links the same way and keeps the ids too."""
+        path = _write_feature(software_repo, related)
+        result = software_runner.invoke(
+            main, ["epic", "create", "Big Project", "--items", "FEAT-001"],
+        )
+        assert result.exception is None or isinstance(result.exception, SystemExit), (
+            result.output, repr(result.exception),
+        )
+        assert result.exit_code == 0, result.output
+        assert _frontmatter_of(path)["related"] == related + ["EPIC-001"]
+
+    def test_control_plain_related_line_unchanged(self, software_runner, software_repo):
+        """Control: ordinary ids keep today's `related: [FEAT-002, EPIC-001]` line."""
+        path = _write_feature(software_repo, ["FEAT-002"])
+        software_runner.invoke(main, ["epic", "create", "Big Project"], catch_exceptions=False)
+        software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+        assert "\nrelated: [FEAT-002, EPIC-001]\n" in path.read_text()
