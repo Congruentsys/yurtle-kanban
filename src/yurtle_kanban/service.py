@@ -806,29 +806,28 @@ class KanbanService:
         3. scan_paths keyword match (e.g., "expeditions/" for expedition type)
         4. Fall back to paths.root
         """
-        # Priority 1: Theme-defined path
+        # Priority 1: Theme-defined path, kept only where the board scans (#102)
         if self.config.is_multi_board:
             # Multi-board: check specific board or search all boards
-            if board_name:
-                theme = self.config.get_theme(board_name)
+            boards = [self.config.get_board(board_name)] if board_name else self.config.boards
+            for board in boards:
+                if board is None:
+                    continue
+                theme = board.get_theme(self.repo_root)
                 if theme and "item_types" in theme:
                     type_def = theme["item_types"].get(item_type.value, {})
                     if "path" in type_def:
-                        return self.repo_root / type_def["path"]
-            else:
-                # Search all boards for a theme that defines this item type
-                for board in self.config.boards:
-                    board_theme = board.get_theme(self.repo_root)
-                    if board_theme and "item_types" in board_theme:
-                        type_def = board_theme["item_types"].get(item_type.value, {})
-                        if "path" in type_def:
-                            return self.repo_root / type_def["path"]
+                        return self._scanned_type_dir(
+                            type_def["path"], [board.get_path()], board.path,
+                        )
         else:
             theme = self.config.get_theme()
             if theme and "item_types" in theme:
                 type_def = theme["item_types"].get(item_type.value, {})
                 if "path" in type_def:
-                    return self.repo_root / type_def["path"]
+                    return self._scanned_type_dir(
+                        type_def["path"], self.config.get_work_paths(), self.config.paths.root,
+                    )
 
         # Priority 2: Legacy PathConfig attributes (features, bugs, epics, tasks)
         type_path = getattr(self.config.paths, item_type.value + "s", None)
@@ -847,6 +846,29 @@ class KanbanService:
 
         # Priority 4: Fall back to root
         return self.repo_root / (self.config.paths.root or "work/")
+
+    def _scanned_type_dir(self, theme_path: str, scanned: list[Path], root: str | None) -> Path:
+        """Place a theme's per-type directory where the board scans it (#102).
+
+        Theme paths are written against the theme's default root (e.g.
+        ``kanban-work/features/``). One that a scanned path contains is kept, which
+        covers every board laid out like its theme, including a default ``init``
+        (``root: work/`` but ``kanban-work/*`` scan paths). Otherwise its type
+        folder moves under the board's root, or the first scanned path if the root
+        itself is not scanned, so a created item is never invisible to its board.
+        """
+        path = Path(theme_path)
+
+        def is_scanned(p: Path) -> bool:
+            return any(p == s or s in p.parents for s in scanned)
+
+        if is_scanned(path):
+            return self.repo_root / path
+        base = Path(root) if root and (not scanned or is_scanned(Path(root))) else None
+        if base is None:
+            base = scanned[0] if scanned else Path(root or "work/")
+        type_folder = Path(*path.parts[1:]) if len(path.parts) > 1 else path
+        return self.repo_root / base / type_folder
 
     @staticmethod
     def _slugify(title: str) -> str:
