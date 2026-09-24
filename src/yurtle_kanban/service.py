@@ -2488,7 +2488,11 @@ class KanbanService:
     # Frontmatter is closed by the first line that STARTS with `---` (the same
     # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
     # instead would cut inside a value such as `title: "A --- B"`.
-    _FRONTMATTER_RE = re.compile(r"\A---[ \t\r]*\n(.*?)^---", re.DOTALL | re.MULTILINE)
+    # The opening line may carry a YAML comment (`--- # generated`, #116): YAML
+    # allows one after a space, not directly after `---` or after a tab.
+    _FRONTMATTER_RE = re.compile(
+        r"\A---(?: +#[^\n]*)?[ \t\r]*\n(.*?)^---", re.DOTALL | re.MULTILINE,
+    )
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
