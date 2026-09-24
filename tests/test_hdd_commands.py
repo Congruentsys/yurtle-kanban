@@ -1286,6 +1286,41 @@ def _cli_crashed(result) -> bool:
     return result.exception is not None and not isinstance(result.exception, SystemExit)
 
 
+# IDs with control characters (#161 review, round 2): the refusal must not echo
+# them raw -- an ESC starts a terminal escape sequence, `\r` overwrites the line,
+# `\x07` rings the bell, `\n` splits the error line -- but it must still name
+# the value, in an escaped form.
+_CONTROL_CHAR_IDS = [
+    pytest.param("H1\x1b[31mRED", id="esc"),
+    pytest.param("H1\nX", id="newline"),
+    pytest.param("H1\n", id="trailing-newline"),
+    pytest.param("H1\rX", id="carriage-return"),
+    pytest.param("H1\x07", id="bell"),
+]
+
+_RAW_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _escaped_forms(value: str) -> list[str]:
+    """Acceptable escaped renderings of `value`: repr-style or JSON-style."""
+    import json
+
+    return [repr(value)[1:-1], json.dumps(value)[1:-1]]
+
+
+def _assert_clean_control_char_refusal(result, value: str, written: list) -> None:
+    assert not _cli_crashed(result), (result.output, repr(result.exception))
+    assert result.exit_code != 0, f"accepted {value!r}: {result.output!r}"
+    assert not written, f"a refused create wrote {written}"
+    out = result.output
+    assert not _RAW_CONTROL.search(out), f"raw control character in output: {out!r}"
+    error_lines = [line for line in out.split("\n") if line.startswith("Error:")]
+    assert len(error_lines) == 1, f"expected one Error: line: {out!r}"
+    assert any(form in error_lines[0] for form in _escaped_forms(value)), (
+        f"Error line does not name {value!r} in an escaped form: {error_lines[0]!r}"
+    )
+
+
 class TestTemplateReplacementValuesIssue161:
     """id/paper/hypothesis_id/authors never go through re.sub replacement strings;
     the heading is pinned for special titles (#161)."""
@@ -1417,6 +1452,43 @@ class TestTemplateReplacementValuesIssue161:
         fm = _read_frontmatter(_only_file(temp_repo / "research" / "papers", "PAPER-131"))
         assert fm["authors"] == [value]
         assert "PAPER-131" in _listed_ids(runner)
+
+    # --- Control characters in a refused id (round 2) -------------------
+
+    @pytest.mark.parametrize("value", _CONTROL_CHAR_IDS)
+    def test_hypothesis_create_control_char_id_refused_escaped(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`hypothesis create --id` with a control char: clean Error:, value escaped."""
+        result = runner.invoke(main, [
+            "hypothesis", "create", "Better recall", "--paper", "130", "--id", value,
+        ], color=True)  # color=True: CliRunner must not strip ANSI
+        written = list((temp_repo / "research" / "hypotheses").glob("*.md"))
+        _assert_clean_control_char_refusal(result, value, written)
+
+    @pytest.mark.parametrize("value", _CONTROL_CHAR_IDS)
+    def test_experiment_create_control_char_hypothesis_refused_escaped(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`experiment create --hypothesis` with a control char: clean Error:, escaped."""
+        result = runner.invoke(main, [
+            "experiment", "create", "--title", "t", "--hypothesis", value,
+        ], color=True)  # color=True: CliRunner must not strip ANSI
+        written = list((temp_repo / "research" / "experiments").glob("*.md"))
+        _assert_clean_control_char_refusal(result, value, written)
+
+    @pytest.mark.parametrize("value", ["H1\\b", "X&Y", "X\\g<0>Y"])
+    def test_control_printable_invalid_id_shown_as_typed(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """Control: a printable-but-invalid id is still echoed exactly as typed."""
+        result = runner.invoke(main, [
+            "hypothesis", "create", "Better recall", "--paper", "130", "--id", value,
+        ])
+        assert not _cli_crashed(result), (result.output, repr(result.exception))
+        assert result.exit_code != 0, result.output
+        assert "Error:" in result.output
+        assert value in result.output, result.output
 
     # --- Negative controls: ordinary values render exactly as today -----
 
