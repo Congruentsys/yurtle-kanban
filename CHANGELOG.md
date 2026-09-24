@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<board root>/<type folder>/` (`kanban-work/voyages/`, `kanban-work/expeditions/`),
   and those folders are always scanned. Boards that already worked list exactly
   the same items.
+- **Multi-board `create` without a board ignored `default_board`** (#114,
+  decided in #109). When several boards' themes define the type, the item now
+  goes to `default_board` if its theme defines it. Otherwise it goes to the first
+  board in config order, as before.
 
 
 - **An item whose opening frontmatter line carries a YAML comment
