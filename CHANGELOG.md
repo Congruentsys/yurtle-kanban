@@ -65,6 +65,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nautical, `research/` for hdd), writes it as `root:`, scans just that root
   (so new types are covered) and no longer creates a stray `work/`. `--path`
   still wins. A fresh `init --theme spec` followed by `create` no longer crashes.
+- **Each item type now goes into its own named folder, and the board always
+  scans the folders it writes into** (#113, decided in #109; supersedes #111).
+  A type whose theme folder the board didn't scan used to nest inside another
+  type's folder (`kanban-work/expeditions/voyages/`), and a type the theme
+  doesn't define fell back to the bare root and could vanish. Both now go to
+  `<board root>/<type folder>/` (`kanban-work/voyages/`, `kanban-work/expeditions/`),
+  and those folders are always scanned. Boards that already worked list exactly
+  the same items.
 
 ## [2.2.0] - 2026-08-30
 

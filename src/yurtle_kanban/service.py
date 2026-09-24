@@ -160,13 +160,26 @@ class KanbanService:
                     self._items[item.id] = item
             return list(self._items.values())
 
-        for scan_path in self.config.get_work_paths():
+        work_paths = [Path(p) for p in self.config.get_work_paths()]
+        for scan_path in work_paths:
             full_path = self.repo_root / scan_path
             if full_path.exists():
                 for item in self._scan_directory(full_path):
                     self._items[item.id] = item
 
+        # The board always scans the type folders it writes into (#113), even
+        # when the configured scan_paths leave one out
+        for type_dir in self._placement_dirs():
+            rel = type_dir.relative_to(self.repo_root)
+            if type_dir.exists() and not any(rel == s or s in rel.parents for s in work_paths):
+                for item in self._scan_directory(type_dir):
+                    self._items[item.id] = item
+
         return list(self._items.values())
+
+    def _placement_dirs(self) -> set[Path]:
+        """Every folder `create` can write into on a single board (#113)."""
+        return {self._get_type_directory(t) for t in WorkItemType}
 
     def _scan_directory(self, directory: Path) -> list[WorkItem]:
         """Scan a directory for Yurtle work items."""
@@ -827,9 +840,14 @@ class KanbanService:
            In multi-board mode, searches all boards' themes for the type.
         2. PathConfig attributes (features, bugs, epics, tasks)
         3. scan_paths keyword match (e.g., "expeditions/" for expedition type)
-        4. Fall back to paths.root
+        4. The type's own folder under the board root (``<root>/<plural>/``)
+
+        Placement is the board's job, never the agent's: each type goes into its
+        own named folder, and ``scan()`` always covers the folders written here
+        (#113, decided in #109).
         """
-        # Priority 1: Theme-defined path, kept only where the board scans (#102)
+        # Priority 1: Theme-defined path, kept where the board scans it (#102),
+        # else its own folder under the board root (#113)
         if self.config.is_multi_board:
             # Multi-board: check specific board or search all boards
             boards = [self.config.get_board(board_name)] if board_name else self.config.boards
@@ -843,14 +861,20 @@ class KanbanService:
                         return self._scanned_type_dir(
                             type_def["path"], [board.get_path()], board.path,
                         )
+            board_root = (
+                (self.config.get_board(board_name) if board_name else None)
+                or (self.config.boards[0] if self.config.boards else None)
+            )
+            root = board_root.path if board_root else "work/"
         else:
             theme = self.config.get_theme()
             if theme and "item_types" in theme:
                 type_def = theme["item_types"].get(item_type.value, {})
                 if "path" in type_def:
                     return self._scanned_type_dir(
-                        type_def["path"], self.config.get_work_paths(), self.config.paths.root,
+                        type_def["path"], self.config.get_work_paths(), self._board_root(),
                     )
+            root = self._board_root()
 
         # Priority 2: Legacy PathConfig attributes (features, bugs, epics, tasks)
         type_path = getattr(self.config.paths, item_type.value + "s", None)
@@ -858,17 +882,32 @@ class KanbanService:
             return self.repo_root / type_path
 
         # Priority 3: Match scan_paths by type keyword
-        irregular_plurals = {
-            "hypothesis": "hypotheses",
-            "literature": "literature",
-        }
-        plural = irregular_plurals.get(item_type.value, item_type.value + "s")
+        plural = self._type_folder(item_type)
         for scan_path in self.config.paths.scan_paths:
             if plural in scan_path.lower() or item_type.value in scan_path.lower():
                 return self.repo_root / scan_path
 
-        # Priority 4: Fall back to root
-        return self.repo_root / (self.config.paths.root or "work/")
+        # Priority 4: the type's own named folder under the board root (#113)
+        return self.repo_root / root / plural
+
+    def _board_root(self) -> str:
+        """The folder a single board's type folders live under (#113).
+
+        ``root`` when it contains every scan path (``kanban-work/`` scanning just
+        ``kanban-work/features/``); otherwise the directory the board really scans
+        (#94: a default ``init`` says ``root: work/`` but scans ``kanban-work/*``).
+        """
+        root = self.config.paths.root
+        scans = [Path(p) for p in self.config.paths.scan_paths]
+        if root and all(Path(root) == s or Path(root) in s.parents for s in scans):
+            return root
+        return self.config._single_board_path()
+
+    @staticmethod
+    def _type_folder(item_type: WorkItemType) -> str:
+        """The folder name a type lives in: its plural (``features``, ``hypotheses``)."""
+        irregular_plurals = {"hypothesis": "hypotheses", "literature": "literature"}
+        return irregular_plurals.get(item_type.value, item_type.value + "s")
 
     def _scanned_type_dir(self, theme_path: str, scanned: list[Path], root: str | None) -> Path:
         """Place a theme's per-type directory where the board scans it (#102).
@@ -877,8 +916,9 @@ class KanbanService:
         ``kanban-work/features/``). One that a scanned path contains is kept, which
         covers every board laid out like its theme, including a default ``init``
         (``root: work/`` but ``kanban-work/*`` scan paths). Otherwise its type
-        folder moves under the board's root, or the first scanned path if the root
-        itself is not scanned, so a created item is never invisible to its board.
+        folder moves under the board root (#113: its own named folder, never nested
+        inside another type's), and ``scan()`` covers that folder, so a created item
+        is never invisible to its board.
         """
         path = Path(theme_path)
 
@@ -887,9 +927,7 @@ class KanbanService:
 
         if is_scanned(path):
             return self.repo_root / path
-        base = Path(root) if root and (not scanned or is_scanned(Path(root))) else None
-        if base is None:
-            base = scanned[0] if scanned else Path(root or "work/")
+        base = Path(root or "work/")
         type_folder = Path(*path.parts[1:]) if len(path.parts) > 1 else path
         return self.repo_root / base / type_folder
 
