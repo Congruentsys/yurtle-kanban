@@ -19,7 +19,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from .models import PRIORITIES, WorkItemStatus, WorkItemType
+from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
 from .template_engine import TemplateEngine
 
 console = Console()
@@ -127,14 +127,15 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         return False  # Already linked
 
     related.append(epic_id)
-    related_line = f"related: [{', '.join(related)}]"
+    # the shared writer keeps elements like `"a, b"` one element (#121, #148)
+    related_line = f"related: {yaml_flow_list([str(r) for r in related])}"
 
     # Update the frontmatter in the file
     if re.search(r"^related:", fm_text, re.MULTILINE):
         # Replace existing related line
         new_content = re.sub(
             r"^(related:\s*).*$",
-            f"\\g<1>[{', '.join(related)}]",
+            lambda m: m.group(1) + related_line[len("related: "):],
             content,
             count=1,
             flags=re.MULTILINE,

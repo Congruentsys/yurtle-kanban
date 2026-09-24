@@ -40,6 +40,17 @@ def turtle_unescape(value: str) -> str:
     """Invert turtle_string (and Turtle's other single-character escapes)."""
     return re.sub(r"\\(.)", lambda m: _TURTLE_UNESCAPES.get(m.group(1), m.group(1)), value)
 
+# Characters YAML won't take literally inside a double-quoted scalar: outside
+# its printable set (C1 controls, DEL, U+FFFE/FFFF, lone surrogates), plus NEL
+# (U+0085), which YAML folds to a space. json.dumps leaves them raw (#148).
+_YAML_UNSAFE = re.compile("[\x7f-\x9f\ufffe\uffff\ud800-\udfff]")
+
+
+def yaml_quote(value: str) -> str:
+    """A YAML double-quoted scalar that reads back as exactly `value` (#121, #148)."""
+    quoted = json.dumps(value, ensure_ascii=False)  # a JSON string is a YAML scalar
+    return _YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", quoted)
+
 def yaml_scalar(value: str) -> str:
     """Render a string as a frontmatter value that YAML reads back unchanged (#104).
 
@@ -54,7 +65,7 @@ def yaml_scalar(value: str) -> str:
             return value
     except yaml.YAMLError:
         pass
-    return json.dumps(value, ensure_ascii=False)  # a JSON string is a YAML scalar
+    return yaml_quote(value)
 
 
 def yaml_flow_item(value: str) -> str:
@@ -70,7 +81,7 @@ def yaml_flow_item(value: str) -> str:
             return value
     except yaml.YAMLError:
         pass
-    return json.dumps(value, ensure_ascii=False)
+    return yaml_quote(value)
 
 
 def yaml_flow_list(values: list[str]) -> str:
@@ -360,7 +371,7 @@ class WorkItem:
             "---",
             f"id: {self.id}",
             # always double-quoted; json.dumps also escapes \\ and newlines (#121)
-            f"title: {json.dumps(self.title, ensure_ascii=False)}",
+            f"title: {yaml_quote(self.title)}",
             f"type: {self.item_type.value}",
             f"status: {self.status.value}",
         ]
@@ -387,7 +398,7 @@ class WorkItem:
         if self.priority_rank is not None:
             lines.append(f"priority_rank: {self.priority_rank}")
         if self.value_summary:
-            lines.append(f"value_summary: {json.dumps(self.value_summary, ensure_ascii=False)}")
+            lines.append(f"value_summary: {yaml_quote(self.value_summary)}")
 
         if self.compute_requirement:
             lines.append(f"compute_requirement: {yaml_scalar(self.compute_requirement)}")
