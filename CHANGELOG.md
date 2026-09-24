@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when a scanned path contains it, which covers every board laid out like its
   theme, including a default `init`. Otherwise the type folder is placed under the
   board's scanned root. The broader config-model question is #109.
+- **An item whose frontmatter contains `---` (e.g. title `"A --- B"`) vanished
+  from the board** (#103). The reader, the description extractor and the Turtle
+  backfill found frontmatter by the substring `---`. They now share the
+  line-anchored match the writers use (#101).
 
 ## [2.2.0] - 2026-08-30
 
