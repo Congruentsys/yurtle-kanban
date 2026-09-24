@@ -30,10 +30,13 @@ def _validate_turtle_local_name(value: str) -> str:
 
     Raises ValueError if the value contains disallowed characters.
     """
-    if not _SAFE_LOCAL_NAME.match(value):
+    # fullmatch: `$` in `.match` would also accept a trailing newline (`H1\n`)
+    if not _SAFE_LOCAL_NAME.fullmatch(value):
+        # the value as typed when printable (`H1\b`), else its repr, so control
+        # characters (ESC, CR, newlines) never reach the terminal raw (#161)
+        shown = f'"{value}"' if value.isprintable() else repr(value)
         raise ValueError(
-            f"Invalid Turtle local name: {value!r} — "
-            "only [A-Za-z0-9._-] are allowed"
+            f"Invalid Turtle local name: {shown} — only [A-Za-z0-9._-] are allowed"
         )
     return value
 

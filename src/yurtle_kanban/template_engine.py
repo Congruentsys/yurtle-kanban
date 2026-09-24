@@ -11,7 +11,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from yurtle_kanban.models import yaml_quote
+from yurtle_kanban.models import yaml_flow_list, yaml_quote
 from yurtle_kanban.turtle_builder import TurtleBlockBuilder
 
 # HDD item types that get Turtle knowledge blocks generated.
@@ -70,7 +70,7 @@ class TemplateEngine:
             # (handles patterns like IDEA-R-XXX, H{paper}.{n}, etc.)
             content = re.sub(
                 r"^(id:\s*).+$",
-                rf"\g<1>{variables['id']}",
+                lambda m: m.group(1) + str(variables["id"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -100,7 +100,7 @@ class TemplateEngine:
             paper_val = variables["paper"]
             content = re.sub(
                 r"^(paper:\s*).+$",
-                rf"\g<1>PAPER-{paper_val}",
+                lambda m: m.group(1) + f"PAPER-{paper_val}",
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -186,7 +186,7 @@ class TemplateEngine:
         if "hypothesis_id" in variables:
             content = re.sub(
                 r"^(hypothesis:\s*).+$",
-                rf"\g<1>{variables['hypothesis_id']}",
+                lambda m: m.group(1) + str(variables["hypothesis_id"]),
                 content,
                 count=1,
                 flags=re.MULTILINE,
@@ -240,7 +240,9 @@ class TemplateEngine:
         if "authors" in variables:
             content = re.sub(
                 r"^(authors:\s*)\[\]",
-                rf"\g<1>[{variables['authors']}]",
+                lambda m: m.group(1) + yaml_flow_list(
+                    [a.strip() for a in str(variables["authors"]).split(",") if a.strip()]
+                ),
                 content,
                 count=1,
                 flags=re.MULTILINE,

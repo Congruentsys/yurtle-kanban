@@ -169,6 +169,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the query and `zz") || contains("", "` matched every item. They're now escaped.
   `rank --summary` escaped only quotes, so a trailing backslash made the item
   vanish and `\b` or a newline was misread. It's now fully quoted.
+- **No template substitution re-reads a value as a regex escape anymore** (#161,
+  extending #142). `--hypothesis 'H1\'` crashed `experiment create` with
+  `re.error`, `--authors 'A\d'` crashed `paper create`, and `\b` or `\g<0>` in
+  authors corrupted the file. IDs, paper refs and authors now use function
+  replacements, and authors go through the shared flow-list writer. An ID the
+  Turtle builder refuses is a clean `Error:` naming the value, not a traceback.
 
 ## [2.2.0] - 2026-08-30
 

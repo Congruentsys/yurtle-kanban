@@ -1,5 +1,6 @@
 """Tests for HDD (Hypothesis-Driven Development) CLI commands and TemplateEngine."""
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -1197,6 +1198,373 @@ class TestTemplateValuesRoundTrip:
         assert 'title: "Explore transfer learning"\n' in text
         assert "\n# Explore transfer learning\n" in text
         assert _shown(runner, "IDEA-R-001")["title"] == "Explore transfer learning"
+
+
+# ---------------------------------------------------------------------------
+# TestTemplateReplacementValuesIssue161 (#161)
+# ---------------------------------------------------------------------------
+
+# Values that a `re.sub` REPLACEMENT STRING misreads: a trailing backslash
+# (`re.error: bad escape (end of pattern)`), `\b` (a backspace), `\d`
+# (`re.error: bad escape \d`), `\g<0>` (the whole matched line) and `&`.
+_REPLACEMENT_VALUES = [
+    pytest.param("H1\\", id="trailing-backslash"),
+    pytest.param("H1\\b", id="backslash-b"),
+    pytest.param("A\\d", id="backslash-d"),
+    pytest.param("X\\g<0>Y", id="group-ref"),
+    pytest.param("X&Y", id="ampersand"),
+]
+
+# id, paper and hypothesis_id are IDS. #161 allows either fix: "function
+# replacements + yaml_scalar (or validate those IDs to [A-Za-z0-9._-]+)". So
+# render must either give a frontmatter value that reads back EXACTLY, or refuse
+# with a plain ValueError. It must never raise re.error, and never quietly
+# write a different value.
+_ID_RENDERS = [
+    pytest.param(
+        "experiment", "hypothesis_id",
+        lambda v: {"id": "EXPR-001", "title": "t", "hypothesis_id": v},
+        "hypothesis", lambda v: v, id="experiment-hypothesis_id",
+    ),
+    pytest.param(
+        "experiment", "id",
+        lambda v: {"id": v, "title": "t"},
+        "id", lambda v: v, id="experiment-id",
+    ),
+    pytest.param(
+        "idea", "id",
+        lambda v: {"id": v, "title": "t"},
+        "id", lambda v: v, id="idea-id",
+    ),
+    pytest.param(
+        "paper", "id",
+        lambda v: {"id": v, "title": "t", "paper_num": "131"},
+        "id", lambda v: v, id="paper-id",
+    ),
+    pytest.param(
+        "hypothesis", "id",
+        lambda v: {"id": v, "title": "t", "paper": "130", "n": "1"},
+        "id", lambda v: v, id="hypothesis-id",
+    ),
+    pytest.param(
+        "hypothesis", "paper",
+        lambda v: {"id": "H130.1", "title": "t", "paper": v, "n": "1"},
+        "paper", lambda v: f"PAPER-{v}", id="hypothesis-paper",
+    ),
+    pytest.param(
+        "experiment", "paper",
+        lambda v: {
+            "id": "EXPR-001", "title": "t", "paper": v, "n": "1",
+            "hypothesis_id": "H130.1",
+        },
+        "paper", lambda v: f"PAPER-{v}", id="experiment-paper",
+    ),
+]
+
+
+def _render_or_refuse(engine, item_type: str, variables: dict) -> str | None:
+    """Render; None if render REFUSED with a plain ValueError (ID validation).
+
+    re.error (and anything else) is an assertion failure.
+    """
+    try:
+        return engine.render("hdd", item_type, variables)
+    except re.error as exc:
+        raise AssertionError(f"render raised re.error {exc!r} for {variables!r}") from None
+    except ValueError:
+        return None
+    except Exception as exc:
+        raise AssertionError(f"render raised {exc!r} for {variables!r}") from None
+
+
+def _heading_lines(content: str) -> list[str]:
+    return [line for line in content.split("\n") if line.startswith("# ")]
+
+
+def _cli_crashed(result) -> bool:
+    """A non-Click exception escaped (CliRunner stores it; SystemExit is clean)."""
+    return result.exception is not None and not isinstance(result.exception, SystemExit)
+
+
+# IDs with control characters (#161 review, round 2): the refusal must not echo
+# them raw -- an ESC starts a terminal escape sequence, `\r` overwrites the line,
+# `\x07` rings the bell, `\n` splits the error line -- but it must still name
+# the value, in an escaped form.
+_CONTROL_CHAR_IDS = [
+    pytest.param("H1\x1b[31mRED", id="esc"),
+    pytest.param("H1\nX", id="newline"),
+    pytest.param("H1\n", id="trailing-newline"),
+    pytest.param("H1\rX", id="carriage-return"),
+    pytest.param("H1\x07", id="bell"),
+]
+
+_RAW_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _escaped_forms(value: str) -> list[str]:
+    """Acceptable escaped renderings of `value`: repr-style or JSON-style."""
+    import json
+
+    return [repr(value)[1:-1], json.dumps(value)[1:-1]]
+
+
+def _assert_clean_control_char_refusal(result, value: str, written: list) -> None:
+    assert not _cli_crashed(result), (result.output, repr(result.exception))
+    assert result.exit_code != 0, f"accepted {value!r}: {result.output!r}"
+    assert not written, f"a refused create wrote {written}"
+    out = result.output
+    assert not _RAW_CONTROL.search(out), f"raw control character in output: {out!r}"
+    error_lines = [line for line in out.split("\n") if line.startswith("Error:")]
+    assert len(error_lines) == 1, f"expected one Error: line: {out!r}"
+    assert any(form in error_lines[0] for form in _escaped_forms(value)), (
+        f"Error line does not name {value!r} in an escaped form: {error_lines[0]!r}"
+    )
+
+
+class TestTemplateReplacementValuesIssue161:
+    """id/paper/hypothesis_id/authors never go through re.sub replacement strings;
+    the heading is pinned for special titles (#161)."""
+
+    # --- TemplateEngine.render: ids -------------------------------------
+
+    @pytest.mark.parametrize("value", _REPLACEMENT_VALUES)
+    @pytest.mark.parametrize("item_type, key, make_vars, fm_key, expected", _ID_RENDERS)
+    def test_render_id_value_round_trips_or_is_refused(
+        self, engine, item_type, key, make_vars, fm_key, expected, value,
+    ):
+        """No re.error; the frontmatter value reads back exactly, or render refuses."""
+        variables = make_vars(value)
+        variables["date"] = "2026-02-27"
+        content = _render_or_refuse(engine, item_type, variables)
+        if content is None:
+            return  # refused with ValueError: the "validate those IDs" fix
+        fm = _parse_frontmatter(content)
+        assert fm[fm_key] == expected(value), (fm_key, fm[fm_key], content[:400])
+
+    # --- TemplateEngine.render: authors ---------------------------------
+
+    @pytest.mark.parametrize("value", _REPLACEMENT_VALUES)
+    def test_render_single_author_reads_back_exactly(self, engine, value):
+        """`authors` is free text, not an id: it must render and read back as [value]."""
+        fm = _render_frontmatter(engine, "paper", {
+            "id": "PAPER-131", "title": "T", "paper_num": "131",
+            "authors": value, "date": "2026-02-27",
+        })
+        assert fm["authors"] == [value]
+
+    def test_render_author_list_with_backslash_reads_back_as_list(self, engine):
+        """A comma-separated author list keeps its shape: one element per author."""
+        fm = _render_frontmatter(engine, "paper", {
+            "id": "PAPER-131", "title": "T", "paper_num": "131",
+            "authors": "Alice, A\\d, X\\g<0>Y", "date": "2026-02-27",
+        })
+        assert fm["authors"] == ["Alice", "A\\d", "X\\g<0>Y"]
+
+    # --- Heading pin (#161 item 2) --------------------------------------
+
+    @pytest.mark.parametrize("title", [
+        pytest.param("first line\nsecond line", id="newline"),
+        pytest.param("a\\b and \\d", id="backslash-b"),
+        pytest.param("ends with a backslash\\", id="trailing-backslash"),
+        pytest.param("[x] done & X\\g<0>Y", id="brackets-groupref"),
+        pytest.param("one\ntwo\nthree\\", id="newlines-and-backslash"),
+    ])
+    @pytest.mark.parametrize("item_type", [
+        "idea", "literature", "paper", "hypothesis", "experiment", "measure",
+    ])
+    def test_heading_is_title_with_newlines_as_spaces(self, engine, item_type, title):
+        """Exactly one `# ` heading, equal to `# ` + the title joined on spaces."""
+        base = {"id": "X-001", "date": "2026-02-27"}
+        content = _render_or_refuse(engine, item_type, {**base, "title": title})
+        assert content is not None, "render refused an ordinary id"
+        plain = engine.render("hdd", item_type, {**base, "title": "Plain"})
+
+        expected = "# " + title.replace("\n", " ")
+        headings = _heading_lines(content)
+        assert headings == [expected], headings
+        # No body spill: what follows the heading is what follows it for a plain title
+        after = content.split("\n")[content.split("\n").index(expected) + 1:][:3]
+        plain_after = plain.split("\n")[plain.split("\n").index("# Plain") + 1:][:3]
+        assert after == plain_after
+
+    # --- CLI -------------------------------------------------------------
+
+    @pytest.mark.parametrize("value", _REPLACEMENT_VALUES)
+    def test_experiment_create_hypothesis_round_trips_or_clean_error(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`experiment create --hypothesis <value>`: no traceback; value or clean error."""
+        result = runner.invoke(main, [
+            "experiment", "create", "--title", "t", "--hypothesis", value,
+        ])
+        assert not _cli_crashed(result), (result.output, repr(result.exception))
+        exp_dir = temp_repo / "research" / "experiments"
+        if result.exit_code == 0:
+            fm = _read_frontmatter(_only_file(exp_dir, "EXPR-001"))
+            assert fm["hypothesis"] == value
+            assert "EXPR-001" in _listed_ids(runner)
+        else:
+            assert "Error" in result.output, result.output
+            assert value in result.output, result.output
+            assert not list(exp_dir.glob("EXPR-*.md")), "a refused create wrote a file"
+
+    @pytest.mark.parametrize("value", _REPLACEMENT_VALUES)
+    def test_experiment_create_id_round_trips_or_clean_error(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`experiment create EXPR-<value>`: no traceback; id reads back or clean error."""
+        expr_id = f"EXPR-{value}"
+        result = runner.invoke(main, ["experiment", "create", expr_id, "--title", "t"])
+        assert not _cli_crashed(result), (result.output, repr(result.exception))
+        exp_dir = temp_repo / "research" / "experiments"
+        files = list(exp_dir.glob("*.md"))
+        if result.exit_code == 0:
+            assert len(files) == 1, files
+            assert _read_frontmatter(files[0])["id"] == expr_id
+        else:
+            assert "Error" in result.output, result.output
+            assert not files, f"a refused create wrote {files}"
+
+    @pytest.mark.parametrize("value", _REPLACEMENT_VALUES)
+    def test_hypothesis_create_id_round_trips_or_clean_error(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`hypothesis create --paper 130 --id <value>`: no traceback; id or clean error."""
+        result = runner.invoke(main, [
+            "hypothesis", "create", "Better recall", "--paper", "130", "--id", value,
+        ])
+        assert not _cli_crashed(result), (result.output, repr(result.exception))
+        hyp_dir = temp_repo / "research" / "hypotheses"
+        files = list(hyp_dir.glob("*.md"))
+        if result.exit_code == 0:
+            assert len(files) == 1, files
+            assert _read_frontmatter(files[0])["id"] == value
+        else:
+            assert "Error" in result.output, result.output
+            assert not files, f"a refused create wrote {files}"
+
+    @pytest.mark.parametrize("value", _REPLACEMENT_VALUES)
+    def test_paper_create_authors_round_trip(self, runner, temp_repo, hdd_config, value):
+        """`paper create 131 T --authors <value>` exits 0; authors read back as [value]."""
+        result = runner.invoke(main, ["paper", "create", "131", "T", "--authors", value])
+        assert not _cli_crashed(result), (result.output, repr(result.exception))
+        assert result.exit_code == 0, result.output
+        fm = _read_frontmatter(_only_file(temp_repo / "research" / "papers", "PAPER-131"))
+        assert fm["authors"] == [value]
+        assert "PAPER-131" in _listed_ids(runner)
+
+    # --- Control characters in a refused id (round 2) -------------------
+
+    @pytest.mark.parametrize("value", _CONTROL_CHAR_IDS)
+    def test_hypothesis_create_control_char_id_refused_escaped(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`hypothesis create --id` with a control char: clean Error:, value escaped."""
+        result = runner.invoke(main, [
+            "hypothesis", "create", "Better recall", "--paper", "130", "--id", value,
+        ], color=True)  # color=True: CliRunner must not strip ANSI
+        written = list((temp_repo / "research" / "hypotheses").glob("*.md"))
+        _assert_clean_control_char_refusal(result, value, written)
+
+    @pytest.mark.parametrize("value", _CONTROL_CHAR_IDS)
+    def test_experiment_create_control_char_hypothesis_refused_escaped(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """`experiment create --hypothesis` with a control char: clean Error:, escaped."""
+        result = runner.invoke(main, [
+            "experiment", "create", "--title", "t", "--hypothesis", value,
+        ], color=True)  # color=True: CliRunner must not strip ANSI
+        written = list((temp_repo / "research" / "experiments").glob("*.md"))
+        _assert_clean_control_char_refusal(result, value, written)
+
+    @pytest.mark.parametrize("value", ["H1\\b", "X&Y", "X\\g<0>Y"])
+    def test_control_printable_invalid_id_shown_as_typed(
+        self, runner, temp_repo, hdd_config, value,
+    ):
+        """Control: a printable-but-invalid id is still echoed exactly as typed."""
+        result = runner.invoke(main, [
+            "hypothesis", "create", "Better recall", "--paper", "130", "--id", value,
+        ])
+        assert not _cli_crashed(result), (result.output, repr(result.exception))
+        assert result.exit_code != 0, result.output
+        assert "Error:" in result.output
+        assert value in result.output, result.output
+
+    # --- Negative controls: ordinary values render exactly as today -----
+
+    def test_control_ordinary_experiment_frontmatter_unchanged(self, engine):
+        """Ordinary id/paper/hypothesis_id keep today's unquoted lines."""
+        content = engine.render("hdd", "experiment", {
+            "id": "EXPR-130", "title": "V12 accuracy test", "paper": "130",
+            "n": "1", "hypothesis_id": "H130.1", "date": "2026-02-27",
+        })
+        assert content.startswith(
+            "---\n"
+            "id: EXPR-130\n"
+            'title: "V12 accuracy test"\n'
+            "type: experiment\n"
+            "status: draft\n"
+            "created: 2026-02-27\n"
+            "paper: PAPER-130\n"
+            "hypothesis: H130.1\n"
+        ), content[:300]
+        assert _heading_lines(content) == ["# V12 accuracy test"]
+
+    def test_control_ordinary_hypothesis_frontmatter_unchanged(self, engine):
+        content = engine.render("hdd", "hypothesis", {
+            "id": "H130.1", "title": "V12 improves accuracy", "paper": "130",
+            "n": "1", "target": ">=50%", "date": "2026-02-27",
+        })
+        assert content.startswith(
+            "---\n"
+            "id: H130.1\n"
+            'title: "V12 improves accuracy"\n'
+            "type: hypothesis\n"
+            "status: draft\n"
+            "created: 2026-02-27\n"
+            "paper: PAPER-130\n"
+            'target: ">=50%"\n'
+        ), content[:300]
+
+    @pytest.mark.parametrize("authors, line, parsed", [
+        pytest.param("Alice, Bob", "authors: [Alice, Bob]\n", ["Alice", "Bob"], id="two"),
+        pytest.param("Alice", "authors: [Alice]\n", ["Alice"], id="one"),
+    ])
+    def test_control_ordinary_authors_unchanged(self, engine, authors, line, parsed):
+        content = engine.render("hdd", "paper", {
+            "id": "PAPER-131", "title": "Training Methodology", "paper_num": "131",
+            "authors": authors, "date": "2026-02-27",
+        })
+        assert "\nid: PAPER-131\n" in content
+        assert "\n" + line in content, content[:300]
+        assert _parse_frontmatter(content)["authors"] == parsed
+
+    def test_control_paper_without_authors_keeps_empty_list(self, engine):
+        content = engine.render("hdd", "paper", {
+            "id": "PAPER-131", "title": "T", "paper_num": "131", "date": "2026-02-27",
+        })
+        assert "\nauthors: []\n" in content
+
+    def test_control_ordinary_cli_creates_unchanged(self, runner, temp_repo, hdd_config):
+        """Ordinary CLI creates write today's lines and still list."""
+        r1 = runner.invoke(main, [
+            "paper", "create", "131", "Training Methodology", "--authors", "Alice, Bob",
+        ], catch_exceptions=False)
+        assert r1.exit_code == 0, r1.output
+        paper_text = _only_file(temp_repo / "research" / "papers", "PAPER-131").read_text()
+        assert "\nauthors: [Alice, Bob]\n" in paper_text
+        assert "\n# Training Methodology\n" in paper_text
+
+        r2 = runner.invoke(main, [
+            "experiment", "create", "EXPR-130", "--hypothesis", "H130.1",
+            "--title", "V12 accuracy test",
+        ], catch_exceptions=False)
+        assert r2.exit_code == 0, r2.output
+        exp_text = _only_file(temp_repo / "research" / "experiments", "EXPR-130").read_text()
+        assert "\nid: EXPR-130\n" in exp_text
+        assert "\npaper: PAPER-130\n" in exp_text
+        assert "\nhypothesis: H130.1\n" in exp_text
+        assert {"PAPER-131", "EXPR-130"} <= set(_listed_ids(runner))
 
 
 # ---------------------------------------------------------------------------
