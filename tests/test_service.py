@@ -4343,6 +4343,172 @@ class TestWarnOnUnparseableItems:
         assert not self._lines_naming(result.stderr, turtle_rel), result.stderr
 
 
+class TestUnparseableWarningFollowups:
+    """Follow-ups to the #139 warnings: broken YAML whose first key merely starts
+    with "prefix"/"base" is no longer mistaken for Turtle; files that fail to
+    read or fail after the frontmatter parses are reported too; and `show <ID>`
+    on a broken file says why instead of only "Item not found" (#158)."""
+
+    FEATURES = Path("kanban-work") / "features"
+
+    _write_valid = staticmethod(TestWarnOnUnparseableItems._write_valid)
+    _invoke = staticmethod(TestWarnOnUnparseableItems._invoke)
+    _lines_naming = staticmethod(TestWarnOnUnparseableItems._lines_naming)
+
+    # ---- 1. The Turtle check no longer over-matches YAML -----------------
+
+    @pytest.mark.parametrize(
+        "first_line", ["base : x", "prefix foo: bar", "Base url: x"],
+    )
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"]])
+    def test_broken_yaml_with_prefix_or_base_like_first_key_is_warned(
+        self, temp_repo, software_config, monkeypatch, first_line, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        rel = self.FEATURES / "FEAT-002-broken.md"
+        (temp_repo / rel).write_text(
+            f"---\n{first_line}\nid: FEAT-002\ntitle: [unclosed\ntype: feature\n"
+            "status: backlog\n---\n\n# broken\n"
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        lines = self._lines_naming(result.stderr, rel)
+        assert len(lines) == 1, (
+            f"expected one stderr warning naming {rel}; stderr={result.stderr!r}"
+        )
+        assert not self._lines_naming(result.stdout, rel), result.stdout
+
+    TURTLE_CONTROLS = {
+        "at-prefix": "@prefix ex: <http://x/> .\n<> a ex:Doc .\n",
+        "at-base": "@base <http://x/> .\n<> a <http://x/Doc> .\n",
+        "sparql-prefix": "PREFIX ex: <http://x/>\n<> a ex:Doc .\n",
+        "sparql-base": "BASE <http://x/>\n<> a <http://x/Doc> .\n",
+    }
+
+    @pytest.mark.parametrize("kind", list(TURTLE_CONTROLS))
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_real_turtle_frontmatter_stays_silent(
+        self, temp_repo, software_config, monkeypatch, kind, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "research-note.md").write_text(
+            "---\n" + self.TURTLE_CONTROLS[kind] + "---\n\n# A note\n"
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        if args == ["list", "--json"]:
+            assert [d["id"] for d in json.loads(result.stdout)] == ["FEAT-001"]
+        assert result.stderr == "", result.stderr
+
+    @pytest.mark.parametrize("first_key", ["prefix: x", "base: x"])
+    def test_valid_yaml_with_prefix_or_base_key_is_listed(
+        self, temp_repo, software_config, monkeypatch, first_key,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "FEAT-002-keyed.md").write_text(
+            f"---\n{first_key}\nid: FEAT-002\ntitle: \"keyed item\"\ntype: feature\n"
+            "status: backlog\n---\n\n# keyed item\n"
+        )
+
+        result = self._invoke(["list", "--json"])
+
+        ids = sorted(d["id"] for d in json.loads(result.stdout))
+        assert ids == ["FEAT-001", "FEAT-002"], result.stdout
+        assert result.stderr == "", result.stderr
+
+    # ---- 2. Read failures and post-parse failures are reported -----------
+
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"]])
+    def test_non_utf8_file_is_warned(
+        self, temp_repo, software_config, monkeypatch, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        rel = self.FEATURES / "FEAT-009-latin1.md"
+        (temp_repo / rel).write_bytes(b'---\nid: FEAT-009\ntitle: "\xff"\n---\n')
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        lines = self._lines_naming(result.stderr, rel)
+        assert len(lines) == 1, (
+            f"expected one stderr warning naming {rel}; stderr={result.stderr!r}"
+        )
+        # The exception is the reason (a UnicodeDecodeError: "... can't decode ...")
+        assert re.search(r"decode|unicode|utf-?8", lines[0], re.IGNORECASE), lines[0]
+
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"]])
+    def test_post_parse_failure_is_warned_with_exception(
+        self, temp_repo, software_config, monkeypatch, args,
+    ):
+        """`status: [backlog]` parses as YAML but `_parse_file` then raises
+        (`'list' object has no attribute 'lower'`), which used to be dropped at
+        debug level."""
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        rel = self.FEATURES / "FEAT-003-list-status.md"
+        (temp_repo / rel).write_text(
+            "---\nid: FEAT-003\ntitle: \"list status\"\ntype: feature\n"
+            "status: [backlog]\n---\n\n# list status\n"
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        lines = self._lines_naming(result.stderr, rel)
+        assert len(lines) == 1, (
+            f"expected one stderr warning naming {rel}; stderr={result.stderr!r}"
+        )
+        assert re.search(r"AttributeError|has no attribute", lines[0]), lines[0]
+
+    # ---- 3. `show <ID>` on a broken file explains why ----------------------
+
+    @staticmethod
+    def _flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def test_show_broken_item_names_file_and_reason(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "FEAT-002-broken.md").write_text(
+            "---\nid: FEAT-002\ntitle: \"broken\"\ntype: feature\nstatus: backlog\n"
+            "\n# broken\n\nNo closing delimiter anywhere.\n"
+        )
+
+        result = CliRunner().invoke(main, ["show", "FEAT-002"])
+
+        assert result.exit_code != 0, result.output
+        out = self._flat(result.output)
+        assert "FEAT-002-broken.md" in out, result.output
+        assert "no closing ---" in out, result.output
+
+    def test_show_missing_item_has_no_hint(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "FEAT-002-broken.md").write_text(
+            "---\nid: FEAT-002\ntitle: \"broken\"\n\n# no closing\n"
+        )
+
+        result = CliRunner().invoke(main, ["show", "FEAT-999"])
+
+        assert result.exit_code != 0, result.output
+        out = self._flat(result.output)
+        assert "Item not found" in out, result.output
+        assert "FEAT-002-broken.md" not in out, result.output
+        assert "parse" not in out.lower(), result.output
+
+
 # --- #153: a non-string priority is refused with a ValueError naming it -----
 
 
