@@ -2133,3 +2133,304 @@ class TestFrontmatterValuesRoundTrip:
         assert "\nstatus: backlog\n" in f"\n{front}\n"
         assert "\npriority: high\n" in f"\n{front}\n"
         self._assert_reads_back(runner, temp_repo, value)
+
+
+# ---------------------------------------------------------------------------
+# Issue #105 — a frontmatter edit replaces the key's WHOLE value
+# ---------------------------------------------------------------------------
+
+
+class TestFrontmatterEditReplacesWholeValue:
+    """Editing a frontmatter key replaces its whole value, continuation lines too (#105)."""
+
+    _BODY = (
+        "\n# probe\n\n"
+        "Body text that must survive untouched.\n\n"
+        "  - alice\n"
+        "assignee: body-text\n"
+        "status: body-text\n\n"
+        "---\n\n"
+        "notes after a rule\n"
+    )
+
+    @staticmethod
+    def _run(runner: CliRunner, args: list[str]):
+        """Invoke the CLI; a crash fails as an assertion, not a raw exception."""
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (
+            f"{args} exited {result.exit_code}: {result.exception!r}\n{result.output}"
+        )
+        return result
+
+    @staticmethod
+    def _item_file(repo: Path) -> Path:
+        files = list((repo / "kanban-work" / "features").glob("FEAT-001*.md"))
+        assert len(files) == 1, files
+        return files[0]
+
+    @staticmethod
+    def _split(path: Path) -> tuple[str, str]:
+        """(frontmatter text, body text) split on the first whole `---` closer."""
+        text = path.read_text()
+        lines = text.split("\n")
+        assert lines[0] == "---"
+        close = lines.index("---", 1)
+        return "\n".join(lines[1:close]), "\n".join(lines[close + 1:])
+
+    def _frontmatter(self, path: Path) -> dict:
+        front, _ = self._split(path)
+        try:
+            fm = yaml.safe_load(front)
+        except yaml.YAMLError as exc:
+            pytest.fail(f"frontmatter is not valid YAML: {exc}\n{path.read_text()}")
+        assert isinstance(fm, dict), front
+        return fm
+
+    def _setup(self, repo: Path, runner: CliRunner, middle: str) -> Path:
+        """create FEAT-001, then hand-edit its frontmatter to carry `middle`.
+
+        `middle` is spliced between fixed leading keys and fixed trailing
+        keys (`created:` and a `tags:` block list) so tests can check the
+        keys after the edited one survive exactly.
+        """
+        self._run(runner, ["create", "feature", "probe"])
+        path = self._item_file(repo)
+        path.write_text(
+            "---\n"
+            "id: FEAT-001\n"
+            'title: "probe"\n'
+            "type: feature\n"
+            f"{middle}"
+            "created: 2026-09-24\n"
+            "tags:\n"
+            "  - one\n"
+            "  - two\n"
+            "---\n" + self._BODY
+        )
+        # Sanity: the hand-edited file is valid YAML to begin with.
+        self._frontmatter(path)
+        return path
+
+    def _assert_tail_and_body_intact(self, path: Path) -> None:
+        front, body = self._split(path)
+        assert front.endswith(
+            "\ncreated: 2026-09-24\ntags:\n  - one\n  - two"
+        ), front
+        # `move` may append its own ```yurtle status block after the body;
+        # everything that was already there must be byte-for-byte intact.
+        assert body.startswith(self._BODY), body
+        fm = self._frontmatter(path)
+        assert fm["created"] is not None
+        assert fm["tags"] == ["one", "two"]
+        assert fm["id"] == "FEAT-001"
+
+    def _show(self, runner: CliRunner) -> dict:
+        data = json.loads(self._run(runner, ["show", "FEAT-001", "--json"]).output)
+        assert data["id"] == "FEAT-001"
+        return data
+
+    def _listed_for(self, runner: CliRunner, assignee: str) -> list[str]:
+        out = self._run(runner, ["list", "--assignee", assignee, "--json"]).output
+        if "No work items found" in out:
+            return []
+        return [i["id"] for i in json.loads(out)]
+
+    # -- the issue's repro: assignee as a block list ------------------------
+
+    def test_move_assign_replaces_block_list_assignee(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`move -a carol` over `assignee:\\n  - alice\\n  - bob` yields exactly carol."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee:\n  - alice\n  - bob\n",
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        assert self._show(runner)["assignee"] == "carol"
+        assert self._listed_for(runner, "carol") == ["FEAT-001"]
+        fm = self._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm["status"] == "ready"
+        front, _ = self._split(path)
+        assert "- alice" not in front
+        assert "- bob" not in front
+        self._assert_tail_and_body_intact(path)
+
+    def test_move_assign_replaces_folded_plain_continuation(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`assignee: carol\\n  smith` (one plain scalar over two lines) is fully replaced."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: carol\n  smith\n",
+        )
+        assert self._frontmatter(path)["assignee"] == "carol smith"
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "dave", "--no-commit"])
+
+        assert self._show(runner)["assignee"] == "dave"
+        assert self._listed_for(runner, "dave") == ["FEAT-001"]
+        assert self._frontmatter(path)["assignee"] == "dave"
+        front, _ = self._split(path)
+        assert "smith" not in front
+        self._assert_tail_and_body_intact(path)
+
+    # -- status (the same helper) --------------------------------------------
+
+    @pytest.mark.parametrize(
+        "status_form",
+        [
+            pytest.param("status:\n  backlog\n", id="value-on-next-line"),
+            pytest.param("status: >-\n  backlog\n", id="folded-block-scalar"),
+        ],
+    )
+    def test_move_replaces_multiline_status(
+        self, temp_repo, software_config, monkeypatch, status_form,
+    ):
+        """A status written over several lines is replaced whole by `move`."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            f"{status_form}priority: medium\nassignee: alice\n",
+        )
+        assert self._frontmatter(path)["status"] == "backlog"
+
+        self._run(runner, ["move", "FEAT-001", "ready", "--no-commit"])
+
+        assert self._show(runner)["status"] == "ready"
+        fm = self._frontmatter(path)
+        assert fm["status"] == "ready"
+        assert fm["assignee"] == "alice"
+        front, _ = self._split(path)
+        assert "backlog" not in front
+        self._assert_tail_and_body_intact(path)
+
+    # -- priority_rank / value_summary via `rank` ---------------------------
+
+    def test_rank_replaces_multiline_value_summary(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`rank --summary` replaces a folded, multi-line value_summary whole."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\n"
+            "value_summary: >-\n  old value\n  spanning lines\n",
+        )
+        assert self._frontmatter(path)["value_summary"] == "old value spanning lines"
+
+        self._run(
+            runner, ["rank", "FEAT-001", "1", "--summary", "new value", "--no-commit"],
+        )
+
+        data = self._show(runner)
+        assert data["value_summary"] == "new value"
+        assert data["priority_rank"] == 1
+        fm = self._frontmatter(path)
+        assert fm["value_summary"] == "new value"
+        front, _ = self._split(path)
+        assert "old value" not in front
+        assert "spanning lines" not in front
+        self._assert_tail_and_body_intact(path)
+
+    def test_rank_replaces_priority_rank_on_continuation_line(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`priority_rank:\\n  7` (value on an indented line) is replaced whole by `rank`."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\npriority_rank:\n  7\n",
+        )
+        assert self._frontmatter(path)["priority_rank"] == 7
+
+        self._run(runner, ["rank", "FEAT-001", "1", "--no-commit"])
+
+        assert self._show(runner)["priority_rank"] == 1
+        assert self._frontmatter(path)["priority_rank"] == 1
+        self._assert_tail_and_body_intact(path)
+
+    # -- negative controls (must stay green) --------------------------------
+
+    def test_control_single_line_assignee_replaced_following_keys_exact(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A single-line value is replaced as today; later keys and body are untouched."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\n",
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        front, _ = self._split(path)
+        assert front == (
+            "id: FEAT-001\n"
+            'title: "probe"\n'
+            "type: feature\n"
+            "status: ready\n"
+            "priority: medium\n"
+            "assignee: carol\n"
+            "created: 2026-09-24\n"
+            "tags:\n"
+            "  - one\n"
+            "  - two"
+        )
+        assert self._show(runner)["assignee"] == "carol"
+        assert self._listed_for(runner, "carol") == ["FEAT-001"]
+        self._assert_tail_and_body_intact(path)
+
+    def test_control_same_prefix_key_untouched(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`assignee_note:` right after `assignee:` is not part of assignee's value."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\npriority: medium\nassignee: alice\n"
+            "assignee_note: keep me\n",
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        front, _ = self._split(path)
+        assert "\nassignee: carol\nassignee_note: keep me\n" in f"\n{front}\n"
+        fm = self._frontmatter(path)
+        assert fm["assignee"] == "carol"
+        assert fm["assignee_note"] == "keep me"
+        self._assert_tail_and_body_intact(path)
+
+    def test_control_status_edit_leaves_following_block_list_key(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A single-line status followed by a key with an indented block is untouched."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._setup(
+            temp_repo, runner,
+            "status: backlog\nreviewers:\n  - x\n  - y\npriority: medium\n"
+            "assignee: alice\n",
+        )
+
+        self._run(runner, ["move", "FEAT-001", "ready", "--no-commit"])
+
+        front, _ = self._split(path)
+        assert "\nstatus: ready\nreviewers:\n  - x\n  - y\npriority: medium\n" in (
+            f"\n{front}\n"
+        )
+        fm = self._frontmatter(path)
+        assert fm["reviewers"] == ["x", "y"]
+        assert fm["status"] == "ready"
+        self._assert_tail_and_body_intact(path)
