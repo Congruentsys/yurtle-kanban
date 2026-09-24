@@ -304,8 +304,9 @@ class WorkItem:
 
         if self.priority:
             lines.append(f"priority: {self.priority}")
-        if self.assignee:
-            lines.append(f"assignee: {self.assignee}")
+        # Always include assignee (null when unset), matching the templates,
+        # so the key is present for later moves to fill in
+        lines.append(f"assignee: {self.assignee or 'null'}")
         if self.created:
             lines.append(f"created: {self.created.isoformat()}")
         if self.tags:

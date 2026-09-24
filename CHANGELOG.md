@@ -5,6 +5,16 @@ All notable changes to yurtle-kanban are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`move --assign` reported an assignment it never wrote** whenever the item
+  had no `assignee:` key, so `list --assignee` lost track of claimed work
+  (#97). `move` now adds `status:`/`assignee:` when absent instead of only
+  updating an existing line, and `create` always writes `assignee: null`,
+  matching the scaffolded templates.
+
 ## [2.2.0] - 2026-08-30
 
 ### Fixed
