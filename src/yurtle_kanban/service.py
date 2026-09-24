@@ -170,8 +170,12 @@ class KanbanService:
         # The board always scans the type folders it writes into (#113), even
         # when the configured scan_paths leave one out
         for type_dir in self._placement_dirs():
+            # Only folders inside the repo; an absolute root elsewhere is scanned
+            # (or not) exactly as its configured work paths say
+            if not type_dir.exists() or not type_dir.is_relative_to(self.repo_root):
+                continue
             rel = type_dir.relative_to(self.repo_root)
-            if type_dir.exists() and not any(rel == s or s in rel.parents for s in work_paths):
+            if not any(rel == s or s in rel.parents for s in work_paths):
                 for item in self._scan_directory(type_dir):
                     self._items[item.id] = item
 
