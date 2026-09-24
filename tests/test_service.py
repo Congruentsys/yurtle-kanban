@@ -4445,3 +4445,173 @@ class TestIndexerMarkedUnused:
         doc = (indexer.__doc__ or "").lower()
         assert "unused" in doc or "not used" in doc, indexer.__doc__
         assert "single-board" in doc or "single board" in doc, indexer.__doc__
+
+
+def _item_text(item_id: str, item_type: str, title: str) -> str:
+    """A minimal, valid work-item file."""
+    return (
+        "---\n"
+        f"id: {item_id}\n"
+        f'title: "{title}"\n'
+        f"type: {item_type}\n"
+        "status: backlog\n"
+        "priority: medium\n"
+        "created: 2026-09-24\n"
+        "---\n\n"
+        f"# {item_id}: {title}\n"
+    )
+
+
+def _ok(result) -> None:
+    """A CLI result exited 0 with no exception (a ValueError becomes a failure, not an error)."""
+    assert result.exception is None, repr(result.exception)
+    assert result.exit_code == 0, result.output
+
+
+class TestBoardRootOutsideRepo:
+    """A board root outside the repo (``init --path /abs/dir/`` or ``root: /abs/``) is
+    tolerated: create/list/show never crash; ignore patterns match the absolute path
+    for files outside the repo and the repo-relative path for files inside it (#156)."""
+
+    _IGNORE = ["**/archive/**", "**/templates/**", "**/_TEMPLATE*"]
+
+    @pytest.fixture
+    def dirs(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        return repo, outside
+
+    @classmethod
+    def _yaml(cls, root: str, scan_paths: list[str] | None = None) -> str:
+        lines = ["kanban:", "  theme: software", "  paths:", f"    root: {root}"]
+        if scan_paths is not None:
+            lines.append("    scan_paths:")
+            lines += [f'      - "{p}"' for p in scan_paths]
+        lines.append("    ignore:")
+        lines += [f'      - "{p}"' for p in cls._IGNORE]
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _list_ids(runner: CliRunner) -> set[str]:
+        listed = runner.invoke(main, ["list", "--json"])
+        _ok(listed)
+        # `list --json` prints a JSON array of items, or "No work items found."
+        return set(re.findall(r'"id": "([^"]+)"', listed.output))
+
+    # -- Do: init --path outside, then create twice ---------------------------
+
+    def test_init_path_outside_then_two_creates_list_and_show(
+        self, dirs, monkeypatch,
+    ):
+        """`init --path <outside>/`, then two creates (the second used to raise
+        ValueError from relative_to), then list and show all work."""
+        import subprocess
+
+        from yurtle_kanban import config as config_mod
+
+        repo, outside = dirs
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, capture_output=True, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(repo)
+        runner = CliRunner()
+        try:
+            _ok(runner.invoke(main, ["init", "--theme", "software", "--path", f"{outside}/"]))
+            config_mod._theme_cache.clear()
+
+            _ok(runner.invoke(main, ["create", "feature", "a"]))
+            second = runner.invoke(main, ["create", "feature", "b"])
+            _ok(second)
+
+            files = sorted(p for p in outside.rglob("FEAT-*.md"))
+            assert len(files) == 2, files
+            assert not list(repo.rglob("FEAT-*.md")), list(repo.rglob("FEAT-*.md"))
+
+            ids = self._list_ids(runner)
+            assert {"FEAT-001", "FEAT-002"} <= ids, ids
+            assert not any("XXX" in i for i in ids), f"_TEMPLATE listed: {ids}"
+
+            shown = runner.invoke(main, ["show", "FEAT-001"])
+            _ok(shown)
+            assert "FEAT-001" in shown.output, shown.output
+        finally:
+            config_mod._theme_cache.clear()
+
+    # -- Do: hand-written absolute root ----------------------------------------
+
+    def test_config_absolute_root_outside_lists_item(self, dirs, board_runner):
+        """`root: <abs outside>/` with an item file there: `list` shows it."""
+        repo, outside = dirs
+        (outside / "features").mkdir()
+        (outside / "features" / "FEAT-001-a.md").write_text(_item_text("FEAT-001", "feature", "a"))
+        runner = board_runner(repo, self._yaml(f"{outside}/", [f"{outside}/"]))
+
+        ids = self._list_ids(runner)
+
+        assert "FEAT-001" in ids, ids
+
+    def test_ignore_patterns_apply_outside_repo(self, dirs, board_runner):
+        """Outside the repo, `**/archive/**` and `**/_TEMPLATE*` still hide files,
+        matched against the absolute path."""
+        repo, outside = dirs
+        feats = outside / "features"
+        (feats / "archive").mkdir(parents=True)
+        (feats / "FEAT-001-live.md").write_text(_item_text("FEAT-001", "feature", "live"))
+        (feats / "archive" / "FEAT-002-old.md").write_text(
+            _item_text("FEAT-002", "feature", "old"),
+        )
+        (feats / "_TEMPLATE.md").write_text(_item_text("FEAT-900", "feature", "template"))
+        runner = board_runner(repo, self._yaml(f"{outside}/", [f"{outside}/"]))
+
+        ids = self._list_ids(runner)
+
+        assert "FEAT-001" in ids, ids
+        assert "FEAT-002" not in ids, f"archived item listed: {ids}"
+        assert "FEAT-900" not in ids, f"_TEMPLATE listed: {ids}"
+
+    def test_scan_paths_mixing_in_repo_and_outside(self, dirs, board_runner):
+        """Single-board scan_paths with a relative in-repo path and an absolute
+        outside path: items from both are listed."""
+        repo, outside = dirs
+        (repo / "work" / "features").mkdir(parents=True)
+        (repo / "work" / "features" / "FEAT-001-in.md").write_text(
+            _item_text("FEAT-001", "feature", "in"),
+        )
+        (outside / "bugs").mkdir()
+        (outside / "bugs" / "BUG-001-out.md").write_text(_item_text("BUG-001", "bug", "out"))
+        runner = board_runner(repo, self._yaml("work/", ["work/", f"{outside}/"]))
+
+        ids = self._list_ids(runner)
+
+        assert {"FEAT-001", "BUG-001"} <= ids, ids
+
+    # -- Must stay true: an in-repo board ---------------------------------------
+
+    def test_in_repo_board_ignore_patterns_stay_repo_relative(self, dirs, board_runner):
+        """In-repo files match ignore patterns repo-relative, as before: an anchored
+        pattern (`work/hidden/*`) still hides, archive and _TEMPLATE stay hidden."""
+        repo, _ = dirs
+        feats = repo / "work" / "features"
+        (feats / "archive").mkdir(parents=True)
+        (repo / "work" / "hidden").mkdir()
+        (feats / "FEAT-001-live.md").write_text(_item_text("FEAT-001", "feature", "live"))
+        (feats / "archive" / "FEAT-002-old.md").write_text(
+            _item_text("FEAT-002", "feature", "old"),
+        )
+        (feats / "_TEMPLATE.md").write_text(_item_text("FEAT-900", "feature", "template"))
+        (repo / "work" / "hidden" / "FEAT-003-h.md").write_text(
+            _item_text("FEAT-003", "feature", "hidden"),
+        )
+        config = self._yaml("work/", ["work/"]).replace(
+            '      - "**/archive/**"\n',
+            '      - "**/archive/**"\n      - "work/hidden/*"\n',
+        )
+        runner = board_runner(repo, config)
+
+        ids = self._list_ids(runner)
+
+        assert "FEAT-001" in ids, ids
+        assert "FEAT-002" not in ids, ids
+        assert "FEAT-900" not in ids, ids
+        assert "FEAT-003" not in ids, f"repo-relative pattern stopped matching: {ids}"
