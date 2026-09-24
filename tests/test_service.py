@@ -414,7 +414,7 @@ class TestGetTypeDirectory:
         assert "voyages" in str(path)
 
     def test_root_fallback(self, temp_repo):
-        """If nothing matches, fall back to root."""
+        """If nothing matches, fall back under the root, in the type's own folder (#113)."""
         config = KanbanConfig(
             theme="nonexistent",  # No theme loaded → no theme paths
             paths=PathConfig(root="work/", scan_paths=[]),
@@ -422,7 +422,7 @@ class TestGetTypeDirectory:
         svc = KanbanService(config, temp_repo)
         path = svc._get_type_directory(WorkItemType.FEATURE)
 
-        assert path == temp_repo / "work/"
+        assert path == temp_repo / "work" / "features"
 
 
 class TestForceAuditTrail:
