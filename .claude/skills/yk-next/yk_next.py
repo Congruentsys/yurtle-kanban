@@ -40,9 +40,12 @@ VERDICT = re.compile(
     r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I,
 )
 CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
-# "depends on #5", "Depends on: #5", "blocked by #8, #9", "depends on #6 and #7"
+# "depends on #5", "Depends on: #5", "blocked by #8, #9", "depends on #6, #7, and #8",
+# "Blocked-by: #17", "depends on **#12**" (markdown emphasis), "depends on #6 #7"
 DEPENDS = re.compile(
-    r"(?:depends on|blocked by|requires)\s*:?\s*(#\d+(?:\s*(?:,|and|&|or)?\s*#\d+)*)", re.I,
+    r"(?:depends[\s-]+on|blocked[\s-]+by|requires)[\s*_`:]*"
+    r"(#\d+(?:[\s*_`]*(?:(?:,|and|&|or)[\s*_`]*)*#\d+)*)",
+    re.I,
 )
 PR_FIELDS = (
     "number,title,author,labels,headRefName,headRefOid,isDraft,mergeable,"
@@ -158,7 +161,7 @@ def main() -> None:
             labels |= issue_labels.get(n, set())
         skip = held(labels) + (["draft"] if p.get("isDraft") else [])
         state = "SKIP: " + "; ".join(skip) if skip else my_pr_state(p)
-        print(f"  my PR #{p['number']:<4} {state:24.24} {p['title'][:66]}")
+        print(f"  my PR #{p['number']:<4} {p['title'][:60]}  [{state}]")
         if not skip:
             mine.append((p, state))
     if mine:
@@ -197,7 +200,8 @@ def main() -> None:
 
     print("CANDIDATES:")
     for _, n, i, why in cands:
-        print(f"  #{n:<4} {'SKIP: ' + '; '.join(why) if why else 'ok':40.40}  {i['title'][:70]}")
+        status = "SKIP: " + "; ".join(why) if why else "ok"
+        print(f"  #{n:<4} {i['title'][:60]}  [{status}]")
 
     for _, n, i, why in cands:
         if why:
