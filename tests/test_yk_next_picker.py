@@ -191,3 +191,138 @@ def test_draft_pr_of_mine_is_parked(yk, monkeypatch, capsys):
 def test_bug_claimed_before_lower_unlabelled(yk, monkeypatch, capsys):
     out = run_main(yk, monkeypatch, capsys, [], [issue(3), issue(7, labels=("bug",))])
     assert "WOULD CLAIM ISSUE #7" in out
+
+
+# --- #130: --skip-prs, pairit push/range-diff, bullet-safe DEPENDS, pipelining ------------
+
+YK_LOOP = REPO / ".claude/skills/yk-loop/SKILL.md"
+
+
+def run_main_args(yk: ModuleType, monkeypatch, capsys, prs: list[dict], issues: list[dict],
+                  *flags: str) -> str:
+    """Like run_main, but with extra CLI flags; an argparse rejection becomes a test failure."""
+    def fake_gh(*args: str) -> str:
+        if args[:2] == ("api", "user"):
+            return ME + "\n"
+        raise AssertionError(f"unexpected gh call in dry-run: {args}")
+
+    def fake_gh_json(*args: str):
+        if args[0] == "pr":
+            return [dict(p) for p in prs]
+        if args[0] == "issue" and args[1] == "list":
+            return [dict(i) for i in issues]
+        raise AssertionError(f"unexpected gh_json call: {args}")
+
+    monkeypatch.setattr(yk, "gh", fake_gh)
+    monkeypatch.setattr(yk, "gh_json", fake_gh_json)
+    monkeypatch.setattr(sys, "argv", ["x", "--dry-run", *flags])
+    try:
+        yk.main()
+    except SystemExit as e:
+        err = capsys.readouterr().err
+        pytest.fail(f"picker rejected flags {flags!r} (SystemExit {e.code}): {err.strip()}")
+    return capsys.readouterr().out
+
+
+class TestSkipPrsAndSkillFixes130:
+    """--skip-prs jumps to the claim step with every claim rule applied; pairit step 3 push
+    uses --force-with-lease; range-diff is base-anchored (no K); DEPENDS stops at a markdown
+    bullet; yk-loop's pipelining uses the picker with --skip-prs (#130)"""
+
+    # 1. --skip-prs -------------------------------------------------------------------------
+
+    def test_skip_prs_claims_issue_while_my_pr_in_review(self, yk, monkeypatch, capsys):
+        prs = [pr(20)]  # my PR, green, no verdict -> needs-review
+        issues = [issue(3), issue(7, labels=("bug",))]
+        out = run_main_args(yk, monkeypatch, capsys, prs, issues, "--skip-prs")
+        assert "RESUME PR" not in out
+        assert "WOULD CLAIM ISSUE #7" in out  # bug first
+
+    def test_skip_prs_applies_all_claim_rules(self, yk, monkeypatch, capsys):
+        head = "e" * 40
+        prs = [
+            pr(20, fixes=(4,)),  # my PR in review; fixes #4
+            pr(21, author=PEER, head=head),  # peer PR with no verdict at head
+        ]
+        issues = [
+            issue(2, labels=("bug", "needs-decision")),  # held
+            issue(3, labels=("bug",), body="depends on #10"),  # waits on open #10
+            issue(4, labels=("bug",)),  # an open PR fixes it
+            issue(5, labels=("bug",), assignees=(PEER,)),  # assigned
+            issue(6),  # the claimable one
+            issue(10, assignees=(PEER,)),
+        ]
+        out = run_main_args(yk, monkeypatch, capsys, prs, issues, "--skip-prs")
+        assert "RESUME PR" not in out
+        assert "REVIEW PR" not in out  # goes straight to the claim step
+        assert "WOULD CLAIM ISSUE #6" in out
+        for n in (2, 3, 4, 5, 10):
+            assert f"WOULD CLAIM ISSUE #{n} " not in out
+
+    def test_skip_prs_does_not_review_peer_pr(self, yk, monkeypatch, capsys):
+        head = "f" * 40
+        prs = [pr(21, author=PEER, head=head)]
+        out = run_main_args(yk, monkeypatch, capsys, prs, [issue(30)], "--skip-prs")
+        assert "REVIEW PR" not in out
+        assert "WOULD CLAIM ISSUE #30" in out
+
+    def test_skip_prs_nothing_claimable_is_nothing_ready(self, yk, monkeypatch, capsys):
+        prs = [pr(20, fixes=(4,))]
+        issues = [issue(2, labels=("on-hold",)), issue(4), issue(5, assignees=(PEER,))]
+        out = run_main_args(yk, monkeypatch, capsys, prs, issues, "--skip-prs")
+        assert "RESUME PR" not in out
+        assert "NOTHING READY" in out
+        assert "WOULD CLAIM" not in out
+
+    def test_control_without_skip_prs_resumes_my_pr(self, yk, monkeypatch, capsys):
+        prs = [pr(20)]
+        issues = [issue(3), issue(7, labels=("bug",))]
+        out = run_main_args(yk, monkeypatch, capsys, prs, issues)
+        assert "RESUME PR #20" in out
+        assert "WOULD CLAIM" not in out
+
+    # 2. pairit step 3 push -----------------------------------------------------------------
+
+    def test_pairit_step3_push_uses_force_with_lease(self):
+        text = PAIRIT.read_text()
+        m = re.search(r"\*\*3\. The review.*?```bash\n(.*?)```", text, re.S)
+        assert m, "pairit SKILL.md step 3 code block not found"
+        pushes = [ln for ln in m.group(1).splitlines() if re.search(r"\bgit\b.*\bpush\b", ln)]
+        assert pushes, "step 3 code block has no git push"
+        for ln in pushes:
+            assert "--force-with-lease" in ln, f"push after rebase is not lease-forced: {ln!r}"
+
+    # 3. range-diff without K ---------------------------------------------------------------
+
+    def test_pairit_range_diff_has_no_undefined_k(self):
+        text = PAIRIT.read_text()
+        paras = [p for p in re.split(r"\n\s*\n", text) if "range-diff" in p]
+        assert paras, "pairit SKILL.md has no range-diff instruction"
+        for p in paras:
+            assert not re.search(r"~K\b", p), f"range-diff still uses undefined K: {p!r}"
+        assert any("merge-base" in p for p in paras), \
+            "range-diff instruction is not base-anchored (no merge-base)"
+
+    # 4. DEPENDS ----------------------------------------------------------------------------
+
+    def test_depends_bullet_on_next_line_does_not_join(self, yk):
+        assert yk.depends_on("Depends on #3\n* #4 unrelated") == {3}
+
+    @pytest.mark.parametrize("body,expected", [
+        ("depends on #6 #7", {6, 7}),
+        ("depends on #6, #7, and #8", {6, 7, 8}),
+        ("depends on **#12**", {12}),
+    ])
+    def test_depends_list_forms_control(self, yk, body, expected):
+        assert yk.depends_on(body) == expected
+
+    # 5. yk-loop pipelining -----------------------------------------------------------------
+
+    def test_yk_loop_pipelining_uses_picker_skip_prs(self):
+        text = YK_LOOP.read_text()
+        m = re.search(r"\*\*Don't idle.*?(?=\n\s*\n\*\*)", text, re.S)
+        assert m, "yk-loop SKILL.md pipelining paragraph not found"
+        para = m.group(0)
+        assert "--skip-prs" in para, "pipelining step does not use the picker with --skip-prs"
+        assert not re.search(r"yourself\s*\(`gh issue edit[^`]*--add-assignee", para), \
+            "pipelining still claims with a bare `gh issue edit --add-assignee`"
