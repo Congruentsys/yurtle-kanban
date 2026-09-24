@@ -2002,6 +2002,147 @@ class TestCreateHonoursDefaultBoard:
         assert rel.startswith("dev/"), f"explicit dev should win, got {rel}"
 
 
+
+class TestUnroutedTypeFallsBackToDefaultBoard:
+    """A type no board's theme defines lands under ``default_board``'s root
+    (``<default root>/<type folder>/``) when ``default_board`` is set, else
+    under the first board in config order. Configs without ``default_board``
+    are unchanged; an explicit board still wins (#144)."""
+
+    # Reuse #114's fixture and helpers without re-collecting its tests.
+    repo_runner = TestCreateHonoursDefaultBoard.__dict__["repo_runner"]
+    _write_config = TestCreateHonoursDefaultBoard.__dict__["_write_config"]
+    _run = TestCreateHonoursDefaultBoard.__dict__["_run"]
+    _create = TestCreateHonoursDefaultBoard.__dict__["_create"]
+    _listed_ids = TestCreateHonoursDefaultBoard.__dict__["_listed_ids"]
+
+    @staticmethod
+    def _two_software_boards(first: str, second: str, default: str | None) -> str:
+        text = (
+            "version: '2.0'\n"
+            "boards:\n"
+            f"- name: {first}\n"
+            "  preset: software\n"
+            f"  path: {first}/\n"
+            f"- name: {second}\n"
+            "  preset: software\n"
+            f"  path: {second}/\n"
+        )
+        if default is not None:
+            text += f"default_board: {default}\n"
+        return text
+
+    # -- Do: unrouted type goes to default_board ------------------------------
+
+    def test_unrouted_type_lands_under_default_board_listed_last(self, repo_runner):
+        """[dev, ops], default_board ops → expedition under ops/expeditions/."""
+        repo, runner = repo_runner
+        self._write_config(repo, self._two_software_boards("dev", "ops", "ops"))
+
+        item_id, rel = self._create(runner, repo, "expedition", "probe")
+
+        assert rel.startswith("ops/expeditions/"), (
+            f"expedition should land under ops/expeditions/, got {rel}"
+        )
+        assert item_id in self._listed_ids(runner, "ops")
+        assert item_id not in self._listed_ids(runner, "dev")
+
+    def test_unrouted_type_lands_under_default_board_listed_first(self, repo_runner):
+        """[ops, dev], default_board ops → expedition under ops/expeditions/."""
+        repo, runner = repo_runner
+        self._write_config(repo, self._two_software_boards("ops", "dev", "ops"))
+
+        item_id, rel = self._create(runner, repo, "expedition", "probe")
+
+        assert rel.startswith("ops/expeditions/"), (
+            f"expedition should land under ops/expeditions/, got {rel}"
+        )
+        assert item_id in self._listed_ids(runner, "ops")
+        assert item_id not in self._listed_ids(runner, "dev")
+
+    def test_service_unrouted_type_dir_is_under_default_board(self, repo_runner):
+        """Service placement with no board_name → <default root>/expeditions/."""
+        repo, _runner = repo_runner
+        self._write_config(repo, self._two_software_boards("dev", "ops", "ops"))
+        config = KanbanConfig.load(repo / ".kanban" / "config.yaml")
+        service = KanbanService(config, repo)
+
+        type_dir = service._get_type_directory(WorkItemType.EXPEDITION)
+
+        rel = type_dir.resolve().relative_to(repo.resolve()).as_posix()
+        assert rel == "ops/expeditions", f"expected ops/expeditions, got {rel}"
+
+    # -- Must stay true: negative controls ------------------------------------
+
+    def test_control_no_default_board_falls_back_to_first_board(self, repo_runner):
+        """No default_board → unrouted type under the first board (dev/expeditions/)."""
+        repo, runner = repo_runner
+        self._write_config(repo, self._two_software_boards("dev", "ops", None))
+
+        item_id, rel = self._create(runner, repo, "expedition", "probe")
+
+        assert rel.startswith("dev/expeditions/"), (
+            f"expedition should land under dev/expeditions/, got {rel}"
+        )
+        assert item_id in self._listed_ids(runner, "dev")
+        assert item_id not in self._listed_ids(runner, "ops")
+
+    def test_control_unknown_default_board_falls_back_to_first_board(self, repo_runner):
+        """default_board naming no board → first board, no crash."""
+        repo, runner = repo_runner
+        self._write_config(repo, self._two_software_boards("dev", "ops", "nosuch"))
+
+        item_id, rel = self._create(runner, repo, "expedition", "probe")
+
+        assert rel.startswith("dev/expeditions/"), (
+            f"expedition should land under dev/expeditions/, got {rel}"
+        )
+        assert item_id in self._listed_ids(runner, "dev")
+
+    def test_control_default_board_defining_type_still_wins(self, repo_runner):
+        """#114 unchanged: both define feature, default_board ops → ops/."""
+        repo, runner = repo_runner
+        self._write_config(repo, self._two_software_boards("dev", "ops", "ops"))
+
+        item_id, rel = self._create(runner, repo, "feature", "probe")
+
+        assert rel.startswith("ops/"), f"feature should land under ops/, got {rel}"
+        assert item_id in self._listed_ids(runner, "ops")
+        assert item_id not in self._listed_ids(runner, "dev")
+
+    def test_control_only_board_defining_type_still_wins(self, repo_runner):
+        """#114 unchanged: hypothesis only in hdd → research, default elsewhere."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: development\n"
+            "  preset: software\n"
+            "  path: kanban-work/\n"
+            "- name: research\n"
+            "  preset: hdd\n"
+            "  path: research/\n"
+            "default_board: development\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "hypothesis", "only hdd has it")
+
+        assert rel.startswith("research/hypotheses/"), rel
+        assert item_id in self._listed_ids(runner, "research")
+
+    def test_control_explicit_board_wins_for_unrouted_type(self, repo_runner):
+        """Explicit board_name dev beats default_board ops for an unrouted type."""
+        repo, _runner = repo_runner
+        self._write_config(repo, self._two_software_boards("dev", "ops", "ops"))
+        config = KanbanConfig.load(repo / ".kanban" / "config.yaml")
+        service = KanbanService(config, repo)
+
+        type_dir = service._get_type_directory(WorkItemType.EXPEDITION, board_name="dev")
+
+        rel = type_dir.resolve().relative_to(repo.resolve()).as_posix()
+        assert rel == "dev/expeditions", f"explicit dev should win, got {rel}"
+
 class TestBoardAddRefusesUncoverableScanPaths:
     """board-add must refuse an upgrade that would drop scanned items.
 

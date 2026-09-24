@@ -132,6 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`models.turtle_string`, from #120) used everywhere, and the HDD template
   engine inserts the generated block without re-reading its escapes. Ordinary
   values are written byte-for-byte as before.
+- **Multi-board: a type no board's theme defines went to the first board, not
+  `default_board`** (#144). Unrouted types now go to `default_board` when it is
+  set, and the first board otherwise, completing #114.
 
 ## [2.2.0] - 2026-08-30
 
