@@ -556,3 +556,79 @@ class TestThemePathsUnderConfiguredRoot:
         )
         assert len(files) == 1, files
         assert files[0].parent == Path("kanban-work/voyages")
+
+
+# ---------------------------------------------------------------------------
+# Issue #142 — epic/voyage create renders the title through the template
+# ---------------------------------------------------------------------------
+
+_EPIC_ROUND_TRIP_VALUES = [
+    pytest.param('Could X identify what is "stale" vs "fresh"?', id="double-quotes"),
+    pytest.param(r"C:\new\table and a\b", id="backslash"),
+    pytest.param("ends with a backslash\\", id="trailing-backslash"),
+    pytest.param("team: core", id="colon-space"),
+    pytest.param("#tag", id="hash"),
+    pytest.param("first line\nsecond line", id="newline"),
+]
+
+
+def _epic_frontmatter(path: Path) -> dict:
+    """Parse the file's frontmatter; unparseable YAML is an assertion failure."""
+    import yaml
+
+    text = path.read_text()
+    assert text.startswith("---\n"), text[:200]
+    end = text.index("\n---\n", 4)
+    try:
+        fm = yaml.safe_load(text[4:end])
+    except yaml.YAMLError as exc:
+        raise AssertionError(
+            f"frontmatter does not parse as YAML: {exc}\n{text[: end + 5]}"
+        ) from None
+    assert isinstance(fm, dict), text[: end + 5]
+    return fm
+
+
+class TestTemplateValuesRoundTrip:
+    """epic/voyage create titles with YAML-special characters read back exactly (#142)."""
+
+    @pytest.mark.parametrize("value", _EPIC_ROUND_TRIP_VALUES)
+    @pytest.mark.parametrize("runner_name, repo_name, command, glob", [
+        pytest.param("software_runner", "software_repo", "epic", "EPIC-*.md", id="epic"),
+        pytest.param("nautical_runner", "nautical_repo", "voyage", "VOY-*.md", id="voyage"),
+    ])
+    def test_created_epic_is_listed_and_title_round_trips(
+        self, request, runner_name, repo_name, command, glob, value,
+    ):
+        import json
+
+        runner = request.getfixturevalue(runner_name)
+        repo = request.getfixturevalue(repo_name)
+        result = runner.invoke(main, [command, "create", value])
+        assert result.exit_code == 0, (result.output, result.exception)
+
+        files = list(repo.rglob(glob))
+        assert len(files) == 1, files
+        fm = _epic_frontmatter(files[0])
+        assert fm["title"] == value
+        item_id = fm["id"]
+
+        listed = runner.invoke(main, ["list", "--json"])
+        assert listed.exit_code == 0, listed.output
+        assert item_id in [i["id"] for i in json.loads(listed.output)]
+
+        shown = runner.invoke(main, ["show", item_id, "--json"])
+        assert shown.exit_code == 0, shown.output
+        assert json.loads(shown.output)["title"] == value
+
+    def test_ordinary_epic_title_renders_textually_unchanged(
+        self, software_runner, software_repo,
+    ):
+        """Control: an ordinary title keeps today's `title: "..."` line and heading."""
+        result = software_runner.invoke(
+            main, ["epic", "create", "User Auth Overhaul"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        text = next(software_repo.rglob("EPIC-*.md")).read_text()
+        assert 'title: "User Auth Overhaul"\n' in text
+        assert "\n# User Auth Overhaul\n" in text

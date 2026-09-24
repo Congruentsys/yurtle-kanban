@@ -120,6 +120,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key: value mapping, invalid opening line), so `--json` output stays clean.
   Plain notes, `_TEMPLATE*` files, ignored paths and Yurtle documents with
   Turtle frontmatter (`@prefix …`) stay silent.
+- **HDD and epic templates broke on titles with quotes or backslashes** (#142).
+  A title like `is "stale" vs "fresh"?` made the item vanish (this is how
+  nusy-product-team's IDEA-003 broke), `\b` became a backspace, and a trailing
+  backslash crashed the create. Template titles, units, categories and targets
+  are now written as escaped YAML double-quoted strings, and backslashes are
+  never treated as regex escapes. Ordinary values render exactly as before.
 
 ## [2.2.0] - 2026-08-30
 
