@@ -76,6 +76,23 @@ def _normalize_paper_num(raw: str | int) -> str:
     return _PAPER_PREFIX_RE.sub("", str(raw))
 
 
+# Turtle short-string escaping (ECHAR) for literals the status history writes,
+# e.g. `kb:by "<agent>"`: an agent like `x"y` or one with a newline must stay one
+# literal, never break the block or inject triples (#120)
+_TURTLE_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_TURTLE_UNESCAPES = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f"}
+
+
+def _turtle_string(value: str) -> str:
+    """Escape a value for use inside a Turtle "..." literal."""
+    return "".join(_TURTLE_ESCAPES.get(ch, ch) for ch in value)
+
+
+def _turtle_unescape(value: str) -> str:
+    """Invert _turtle_string (and Turtle's other single-character escapes)."""
+    return re.sub(r"\\(.)", lambda m: _TURTLE_UNESCAPES.get(m.group(1), m.group(1)), value)
+
+
 class KanbanService:
     """Service for managing kanban work items."""
 
@@ -2434,7 +2451,7 @@ class KanbanService:
         agent = assignee or self._get_git_user()
         ttl_entry = f'''    kb:status kb:{new_status.value} ;
     kb:at "{timestamp}"^^xsd:dateTime ;
-    kb:by "{agent}" ;'''
+    kb:by "{_turtle_string(agent)}" ;'''
         if forced:
             ttl_entry += '\n    kb:forcedMove "true"^^xsd:boolean ;'
         if gates_skipped:
@@ -2643,14 +2660,14 @@ class KanbanService:
             entry_pattern = (
                 r'kb:status kb:(\w+)\s*;\s*'
                 r'kb:at "([^"]+)"(?:\^\^xsd:dateTime)?'
-                r'\s*;\s*kb:by "([^"]+)"'
+                r'\s*;\s*kb:by "((?:[^"\\]|\\.)*)"'
             )
             for entry_match in re.finditer(entry_pattern, block):
                 try:
                     entry: dict[str, Any] = {
                         "status": entry_match.group(1),
                         "at": datetime.fromisoformat(entry_match.group(2)),
-                        "by": entry_match.group(3),
+                        "by": _turtle_unescape(entry_match.group(3)),
                         "forced": False,
                     }
                     # Check for forcedMove triple in the surrounding blank node
