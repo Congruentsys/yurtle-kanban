@@ -2809,3 +2809,48 @@ class TestTypeNamedFolders:
             Path("kanban-work/expeditions/EXP-001-probe.md")
         ]
         assert "EXP-001" in listed, listed
+
+    # -- Must stay true: absolute root (review of PR #133) -------------------
+
+    @staticmethod
+    def _abs_root_yaml(root: Path) -> str:
+        """The review repro: software theme, an absolute root, no scan_paths."""
+        return (
+            "kanban:\n"
+            "  theme: software\n"
+            "  paths:\n"
+            f"    root: {root}\n"
+        )
+
+    def test_absolute_root_outside_repo_list_does_not_crash(self, tmp_path, board_runner):
+        """An absolute root outside the repo: `list` exits 0 instead of raising
+        (on main it prints 'No work items found.')."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "abs"
+        outside.mkdir()
+        runner = board_runner(repo, self._abs_root_yaml(outside))
+
+        result = runner.invoke(main, ["list"])
+
+        assert result.exception is None, repr(result.exception)
+        assert result.exit_code == 0, result.output
+
+    def test_absolute_root_inside_repo_lists_created_item(self, tmp_path, board_runner):
+        """An absolute root inside the repo: `list` exits 0, and a created feature is listed."""
+        inside = tmp_path / "abs"
+        inside.mkdir()
+        runner = board_runner(tmp_path, self._abs_root_yaml(inside))
+
+        result = runner.invoke(main, ["list"])
+        assert result.exception is None, repr(result.exception)
+        assert result.exit_code == 0, result.output
+
+        created = runner.invoke(main, ["create", "feature", "probe"])
+        assert created.exception is None, repr(created.exception)
+        assert created.exit_code == 0, created.output
+
+        listed = runner.invoke(main, ["list", "--json"])
+        assert listed.exception is None, repr(listed.exception)
+        assert listed.exit_code == 0, listed.output
+        assert "FEAT-001" in listed.output, listed.output
