@@ -135,6 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-board: a type no board's theme defines went to the first board, not
   `default_board`** (#144). Unrouted types now go to `default_board` when it is
   set, and the first board otherwise, completing #114.
+- **`board-add` also refuses when legacy per-type paths (`paths.features`,
+  `bugs`, `epics`, `tasks`) fall outside the default board, and it no longer
+  crashes on mixed absolute and relative scan paths** (#147, extending #122).
+  Either case used to drop items silently or print a traceback. `list` no
+  longer crashes on mixed scan paths either.
 
 ## [2.2.0] - 2026-08-30
 

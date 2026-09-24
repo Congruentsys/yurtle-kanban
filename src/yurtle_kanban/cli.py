@@ -750,10 +750,16 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     # Upgrading to multi-board turns the single-board config into ONE board that
     # scans one path; if no path covers every scan path, items would silently
     # vanish from the board, so refuse and change nothing (#122)
-    if not config.is_multi_board and config.paths.scan_paths:
+    # Every path the single board scans: scan_paths plus the legacy per-type
+    # paths (paths.features/bugs/epics/tasks), which get_work_paths() also scans
+    # and the upgrade doesn't carry over (#147)
+    paths = config.paths
+    legacy = [p for p in (paths.features, paths.bugs, paths.epics, paths.tasks) if p]
+    scanned = list(config.paths.scan_paths) + legacy
+    if not config.is_multi_board and scanned:
         board_path = Path(config._single_board_path())
         uncovered = [
-            p for p in config.paths.scan_paths
+            p for p in scanned
             if not (Path(p) == board_path or board_path in Path(p).parents)
         ]
         if uncovered:

@@ -355,7 +355,10 @@ class KanbanConfig:
             for raw, scan in zip(self.paths.scan_paths, scans):
                 if Path(root) == scan or scan in Path(root).parents:
                     return raw
-        common = Path(os.path.commonpath([str(s) for s in scans]))
+        try:
+            common = Path(os.path.commonpath([str(s) for s in scans]))
+        except ValueError:  # absolute and relative scan paths mixed (#147)
+            return root or "work/"
         return f"{common.as_posix()}/" if str(common) not in ("", ".") else (root or "work/")
 
     def add_board(self, board: BoardConfig) -> None:
