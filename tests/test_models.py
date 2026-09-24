@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import yaml
 
 from yurtle_kanban.models import (
     Board,
@@ -392,3 +393,170 @@ class TestBoard:
         assert len(violations) == 1
         assert violations[0][0].id == "in_progress"
         assert violations[0][1] == 3
+
+
+# ---------------------------------------------------------------------------
+# Issue #121 -- every string value to_markdown writes reads back unchanged
+# ---------------------------------------------------------------------------
+
+_YAML_MISREAD_VALUES = [
+    pytest.param("team: core", id="colon-space"),
+    pytest.param("yes", id="yes-bool"),
+    pytest.param("null", id="null"),
+    pytest.param("#core", id="leading-hash"),
+    pytest.param("a, b", id="comma-space"),
+    pytest.param("[x]", id="leading-bracket"),
+    pytest.param("{x}", id="leading-brace"),
+    pytest.param("&a", id="leading-ampersand"),
+    pytest.param("*a", id="leading-star"),
+    pytest.param("123", id="int"),
+]
+
+_LIST_FIELDS = ["tags", "related", "depends_on", "superseded_by"]
+_SCALAR_FIELDS = ["resolution", "compute_requirement"]
+
+# What to_markdown writes today for an ordinary item -- must not change.
+_ORDINARY_MARKDOWN = (
+    "---\n"
+    "id: FEAT-001\n"
+    'title: "Add dark mode"\n'
+    "type: feature\n"
+    "status: ready\n"
+    "priority: high\n"
+    "assignee: agent-x\n"
+    "created: 2026-01-12\n"
+    "tags: [backend, ui-polish]\n"
+    "depends_on: [EXP-001]\n"
+    "related: [FEAT-002, BUG-003]\n"
+    "compute_requirement: gpu\n"
+    "resolution: completed\n"
+    "superseded_by: [FEAT-009]\n"
+    "---\n"
+    "\n"
+    "# Add dark mode\n"
+    "\n"
+    "Body text.\n"
+)
+
+
+def _ordinary_item(**overrides) -> WorkItem:
+    fields = dict(
+        id="FEAT-001",
+        title="Add dark mode",
+        item_type=WorkItemType.FEATURE,
+        status=WorkItemStatus.READY,
+        file_path=Path("work/FEAT-001.md"),
+        priority="high",
+        assignee="agent-x",
+        created=date(2026, 1, 12),
+        tags=["backend", "ui-polish"],
+        depends_on=["EXP-001"],
+        related=["FEAT-002", "BUG-003"],
+        resolution="completed",
+        superseded_by=["FEAT-009"],
+        compute_requirement="gpu",
+        description="Body text.\n",
+    )
+    fields.update(overrides)
+    return WorkItem(**fields)
+
+
+class TestAllFrontmatterValuesRoundTrip:
+    """Every string value WorkItem.to_markdown writes reads back as the same string (#121)."""
+
+    @staticmethod
+    def _frontmatter_text(markdown: str) -> str:
+        lines = markdown.split("\n")
+        assert lines[0] == "---"
+        return "\n".join(lines[1:lines.index("---", 1)])
+
+    @classmethod
+    def _frontmatter(cls, item: WorkItem) -> dict:
+        markdown = item.to_markdown()
+        try:
+            fm = yaml.safe_load(cls._frontmatter_text(markdown))
+        except yaml.YAMLError as exc:
+            pytest.fail(f"frontmatter is not valid YAML: {exc}\n{markdown}")
+        assert isinstance(fm, dict), markdown
+        return fm
+
+    # -- flow-list elements --------------------------------------------------
+
+    @pytest.mark.parametrize("field_name", _LIST_FIELDS)
+    @pytest.mark.parametrize("value", _YAML_MISREAD_VALUES)
+    def test_list_element_round_trips(self, field_name, value):
+        """A lone element of tags/related/depends_on/superseded_by reads back exactly."""
+        fm = self._frontmatter(_ordinary_item(**{field_name: [value]}))
+        assert fm[field_name] == [value]
+
+    @pytest.mark.parametrize("field_name", _LIST_FIELDS)
+    @pytest.mark.parametrize("value", _YAML_MISREAD_VALUES)
+    def test_list_element_among_ordinary_round_trips(self, field_name, value):
+        """The element keeps its place and the list keeps its length."""
+        fm = self._frontmatter(
+            _ordinary_item(**{field_name: ["backend", value, "EXP-001"]})
+        )
+        assert fm[field_name] == ["backend", value, "EXP-001"]
+
+    # -- scalars -------------------------------------------------------------
+
+    @pytest.mark.parametrize("field_name", _SCALAR_FIELDS)
+    @pytest.mark.parametrize("value", _YAML_MISREAD_VALUES)
+    def test_scalar_round_trips(self, field_name, value):
+        """resolution / compute_requirement read back as the same string."""
+        fm = self._frontmatter(_ordinary_item(**{field_name: value}))
+        assert fm[field_name] == value
+        assert isinstance(fm[field_name], str)
+
+    # -- title ---------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            pytest.param("C:\\temp\\new", id="backslash-escapes"),
+            pytest.param("ends with \\", id="trailing-backslash"),
+            pytest.param("line one\nline two", id="newline"),
+            pytest.param('say "hi" \\o/', id="quote-and-backslash"),
+        ],
+    )
+    def test_title_round_trips(self, title):
+        """The title reads back exactly, backslashes and newlines included."""
+        fm = self._frontmatter(_ordinary_item(title=title))
+        assert fm["title"] == title
+
+    # -- must stay true (controls) -------------------------------------------
+
+    @pytest.mark.parametrize("title", ["Add dark mode", 'say "hi"', "team: core"])
+    def test_control_title_round_trips(self, title):
+        """Titles that already round-trip keep doing so."""
+        fm = self._frontmatter(_ordinary_item(title=title))
+        assert fm["title"] == title
+
+    def test_control_ordinary_values_written_unquoted(self):
+        """Ordinary tags and IDs stay plain, exactly as today."""
+        front = self._frontmatter_text(_ordinary_item().to_markdown()).split("\n")
+        assert "tags: [backend, ui-polish]" in front
+        assert "depends_on: [EXP-001]" in front
+        assert "related: [FEAT-002, BUG-003]" in front
+        assert "superseded_by: [FEAT-009]" in front
+        assert "resolution: completed" in front
+        assert "compute_requirement: gpu" in front
+
+    def test_control_empty_depends_on_written_as_empty_list(self):
+        front = self._frontmatter_text(
+            _ordinary_item(depends_on=[]).to_markdown()
+        ).split("\n")
+        assert "depends_on: []" in front
+
+    def test_control_ordinary_item_markdown_unchanged(self):
+        """An ordinary item's markdown is byte-identical to today's output."""
+        assert _ordinary_item().to_markdown() == _ORDINARY_MARKDOWN
+
+    def test_control_ordinary_values_round_trip(self):
+        fm = self._frontmatter(_ordinary_item())
+        assert fm["tags"] == ["backend", "ui-polish"]
+        assert fm["depends_on"] == ["EXP-001"]
+        assert fm["related"] == ["FEAT-002", "BUG-003"]
+        assert fm["superseded_by"] == ["FEAT-009"]
+        assert fm["resolution"] == "completed"
+        assert fm["compute_requirement"] == "gpu"
