@@ -1403,6 +1403,59 @@ class TestBoardAddKeepsDefaultBoardPath:
 
         assert "IDEA-001" in self._run(runner, ["list", "--board", "default"]).output
 
+    # -- round 2: ignore list and root inside a scan path ----------------------
+
+    def test_board_add_keeps_template_ignore_no_phantom_items(self, repo_runner):
+        """init's _TEMPLATE.md files must not become XXX items after board-add."""
+        import re
+
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        assert "Backlog (1)" in self._run(runner, ["board"]).output
+
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        board_out = self._run(runner, ["board"]).output
+        list_out = self._run(runner, ["list"]).output
+        default_out = self._run(runner, ["list", "--board", "default"]).output
+        for out in (list_out, default_out):
+            phantoms = re.findall(r"\b[A-Z]+-XXX\b", out)
+            assert not phantoms, f"template files listed as items: {phantoms}\n{out}"
+        assert "Backlog (1)" in board_out, board_out
+
+    def test_board_add_saved_default_board_keeps_template_ignore(self, repo_runner):
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        default = self._saved_boards(repo)["default"]
+        assert "**/_TEMPLATE*" in (default.get("ignore") or []), default
+
+    def test_v1_root_inside_scan_path_keeps_scanned_items(self, repo_runner):
+        """root work/sub/ inside scan path work/: the board must still cover work/."""
+        repo, runner = repo_runner
+        self._write_v1(repo, root="work/sub/", scan_paths=["work/"])
+        (repo / "work" / "sub").mkdir(parents=True, exist_ok=True)
+        (repo / "work" / "FEAT-001-Outer-item.md").write_text(
+            "---\n"
+            "id: FEAT-001\n"
+            'title: "Outer item"\n'
+            "type: feature\n"
+            "status: backlog\n"
+            "priority: medium\n"
+            "assignee: null\n"
+            "created: 2026-09-24\n"
+            "depends_on: []\n"
+            "---\n\n# Outer item\n"
+        )
+        assert "FEAT-001" in self._run(runner, ["list"]).output
+
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        assert "FEAT-001" in self._run(runner, ["list"]).output
+        assert "FEAT-001" in self._run(runner, ["list", "--board", "default"]).output
+
     # -- negative controls (must stay green) -----------------------------------
 
     def test_control_board_add_on_multiboard_keeps_existing_paths(self, repo_runner):
