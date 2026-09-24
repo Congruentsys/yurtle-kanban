@@ -7,6 +7,7 @@ Each WorkItem corresponds to a Yurtle markdown file.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
@@ -19,6 +20,23 @@ if TYPE_CHECKING:
 # Priority values a create command may write (they also become kb:priority
 # terms in Turtle blocks, so free text is not allowed there)
 PRIORITIES = ("critical", "high", "medium", "low")
+
+
+def yaml_scalar(value: str) -> str:
+    """Render a string as a frontmatter value that YAML reads back unchanged (#104).
+
+    Plain when YAML already reads it as the same string (`agent-x`); otherwise
+    double-quoted, e.g. `team: core`, `yes`, `null`, `#core` or `[core]`, which
+    YAML would otherwise read as an error, a bool, None, a comment or a list.
+    """
+    import yaml
+
+    try:
+        if yaml.safe_load(f"k: {value}") == {"k": value}:
+            return value
+    except yaml.YAMLError:
+        pass
+    return json.dumps(value, ensure_ascii=False)  # a JSON string is a YAML scalar
 
 
 class WorkItemStatus(Enum):
@@ -310,7 +328,7 @@ class WorkItem:
             lines.append(f"priority: {self.priority}")
         # Always include assignee (null when unset), matching the templates,
         # so the key is present for later moves to fill in
-        lines.append(f"assignee: {self.assignee or 'null'}")
+        lines.append(f"assignee: {yaml_scalar(self.assignee) if self.assignee else 'null'}")
         if self.created:
             lines.append(f"created: {self.created.isoformat()}")
         if self.tags:
