@@ -3,6 +3,7 @@
 import json
 import re
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -5046,3 +5047,94 @@ class TestUpdateItemKeepsLineEndingsIssue151:
 
         assert b"\r" not in path.read_bytes()
         assert self._w._frontmatter(path)["title"] == "New title"
+
+    def test_control_update_lf_file_keeps_final_newline(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """An LF file that ended with a newline still ends with one after update."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._w._setup(temp_repo, runner, self._MIDDLE)
+        assert path.read_bytes().endswith(b"\n")
+        svc = KanbanService(software_config, temp_repo)
+
+        svc.update_item("FEAT-001", title="New title", commit=False)
+
+        data = path.read_bytes()
+        assert data.endswith(b"\n"), data[-40:]
+        assert b"\r" not in data
+
+
+class TestLineEndingsEditScalesIssue151:
+    """Keeping line endings stays fast on a large body of identical lines (#151 r2).
+
+    Matching unchanged lines must not cost time quadratic in the number of
+    identical lines: a 50k-line body of blank (or `x`) lines was instant before
+    #151 and must stay well under a couple of seconds.
+    """
+
+    _N = 50_000
+    _HEAD = (
+        "---\nid: FEAT-001\ntitle: \"probe\"\ntype: feature\n"
+        "status: backlog\npriority: medium\nassignee: alice\n---\n"
+    )
+
+    @staticmethod
+    def _eols(data: bytes) -> list[bytes]:
+        return [b"\r\n" if ln.endswith(b"\r\n") else b"\n" for ln in _lines_with_endings(data)]
+
+    def _edit(self, svc: KanbanService, path: Path) -> float:
+        """Read, set status and assignee, write back; return elapsed seconds."""
+        start = time.perf_counter()
+        content, eol = svc._read_item_text(path)
+        content = svc._add_or_update_frontmatter_field(content, "status", "ready")
+        content = svc._add_or_update_frontmatter_field(content, "assignee", "carol")
+        svc._write_item_text(path, content, eol)
+        return time.perf_counter() - start
+
+    @pytest.mark.parametrize("body_line", [pytest.param("", id="blank"), pytest.param("x", id="x")])
+    @pytest.mark.parametrize(
+        "eol", [pytest.param(b"\n", id="lf"), pytest.param(b"\r\n", id="crlf")],
+    )
+    def test_large_identical_body_edit_is_fast(
+        self, temp_repo, software_config, body_line, eol,
+    ):
+        """50k identical body lines: the edit takes < 2 s and keeps every ending."""
+        path = temp_repo / "kanban-work" / "features" / "FEAT-001-probe.md"
+        text = self._HEAD + "\n# probe\n" + (body_line + "\n") * self._N
+        raw = text.encode().replace(b"\n", eol)
+        path.write_bytes(raw)
+        svc = KanbanService(software_config, temp_repo)
+
+        elapsed = self._edit(svc, path)
+
+        assert elapsed < 2.0, f"edit of a {self._N}-line body took {elapsed:.1f} s"
+        data = path.read_bytes()
+        assert data == raw.replace(b"status: backlog", b"status: ready").replace(
+            b"assignee: alice", b"assignee: carol",
+        ), "the edit changed more than the two edited values"
+        assert set(self._eols(data)) == {eol}
+
+    def test_moderately_mixed_file_stays_correct(self, temp_repo, software_config):
+        """10k lines, every third CRLF (blank and repeated lines too): only edits change."""
+        path = temp_repo / "kanban-work" / "features" / "FEAT-001-probe.md"
+        body = [("" if i % 5 == 0 else "x" if i % 5 == 1 else f"line {i}") for i in range(10_000)]
+        lines = (self._HEAD + "\n# probe\n").split("\n")[:-1] + body
+        raw_lines = [
+            ln.encode() + (b"\r\n" if i % 3 == 0 else b"\n") for i, ln in enumerate(lines)
+        ]
+        path.write_bytes(b"".join(raw_lines))
+        svc = KanbanService(software_config, temp_repo)
+
+        self._edit(svc, path)
+
+        after = _lines_with_endings(path.read_bytes())
+        assert len(after) == len(raw_lines)
+        for i, (old, new) in enumerate(zip(raw_lines, after)):
+            if old.startswith((b"status:", b"assignee:")):
+                # changed lines take the majority ending (LF: 2 of every 3 lines)
+                assert new.endswith(b"\n") and not new.endswith(b"\r\n"), (i, new)
+            else:
+                assert new == old, f"untouched line {i} changed: {old!r} -> {new!r}"
+        fm = yaml.safe_load(path.read_text().split("---\n")[1])
+        assert fm["status"] == "ready" and fm["assignee"] == "carol"
