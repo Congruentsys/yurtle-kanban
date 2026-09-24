@@ -49,8 +49,10 @@ person) working on the same account would resume the same PRs and issues.
 `gh pr checks <P> --watch`.
 
 **Don't idle while a sub-agent or reviewer works: pipeline.** While a test partner or a `claude -p` reviewer
-runs in the background, claim the next issue yourself (`gh issue edit <N> --add-assignee @me`) and start it in
-its own worktree. The picker would just answer `RESUME PR … [needs-review]` for the PR under review. Two
+runs in the background, claim the next issue with `python3 .claude/skills/yk-next/yk_next.py --skip-prs` and
+start it in its own worktree. Plain picking would just answer `RESUME PR … [needs-review]` for the PR under
+review. `--skip-prs` goes straight to the claim step with every rule intact (bug first, hold labels,
+`depends on`, "an open PR fixes it", the claim-race re-read). Never claim with a bare `gh issue edit`. Two
 rules keep it safe:
 - Don't run two items that edit the same function at once; hold the second until the first merges.
 - A regression you introduced jumps the queue: fix it before new work.

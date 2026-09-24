@@ -57,7 +57,7 @@ existing helpers (`_add_or_update_frontmatter_field`, `PRIORITIES`, …). Add an
 **3. The review, by a DISTINCT session.**
 ```bash
 git -C /tmp/yk-<N> fetch -q origin main && git -C /tmp/yk-<N> rebase origin/main   # see "Rebased" below
-git -C /tmp/yk-<N> push -q -u origin HEAD
+git -C /tmp/yk-<N> push -q --force-with-lease -u origin HEAD   # the rebase rewrote the branch
 gh pr create --head <branch> --title "<type>: <what> (#<N>)" --body "Fixes #<N>. …"
 claude --dangerously-skip-permissions -p "$(cat <brief file>)" < /dev/null   # run it in the background
 ```
@@ -108,7 +108,8 @@ verdict. Done means the merge is on `origin/main` and the issue is closed.
 PRs conflict in `CHANGELOG.md` as soon as a sibling merges. Before each review, `git rebase origin/main`
 (keep both sides of a CHANGELOG conflict) and push with `--force-with-lease`. If a rebase is needed AFTER an
 `approve`, the verdict doesn't carry to the new head by itself. Run one short distinct-session check that
-`git range-diff <old>~K..<old> <new>~K..<new>` differs only in `CHANGELOG.md`, and that the PR's `src`/`tests`
+`git range-diff <old-base>..<old> origin/main..<new>` differs only in `CHANGELOG.md` (`<old-base>` is
+`git merge-base <old> origin/main`, taken BEFORE the fetch that moved `origin/main`), and that the PR's `src`/`tests`
 patch is unchanged. That session posts a new `reviewed-at-sha: <new>` / `verdict: approve` comment.
 
 **Carry the findings.** Every `(follow-up)` finding becomes an issue (`gh issue create --label bug …`,
