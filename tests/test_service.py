@@ -4866,3 +4866,183 @@ class TestBoardRootOutsideRepo:
         assert "FEAT-002" not in ids, ids
         assert "FEAT-900" not in ids, ids
         assert "FEAT-003" not in ids, f"repo-relative pattern stopped matching: {ids}"
+
+
+def _lines_with_endings(data: bytes) -> list[bytes]:
+    """Split bytes into lines, each keeping its own `\\n` or `\\r\\n` ending."""
+    lines = re.findall(rb"[^\n]*\n|[^\n]+\Z", data)
+    assert b"".join(lines) == data
+    return lines
+
+
+class TestMixedLineEndingsKeepUntouchedLinesIssue151:
+    """An edit to a mixed-ending file rewrites only the lines it changes (#151).
+
+    `move` used to treat a file with even one CRLF as all-CRLF, so every bare-LF
+    line was rewritten: a whole-file diff. Untouched lines keep their exact
+    bytes; changed and added lines use the file's majority ending.
+    """
+
+    _w = TestFrontmatterEditReplacesWholeValue()
+    _MIDDLE = "status: backlog\npriority: medium\nassignee: alice\n"
+    _EDITED_KEYS = (b"status:", b"assignee:")
+
+    def _setup_mixed(
+        self, repo: Path, runner: CliRunner, majority: bytes, minority_line: str | None,
+    ) -> tuple[Path, list[bytes]]:
+        """Write FEAT-001 with `majority` endings, except `minority_line` (if any)."""
+        path = self._w._setup(repo, runner, self._MIDDLE)
+        minority = b"\n" if majority == b"\r\n" else b"\r\n"
+        lf_lines = path.read_bytes().split(b"\n")
+        assert lf_lines[-1] == b""
+        lines = []
+        hit = 0
+        for text in lf_lines[:-1]:
+            if minority_line is not None and text == minority_line.encode():
+                lines.append(text + minority)
+                hit += 1
+            else:
+                lines.append(text + majority)
+        assert hit == (0 if minority_line is None else 1), minority_line
+        path.write_bytes(b"".join(lines))
+        # Sanity: the mix is really there, and it still parses.
+        before = _lines_with_endings(path.read_bytes())
+        n_min = sum(1 for ln in before if ln.endswith(minority) and (
+            minority == b"\r\n" or not ln.endswith(b"\r\n")))
+        assert n_min == (0 if minority_line is None else 1)
+        self._w._frontmatter(path)
+        return path, before
+
+    @staticmethod
+    def _ending(line: bytes) -> bytes:
+        return b"\r\n" if line.endswith(b"\r\n") else b"\n"
+
+    def _assert_only_edited_lines_changed(
+        self, path: Path, before: list[bytes], majority: bytes,
+    ) -> None:
+        after = _lines_with_endings(path.read_bytes())
+        assert len(after) >= len(before), after
+        for i, (old, new) in enumerate(zip(before, after)):
+            if old.startswith(self._EDITED_KEYS):
+                # a changed line: the file's majority ending
+                assert self._ending(new) == majority, (i, old, new)
+                assert not new.endswith(b"\r\r\n"), (i, new)
+            else:
+                assert new == old, (
+                    f"untouched line {i} changed: {old!r} -> {new!r}"
+                )
+        # lines the edit appended (the ```yurtle status block): majority ending
+        for new in after[len(before):]:
+            assert self._ending(new) == majority, (new, after[len(before):])
+            assert not new.endswith(b"\r\r\n"), new
+
+    def _move_and_check(self, runner: CliRunner, path: Path) -> None:
+        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        fm = self._w._frontmatter(path)
+        assert fm["status"] == "ready"
+        assert fm["assignee"] == "carol"
+        assert fm["priority"] == "medium"
+        assert fm["title"] == "probe"
+        assert self._w._show(runner)["assignee"] == "carol"
+        self._w._assert_tail_and_body_intact(path)
+
+    _MINORITY_LINES = [
+        pytest.param("priority: medium", id="frontmatter-key"),
+        pytest.param("  - one", id="frontmatter-block-item"),
+        pytest.param("Body text that must survive untouched.", id="body-line"),
+    ]
+
+    @pytest.mark.parametrize("minority_line", _MINORITY_LINES)
+    def test_mostly_lf_one_crlf_line_not_rewritten_as_crlf(
+        self, temp_repo, software_config, monkeypatch, minority_line,
+    ):
+        """Mostly-LF file with one CRLF line: LF lines stay LF, the CRLF line stays CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path, before = self._setup_mixed(temp_repo, runner, b"\n", minority_line)
+
+        self._move_and_check(runner, path)
+
+        self._assert_only_edited_lines_changed(path, before, b"\n")
+
+    @pytest.mark.parametrize("minority_line", _MINORITY_LINES)
+    def test_mostly_crlf_one_lf_line_kept_lf(
+        self, temp_repo, software_config, monkeypatch, minority_line,
+    ):
+        """Mostly-CRLF file with one LF line: that line stays LF; edits use CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path, before = self._setup_mixed(temp_repo, runner, b"\r\n", minority_line)
+
+        self._move_and_check(runner, path)
+
+        self._assert_only_edited_lines_changed(path, before, b"\r\n")
+
+    # -- must stay true (controls) -------------------------------------------
+
+    @pytest.mark.parametrize(
+        "majority", [pytest.param(b"\n", id="pure-lf"), pytest.param(b"\r\n", id="pure-crlf")],
+    )
+    def test_control_single_ending_file_only_edited_lines_change(
+        self, temp_repo, software_config, monkeypatch, majority,
+    ):
+        """A pure-LF or pure-CRLF file: untouched lines byte-identical, edits in kind."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path, before = self._setup_mixed(temp_repo, runner, majority, None)
+
+        self._move_and_check(runner, path)
+
+        self._assert_only_edited_lines_changed(path, before, majority)
+
+
+class TestUpdateItemKeepsLineEndingsIssue151:
+    """`update_item` (the `update` path) writes the file with its own ending (#151)."""
+
+    _crlf = TestFrontmatterEditEdgeCases()
+    _w = TestFrontmatterEditReplacesWholeValue()
+    _MIDDLE = "status: backlog\npriority: medium\nassignee: alice\n"
+
+    def test_update_title_keeps_crlf(self, temp_repo, software_config, monkeypatch):
+        """Updating the title of a CRLF file leaves every line ending in CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._crlf._setup_crlf(temp_repo, runner, self._MIDDLE)
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.update_item("FEAT-001", title="New title", commit=False)
+
+        assert item.title == "New title"
+        self._crlf._assert_all_crlf(path)
+        fm = self._w._frontmatter(path)
+        assert fm["title"] == "New title"
+        assert fm["id"] == "FEAT-001"
+        assert KanbanService(software_config, temp_repo).get_item("FEAT-001").title == (
+            "New title"
+        )
+
+    def test_update_priority_keeps_crlf(self, temp_repo, software_config, monkeypatch):
+        """Any field update (here priority) on a CRLF file keeps CRLF."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._crlf._setup_crlf(temp_repo, runner, self._MIDDLE)
+        svc = KanbanService(software_config, temp_repo)
+
+        svc.update_item("FEAT-001", priority="high", commit=False)
+
+        self._crlf._assert_all_crlf(path)
+        assert self._w._frontmatter(path)["priority"] == "high"
+
+    # -- must stay true (controls) -------------------------------------------
+
+    def test_control_update_lf_file_stays_lf(self, temp_repo, software_config, monkeypatch):
+        """An LF file updated stays LF: no CR anywhere."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        path = self._w._setup(temp_repo, runner, self._MIDDLE)
+        svc = KanbanService(software_config, temp_repo)
+
+        svc.update_item("FEAT-001", title="New title", commit=False)
+
+        assert b"\r" not in path.read_bytes()
+        assert self._w._frontmatter(path)["title"] == "New title"

@@ -768,3 +768,90 @@ class TestEpicLinkKeepsRelatedElementsIssue148:
                 main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
             )
         assert _frontmatter_of(path)["related"] == ["FEAT-002", "EPIC-001"]
+
+
+def _assert_all_crlf(path: Path) -> None:
+    import re
+
+    data = path.read_bytes()
+    bare = [
+        data[max(0, m.start() - 30): m.start() + 1]
+        for m in re.finditer(rb"(?<!\r)\n", data)
+    ]
+    assert not bare, (
+        f"{len(bare)} bare LF line ending(s) in a CRLF file, first near: {bare[:3]}"
+    )
+    assert b"\r\r\n" not in data, data
+    assert data.endswith(b"\r\n"), data[-40:]
+
+
+_RELATED_SHAPES = [
+    pytest.param([], id="no-related-line"),
+    pytest.param(["FEAT-002"], id="existing-related-line"),
+]
+
+
+class TestEpicLinkKeepsLineEndingsIssue151:
+    """Linking an item to an epic keeps the item file's own line ending (#151)."""
+
+    @staticmethod
+    def _write_crlf_feature(repo: Path, related: list[str]) -> Path:
+        path = _write_feature(repo, related)
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        assert b"\r\n" in path.read_bytes()
+        _assert_all_crlf(path)
+        return path
+
+    @pytest.mark.parametrize("related", _RELATED_SHAPES)
+    def test_epic_add_keeps_crlf(self, software_runner, software_repo, related):
+        """`epic add` on a CRLF item file: every line still ends in CRLF."""
+        path = self._write_crlf_feature(software_repo, related)
+        result = software_runner.invoke(
+            main, ["epic", "create", "Big Project"], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.output
+
+        result = software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.output
+
+        assert _frontmatter_of(path)["related"] == related + ["EPIC-001"]
+        _assert_all_crlf(path)
+
+    @pytest.mark.parametrize("related", _RELATED_SHAPES)
+    def test_epic_create_items_keeps_crlf(self, software_runner, software_repo, related):
+        """`epic create --items` on a CRLF item file: every line still ends in CRLF."""
+        path = self._write_crlf_feature(software_repo, related)
+        result = software_runner.invoke(
+            main,
+            ["epic", "create", "Big Project", "--items", "FEAT-001"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert "Linked FEAT-001" in result.output
+
+        assert _frontmatter_of(path)["related"] == related + ["EPIC-001"]
+        _assert_all_crlf(path)
+
+    # -- must stay true (controls) -------------------------------------------
+
+    @pytest.mark.parametrize("related", _RELATED_SHAPES)
+    def test_control_lf_item_stays_lf(self, software_runner, software_repo, related):
+        """An LF item file stays LF after linking; only the related line changes."""
+        path = _write_feature(software_repo, related)
+        before = path.read_bytes().split(b"\n")
+        software_runner.invoke(
+            main, ["epic", "create", "Big Project"], catch_exceptions=False
+        )
+        software_runner.invoke(
+            main, ["epic", "add", "EPIC-001", "FEAT-001"], catch_exceptions=False
+        )
+
+        data = path.read_bytes()
+        assert b"\r" not in data
+        after = data.split(b"\n")
+        assert [ln for ln in after if not ln.startswith(b"related:")] == [
+            ln for ln in before if not ln.startswith(b"related:")
+        ]
+        assert _frontmatter_of(path)["related"] == related + ["EPIC-001"]
