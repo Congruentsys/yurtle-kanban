@@ -988,6 +988,218 @@ class TestHDDMeasureCreate:
 
 
 # ---------------------------------------------------------------------------
+# TestTemplateValuesRoundTrip (#142)
+# ---------------------------------------------------------------------------
+
+# Values a user can type that a raw `"{value}"` substitution corrupts. Each
+# must come back EXACTLY: from `show --json`, and from the file's frontmatter
+# read with yaml.safe_load.
+_ROUND_TRIP_VALUES = [
+    pytest.param('Could X identify what is "stale" vs "fresh"?', id="double-quotes"),
+    pytest.param(r"C:\new\table and a\b", id="backslash"),
+    pytest.param("ends with a backslash\\", id="trailing-backslash"),
+    pytest.param("team: core", id="colon-space"),
+    pytest.param("#tag", id="hash"),
+    pytest.param("first line\nsecond line", id="newline"),
+]
+
+# (argv builder, created id, research sub-directory) for each HDD create whose
+# title/statement goes into the template's `title: "..."` frontmatter line.
+_TITLE_CREATES = [
+    pytest.param(lambda v: ["idea", "create", v], "IDEA-R-001", "ideas", id="idea"),
+    pytest.param(lambda v: ["literature", "create", v], "LIT-001", "literature", id="literature"),
+    pytest.param(lambda v: ["paper", "create", "130", v], "PAPER-130", "papers", id="paper"),
+    pytest.param(lambda v: ["hypothesis", "create", v], "H-001", "hypotheses", id="hypothesis"),
+    pytest.param(
+        lambda v: ["experiment", "create", "--title", v], "EXPR-001", "experiments",
+        id="experiment",
+    ),
+    pytest.param(
+        lambda v: ["measure", "create", v, "--unit", "percent", "--category", "accuracy"],
+        "M-001", "measures", id="measure",
+    ),
+]
+
+
+def _parse_frontmatter(text: str) -> dict:
+    """Parse the leading `---` ... `---` block with yaml.safe_load.
+
+    A block YAML cannot parse is an ASSERTION failure: unparseable frontmatter
+    is exactly how the item vanishes from list/board.
+    """
+    assert text.startswith("---\n"), text[:200]
+    end = text.index("\n---\n", 4)
+    try:
+        fm = yaml.safe_load(text[4:end])
+    except yaml.YAMLError as exc:
+        raise AssertionError(
+            f"frontmatter does not parse as YAML: {exc}\n{text[: end + 5]}"
+        ) from None
+    assert isinstance(fm, dict), text[: end + 5]
+    return fm
+
+
+def _read_frontmatter(path: Path) -> dict:
+    return _parse_frontmatter(path.read_text())
+
+
+def _render_frontmatter(engine, item_type: str, variables: dict) -> dict:
+    """Render a template and parse its frontmatter; a render crash is a failure."""
+    try:
+        content = engine.render("hdd", item_type, variables)
+    except Exception as exc:  # e.g. re.error on a trailing backslash
+        raise AssertionError(f"render raised {exc!r} for {variables!r}") from None
+    return _parse_frontmatter(content)
+
+
+def _only_file(directory: Path, item_id: str) -> Path:
+    files = list(directory.glob(f"{item_id}*.md"))
+    assert len(files) == 1, f"expected one {item_id} file in {directory}, got {files}"
+    return files[0]
+
+
+def _listed_ids(runner) -> list[str]:
+    import json
+
+    result = runner.invoke(main, ["list", "--json"])
+    assert result.exit_code == 0, result.output
+    return [item["id"] for item in json.loads(result.output)]
+
+
+def _shown(runner, item_id: str) -> dict:
+    import json
+
+    result = runner.invoke(main, ["show", item_id, "--json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert "error" not in data, data
+    return data
+
+
+class TestTemplateValuesRoundTrip:
+    """Template values with YAML-special characters read back exactly (#142)."""
+
+    # --- TemplateEngine.render directly ---------------------------------
+
+    @pytest.mark.parametrize("value", _ROUND_TRIP_VALUES)
+    @pytest.mark.parametrize("item_type", [
+        "idea", "literature", "paper", "hypothesis", "experiment", "measure",
+    ])
+    def test_render_title_reads_back_exactly(self, engine, item_type, value):
+        """The rendered `title:` frontmatter value is the exact title."""
+        fm = _render_frontmatter(engine, item_type, {
+            "id": "X-001", "title": value, "date": "2026-02-27",
+        })
+        assert fm["title"] == value
+
+    @pytest.mark.parametrize("value", _ROUND_TRIP_VALUES)
+    @pytest.mark.parametrize("field", ["unit", "category"])
+    def test_render_measure_unit_category_read_back_exactly(self, engine, field, value):
+        """The measure's `unit:` / `category:` value is the exact input."""
+        variables = {
+            "id": "M-042", "title": "Reasoning Accuracy",
+            "unit": "percent", "category": "accuracy", "date": "2026-02-27",
+        }
+        variables[field] = value
+        fm = _render_frontmatter(engine, "measure", variables)
+        assert fm[field] == value
+
+    @pytest.mark.parametrize("value", _ROUND_TRIP_VALUES)
+    def test_render_hypothesis_target_reads_back_exactly(self, engine, value):
+        """The hypothesis `target:` value is the exact input."""
+        fm = _render_frontmatter(engine, "hypothesis", {
+            "id": "H130.1", "title": "V12 improves accuracy",
+            "paper": "130", "n": "1", "target": value, "date": "2026-02-27",
+        })
+        assert fm["target"] == value
+
+    # --- HDD CLI creates -------------------------------------------------
+
+    @pytest.mark.parametrize("value", _ROUND_TRIP_VALUES)
+    @pytest.mark.parametrize("argv, item_id, subdir", _TITLE_CREATES)
+    def test_created_item_is_listed_and_title_round_trips(
+        self, runner, temp_repo, hdd_config, argv, item_id, subdir, value,
+    ):
+        """Create succeeds, the item is listed, show and frontmatter give the exact title."""
+        result = runner.invoke(main, argv(value))
+        assert result.exit_code == 0, (result.output, result.exception)
+
+        fm = _read_frontmatter(_only_file(temp_repo / "research" / subdir, item_id))
+        assert fm["title"] == value
+
+        assert item_id in _listed_ids(runner)
+        assert _shown(runner, item_id)["title"] == value
+
+    @pytest.mark.parametrize("value", _ROUND_TRIP_VALUES)
+    @pytest.mark.parametrize("field", ["unit", "category"])
+    def test_measure_create_unit_category_round_trip(
+        self, runner, temp_repo, hdd_config, field, value,
+    ):
+        """`measure create --unit/--category` values read back exactly; item listed."""
+        opts = {"unit": "percent", "category": "accuracy"}
+        opts[field] = value
+        result = runner.invoke(main, [
+            "measure", "create", "Reasoning Accuracy",
+            "--unit", opts["unit"], "--category", opts["category"],
+        ])
+        assert result.exit_code == 0, (result.output, result.exception)
+
+        fm = _read_frontmatter(_only_file(temp_repo / "research" / "measures", "M-001"))
+        assert fm[field] == value
+        assert "M-001" in _listed_ids(runner)
+        assert _shown(runner, "M-001")["title"] == "Reasoning Accuracy"
+
+    @pytest.mark.parametrize("value", _ROUND_TRIP_VALUES)
+    def test_hypothesis_create_target_round_trips(self, runner, temp_repo, hdd_config, value):
+        """`hypothesis create --target` value reads back exactly; item listed."""
+        result = runner.invoke(main, [
+            "hypothesis", "create", "Better recall", "--target", value,
+        ])
+        assert result.exit_code == 0, (result.output, result.exception)
+
+        fm = _read_frontmatter(_only_file(temp_repo / "research" / "hypotheses", "H-001"))
+        assert fm["target"] == value
+        assert "H-001" in _listed_ids(runner)
+        assert _shown(runner, "H-001")["title"] == "Better recall"
+
+    # --- Negative controls: ordinary values render exactly as today -----
+
+    @pytest.mark.parametrize("title", ["Explore transfer learning", "Café über naïve"])
+    def test_ordinary_title_renders_textually_unchanged(self, engine, title):
+        """An ordinary title keeps today's `title: "..."` line and `# ...` heading."""
+        content = engine.render("hdd", "idea", {
+            "id": "IDEA-R-001", "title": title, "date": "2026-02-27",
+        })
+        assert f'title: "{title}"\n' in content
+        assert f"\n# {title}\n" in content
+
+    def test_ordinary_measure_and_target_render_textually_unchanged(self, engine):
+        """Ordinary unit/category/target keep today's double-quoted form."""
+        measure = engine.render("hdd", "measure", {
+            "id": "M-042", "title": "Reasoning Accuracy",
+            "unit": "percent", "category": "accuracy",
+        })
+        assert 'unit: "percent"\n' in measure
+        assert 'category: "accuracy"\n' in measure
+        hyp = engine.render("hdd", "hypothesis", {
+            "id": "H130.1", "title": "V12 improves accuracy",
+            "paper": "130", "n": "1", "target": ">=50%",
+        })
+        assert 'target: ">=50%"\n' in hyp
+
+    def test_ordinary_idea_create_file_unchanged(self, runner, temp_repo, hdd_config):
+        """CLI idea create with an ordinary title writes the same title line as today."""
+        result = runner.invoke(
+            main, ["idea", "create", "Explore transfer learning"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        text = _only_file(temp_repo / "research" / "ideas", "IDEA-R-001").read_text()
+        assert 'title: "Explore transfer learning"\n' in text
+        assert "\n# Explore transfer learning\n" in text
+        assert _shown(runner, "IDEA-R-001")["title"] == "Explore transfer learning"
+
+
+# ---------------------------------------------------------------------------
 # TestMultiSegmentPrefix
 # ---------------------------------------------------------------------------
 
