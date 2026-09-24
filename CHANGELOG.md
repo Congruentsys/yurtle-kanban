@@ -153,6 +153,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crashed `create` and `list`** (#156). Single-board ignore matching now uses the
   absolute path for files outside the repo, so such boards work and their
   `archive/` and `_TEMPLATE` files stay hidden.
+- **Unparseable-item warnings are tighter and cover more cases** (#158). A
+  broken YAML item whose first key starts with "prefix"/"base" (`base : x`) is no
+  longer mistaken for Turtle frontmatter. Files that can't be read (non-UTF-8) or
+  that crash after their frontmatter parses (e.g. `status: [backlog]`) are
+  reported too. `show <ID>` names the file and the reason when the ID's file
+  exists but doesn't parse.
 
 ## [2.2.0] - 2026-08-30
 

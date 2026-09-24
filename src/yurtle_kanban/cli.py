@@ -26,6 +26,7 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.markup import escape
 
 from .board import (
     render_board,
@@ -587,10 +588,32 @@ def show(item_id: str, as_json: bool):
 
     item = service.get_item(item_id.upper())
     if not item:
+        # The ID may belong to a file that exists but doesn't parse (#158)
+        wanted = item_id.upper()
+        broken = [
+            (path, reason) for path, reason in service.parse_warnings
+            if path.stem.upper() == wanted or path.stem.upper().startswith(wanted + "-")
+        ]
         if as_json:
-            click.echo(json.dumps({"error": f"Item not found: {item_id}"}))
+            payload: dict[str, object] = {"error": f"Item not found: {item_id}"}
+            if broken:
+                payload["unparseable"] = [
+                    {"file": str(path), "reason": reason} for path, reason in broken
+                ]
+            click.echo(json.dumps(payload))
         else:
             console.print(f"[red]Item not found: {item_id}[/red]")
+            for path, reason in broken:
+                try:
+                    shown = path.relative_to(service.repo_root)
+                except ValueError:
+                    shown = path
+                # escape: a YAML error quotes the bad line, and `[...]` in it would
+                # otherwise be read as Rich markup (crash or swallowed text)
+                console.print(
+                    f"  found {escape(str(shown))}, but it doesn't parse: {escape(reason)}",
+                    soft_wrap=True,
+                )
         sys.exit(1)
 
     if as_json:
