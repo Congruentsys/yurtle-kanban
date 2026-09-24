@@ -2489,9 +2489,12 @@ class KanbanService:
     # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
     # instead would cut inside a value such as `title: "A --- B"`.
     # The opening line may carry a YAML comment (`--- # generated`, #116): YAML
-    # allows one after a space, not directly after `---` or after a tab.
+    # allows one after a space, not directly after `---` or after a tab. The two
+    # branches can't both claim trailing spaces, so a long unclosed opener fails
+    # in linear time (an optional comment followed by `[ \t\r]*` backtracked
+    # quadratically).
     _FRONTMATTER_RE = re.compile(
-        r"\A---(?: +#[^\n]*)?[ \t\r]*\n(.*?)^---", re.DOTALL | re.MULTILINE,
+        r"\A---(?: +#[^\n]*|[ \t\r]*)\n(.*?)^---", re.DOTALL | re.MULTILINE,
     )
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
