@@ -1779,3 +1779,227 @@ class TestThemePathsUnderConfiguredRoot:
         ]
         listed = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
         assert "EXP-001" in listed.output
+
+
+# ---------------------------------------------------------------------------
+# Issue #103 — frontmatter delimiters are whole `---` lines, not substrings
+# ---------------------------------------------------------------------------
+
+
+class TestFrontmatterDashInValue:
+    """A `---` inside a frontmatter value must not end the frontmatter (#103)."""
+
+    @staticmethod
+    def _write(path: Path, frontmatter: str, body: str) -> Path:
+        path.write_text(f"---\n{frontmatter}---\n\n{body}")
+        return path
+
+    @staticmethod
+    def _frontmatter_block(content: str) -> str:
+        """Text between the opening `---` line and the next whole `---` line."""
+        lines = content.split("\n")
+        assert lines[0] == "---"
+        end = lines.index("---", 1)
+        return "\n".join(lines[1:end])
+
+    # -- the issue's own repro (reader) ------------------------------------
+
+    def test_cli_create_then_list_shows_dashed_title(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`create feature "A --- B"` then `list` lists the item, full title."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+
+        created = runner.invoke(
+            main, ["create", "feature", "A --- B"], catch_exceptions=False,
+        )
+        assert created.exit_code == 0, created.output
+        files = list((temp_repo / "kanban-work" / "features").glob("FEAT-001*.md"))
+        assert len(files) == 1
+        assert 'title: "A --- B"' in files[0].read_text()  # the file is fine
+
+        listed = runner.invoke(main, ["list"], catch_exceptions=False)
+        assert listed.exit_code == 0
+        assert "No work items found" not in listed.output
+        assert "FEAT-001" in listed.output
+        assert "A --- B" in listed.output
+
+    def test_cli_show_json_dashed_title(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`show FEAT-001 --json` finds the item and reports the full title."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        runner.invoke(main, ["create", "feature", "A --- B"], catch_exceptions=False)
+
+        result = runner.invoke(main, ["show", "FEAT-001", "--json"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data["id"] == "FEAT-001"
+        assert data["title"] == "A --- B"
+
+    def test_scan_dashed_title_keeps_all_fields(self, temp_repo, software_config):
+        """An item titled `A --- B` scans with its title, status and priority."""
+        self._write(
+            temp_repo / "kanban-work" / "features" / "FEAT-007-dash.md",
+            'id: FEAT-007\ntitle: "A --- B"\ntype: feature\nstatus: in_progress\n'
+            "priority: high\ncreated: 2026-01-01\n",
+            "# FEAT-007: A --- B\n\nReal body.\n",
+        )
+        svc = KanbanService(software_config, temp_repo)
+        items = {i.id: i for i in svc.scan()}
+
+        assert "FEAT-007" in items
+        item = items["FEAT-007"]
+        assert item.title == "A --- B"
+        assert item.status == WorkItemStatus.IN_PROGRESS
+        assert str(getattr(item.priority, "value", item.priority)) == "high"
+
+    def test_scan_dash_in_last_value_is_not_truncated(self, temp_repo, software_config):
+        """A `---` in the last frontmatter value is kept whole, not cut off."""
+        self._write(
+            temp_repo / "kanban-work" / "features" / "FEAT-008-dash.md",
+            'id: FEAT-008\ntype: feature\nstatus: backlog\ntitle: A --- B\n',
+            "# FEAT-008\n\nReal body.\n",
+        )
+        svc = KanbanService(software_config, temp_repo)
+        items = {i.id: i for i in svc.scan()}
+
+        assert "FEAT-008" in items
+        assert items["FEAT-008"].title == "A --- B"
+
+    # -- description extractor ---------------------------------------------
+
+    def test_description_is_body_not_frontmatter_fragment(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """Description is the real body, not the tail of the frontmatter."""
+        self._write(
+            temp_repo / "kanban-work" / "features" / "FEAT-009-dash.md",
+            'id: FEAT-009\ntitle: "Plain"\ntype: feature\nstatus: backlog\n'
+            'note: x --- y\n',
+            "# FEAT-009: Plain\n\nThe real body.\n",
+        )
+        svc = KanbanService(software_config, temp_repo)
+        items = {i.id: i for i in svc.scan()}
+        assert "FEAT-009" in items
+        assert items["FEAT-009"].description == "The real body."
+
+        monkeypatch.chdir(temp_repo)
+        result = CliRunner().invoke(
+            main, ["show", "FEAT-009", "--json"], catch_exceptions=False,
+        )
+        data = json.loads(result.output)
+        assert data["description"] == "The real body."
+
+    # -- Turtle-block insertion after frontmatter (hdd backfill) -----------
+
+    def test_backfill_inserts_block_after_closing_line(self, hdd_repo, hdd_svc_config):
+        """`backfill_turtle_blocks` puts the block after the closing `---` line."""
+        fp = self._write(
+            hdd_repo / "research" / "ideas" / "IDEA-R-103-dash.md",
+            'id: IDEA-R-103\ntitle: "Plain Idea"\ntype: idea\nstatus: captured\n'
+            'created: 2026-01-01\nnote: x --- y\n',
+            "# IDEA-R-103: Plain Idea\n\nContent here.\n",
+        )
+        svc = KanbanService(hdd_svc_config, hdd_repo)
+        svc.scan()
+
+        results = svc.backfill_turtle_blocks(dry_run=False)
+        assert [r["id"] for r in results if r["action"] == "backfill"] == ["IDEA-R-103"]
+
+        content = fp.read_text()
+        front = self._frontmatter_block(content)
+        assert "```" not in front
+        assert 'note: x --- y' in front
+        after = content.split("\n---\n", 1)[1]
+        assert "```turtle" in after
+        assert after.index("```turtle") < after.index("# IDEA-R-103")
+
+        rescanned = {i.id: i for i in KanbanService(hdd_svc_config, hdd_repo).scan()}
+        assert rescanned["IDEA-R-103"].title == "Plain Idea"
+        assert rescanned["IDEA-R-103"].description == "Content here."
+
+    def test_backfill_dashed_title_item(self, hdd_repo, hdd_svc_config):
+        """An idea titled `A --- B` is backfilled; its title line stays intact."""
+        fp = self._write(
+            hdd_repo / "research" / "ideas" / "IDEA-R-104-dash.md",
+            'id: IDEA-R-104\ntitle: "A --- B"\ntype: idea\nstatus: captured\n'
+            "created: 2026-01-01\n",
+            "# IDEA-R-104: A --- B\n\nContent here.\n",
+        )
+        svc = KanbanService(hdd_svc_config, hdd_repo)
+        svc.scan()
+
+        results = svc.backfill_turtle_blocks(dry_run=False)
+        assert [r["id"] for r in results if r["action"] == "backfill"] == ["IDEA-R-104"]
+
+        content = fp.read_text()
+        front = self._frontmatter_block(content)
+        assert 'title: "A --- B"' in front
+        assert "```" not in front
+
+    # -- negative controls (must stay green) --------------------------------
+
+    def test_control_normal_item_parses(self, temp_repo, software_config):
+        """An item with no `---` in any value parses exactly as before."""
+        self._write(
+            temp_repo / "kanban-work" / "features" / "FEAT-010-plain.md",
+            'id: FEAT-010\ntitle: "Plain title"\ntype: feature\nstatus: review\n'
+            "priority: low\ncreated: 2026-01-01\n",
+            "# FEAT-010: Plain title\n\nPlain body.\n",
+        )
+        svc = KanbanService(software_config, temp_repo)
+        items = {i.id: i for i in svc.scan()}
+
+        item = items["FEAT-010"]
+        assert item.title == "Plain title"
+        assert item.status == WorkItemStatus.REVIEW
+        assert str(getattr(item.priority, "value", item.priority)) == "low"
+        assert item.description == "Plain body."
+
+    def test_control_body_horizontal_rule_kept(self, temp_repo, software_config):
+        """A `---` horizontal rule in the body leaves the body intact."""
+        self._write(
+            temp_repo / "kanban-work" / "features" / "FEAT-011-hr.md",
+            'id: FEAT-011\ntitle: "Ruled"\ntype: feature\nstatus: backlog\n',
+            "# FEAT-011: Ruled\n\nAbove.\n\n---\n\nBelow.\n",
+        )
+        svc = KanbanService(software_config, temp_repo)
+        items = {i.id: i for i in svc.scan()}
+
+        assert items["FEAT-011"].title == "Ruled"
+        assert items["FEAT-011"].description == "Above.\n\n---\n\nBelow."
+
+    def test_control_file_without_leading_dashes_is_not_item(
+        self, temp_repo, software_config,
+    ):
+        """A file that does not start with `---` is still not an item."""
+        (temp_repo / "kanban-work" / "features" / "NOTES.md").write_text(
+            "# Notes\n\nid: FEAT-012\n---\ntitle: nope\n---\n"
+        )
+        (temp_repo / "kanban-work" / "features" / "FEAT-013-lead.md").write_text(
+            '\n---\nid: FEAT-013\ntitle: "Leading blank"\ntype: feature\n'
+            "status: backlog\n---\n\n# FEAT-013\n"
+        )
+        svc = KanbanService(software_config, temp_repo)
+
+        assert svc.scan() == []
+
+    def test_control_backfill_normal_item(self, hdd_repo, hdd_svc_config):
+        """Backfill of an ordinary idea still lands between `---` and the heading."""
+        fp = self._write(
+            hdd_repo / "research" / "ideas" / "IDEA-R-105-plain.md",
+            'id: IDEA-R-105\ntitle: "Plain Idea"\ntype: idea\nstatus: captured\n'
+            "created: 2026-01-01\n",
+            "# IDEA-R-105: Plain Idea\n\nContent here.\n",
+        )
+        svc = KanbanService(hdd_svc_config, hdd_repo)
+        svc.scan()
+        svc.backfill_turtle_blocks(dry_run=False)
+
+        content = fp.read_text()
+        assert "```" not in self._frontmatter_block(content)
+        after = content.split("\n---\n", 1)[1]
+        assert after.index("```turtle") < after.index("# IDEA-R-105")
