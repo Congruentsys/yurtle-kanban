@@ -122,12 +122,20 @@ def test_main_skips_issue_waiting_on_oxford_comma_dep(yk, monkeypatch, capsys):
 # --- 2. pairit merge step tolerates a missing worktree -----------------------------------
 
 def test_pairit_merge_worktree_remove_tolerates_missing_worktree():
+    """Step 4 must not fail when the PR's worktree is already gone (#108).
+
+    Since #167 step 4 runs `safe_merge.sh`, which removes the worktree itself; the
+    behaviour (a missing worktree still merges) is pinned in
+    tests/test_pairit_safe_merge.py::TestSafeMergeMissingWorktree. Here: step 4 hands
+    the removal to safe_merge.sh, and any `git worktree remove` it still shows tolerates
+    a missing worktree.
+    """
     text = PAIRIT.read_text()
     m = re.search(r"\*\*4\. Merge\*\*.*?```bash\n(.*?)```", text, re.S)
     assert m, "pairit SKILL.md step 4 (Merge) code block not found"
-    lines = [ln for ln in m.group(1).splitlines() if "git worktree remove" in ln]
-    assert lines, "step 4 has no `git worktree remove` command"
-    for ln in lines:
+    block = m.group(1)
+    assert "safe_merge.sh" in block, "step 4 does not merge through safe_merge.sh (#167)"
+    for ln in (ln for ln in block.splitlines() if "git worktree remove" in ln):
         cmd = ln.split("#", 1)[0]
         assert "|| true" in cmd or "2>/dev/null" in cmd, (
             f"worktree remove fails when the worktree is already gone: {ln.strip()!r}"

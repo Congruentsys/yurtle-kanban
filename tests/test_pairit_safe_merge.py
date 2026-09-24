@@ -381,6 +381,30 @@ class TestPairitSafeMerge:
         assert not (sb.checkout / ".git" / "MERGE_HEAD").exists()
 
 
+class TestSafeMergeMissingWorktree:
+    """A PR whose worktree is already gone still merges (#108, moved into safe_merge by #167).
+
+    After a session restart /tmp/yk-<N> may be removed, or deleted out from under git
+    (still registered, "prunable"). Neither may stop the merge.
+    """
+
+    @pytest.mark.parametrize("how", ["removed", "deleted-dir"])
+    def test_merges_without_a_worktree(self, tmp_path: Path, how: str) -> None:
+        sb = Sandbox(tmp_path, conflict=False)
+        if how == "removed":
+            _git(sb.checkout, "worktree", "remove", "--force", str(sb.worktree))
+        else:
+            shutil.rmtree(sb.worktree)
+        assert not sb.worktree.exists()
+
+        result = sb.run(GREEN)
+
+        assert result.returncode == 0, _output(result)
+        merges = sb.merge_calls()
+        assert len(merges) == 1, f"expected one `gh pr merge` call, got {sb.calls()}"
+        assert "--delete-branch" in merges[0]["argv"], merges[0]["argv"]
+
+
 class TestPairitSkillUsesSafeMerge:
     """pairit step 4 merges through safe_merge.sh, not a bare `gh pr merge` (#167)."""
 
