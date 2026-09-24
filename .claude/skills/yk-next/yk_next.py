@@ -3,14 +3,16 @@
 
 This repo's work lives on GitHub (issues and PRs), not on a kanban board. In order:
 
-1. RESUME PR     my own open PR that needs something: changes requested, CI red, a merge conflict,
-                 no review at its head sha, or approved + green (so: merge it). CI still running is WAIT.
+1. RESUME PR     my own open PR that needs something: changes requested, CI red, a merge
+                 conflict, no review at its head sha, or approved + green (so: merge it).
+                 CI still running is WAIT.
 2. REVIEW PR     another author's open PR with no verdict at its head sha (reviewer != author).
 3. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet.
-4. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label, and whose
-                 "depends on #N" / "blocked by #N" issues are all closed. `bug` first, then the lower number.
-   A claim is `gh issue edit N --add-assignee @me`, then a re-read: another assignee means a peer got
-   there first, so un-assign and take the next one.
+4. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label,
+                 and whose "depends on #N" / "blocked by #N" issues are all closed.
+                 `bug` first, then the lower number.
+   A claim is `gh issue edit N --add-assignee @me`, then a re-read: another assignee means a
+   peer got there first, so un-assign and take the next one.
 5. NOTHING READY
 
 A review verdict is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
@@ -29,7 +31,10 @@ import sys
 
 HOSTS = {"m4-mini": "Mini", "mini": "Mini", "m5": "M5", "spark": "DGX"}
 HOLD = {"needs-decision", "question", "wontfix", "duplicate", "invalid", "blocked", "on-hold"}
-VERDICT = re.compile(r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I)
+VERDICT = re.compile(
+    r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I,
+)
+CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 DEPENDS = re.compile(r"(?:depends on|blocked by|requires)\s+#(\d+)", re.I)
 BRANCH_ISSUE = re.compile(r"(?:^|/)(\d+)-")
 PR_FIELDS = (
@@ -71,7 +76,7 @@ def ci_state(pr: dict) -> str:
     for c in pr.get("statusCheckRollup") or []:
         concl = (c.get("conclusion") or c.get("state") or "").upper()
         status = (c.get("status") or "COMPLETED").upper()
-        if concl in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"):
+        if concl in CI_FAILED:
             return "red"
         if status != "COMPLETED" or concl in ("PENDING", "EXPECTED", ""):
             state = "pending"
@@ -148,7 +153,8 @@ def main() -> None:
             why.append("an open PR fixes it")
         if labels & HOLD:
             why.append("held: " + ",".join(sorted(labels & HOLD)))
-        waits = sorted({int(n) for n in DEPENDS.findall(i.get("body") or "")} & open_nums - {i["number"]})
+        deps = {int(n) for n in DEPENDS.findall(i.get("body") or "")}
+        waits = sorted((deps & open_nums) - {i["number"]})
         if waits:
             why.append("waits on " + ",".join(f"#{n}" for n in waits))
         cands.append((0 if "bug" in labels else 1, i["number"], i, why))
@@ -165,7 +171,8 @@ def main() -> None:
             print(f"\nWOULD CLAIM ISSUE #{n} — {i['title']}")
             return
         gh("issue", "edit", str(n), "--add-assignee", "@me")
-        now = {x["login"] for x in gh_json("issue", "view", str(n), "--json", "assignees")["assignees"]}
+        view = gh_json("issue", "view", str(n), "--json", "assignees")
+        now = {x["login"] for x in view["assignees"]}
         if now - {me}:
             gh("issue", "edit", str(n), "--remove-assignee", "@me")
             print(f"  claim of #{n} lost the race to {','.join(sorted(now - {me}))} — next")
