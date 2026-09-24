@@ -4341,3 +4341,107 @@ class TestWarnOnUnparseableItems:
         assert len(warnings) == 1, f"expected exactly one warning: {result.stderr!r}"
         assert str(broken_rel) in warnings[0], warnings
         assert not self._lines_naming(result.stderr, turtle_rel), result.stderr
+
+
+# --- #153: a non-string priority is refused with a ValueError naming it -----
+
+
+def _names_value(message: str, value: object) -> bool:
+    """True if ``message`` contains ``repr(value)`` as a standalone token."""
+    return re.search(rf"(?<![\w.]){re.escape(repr(value))}(?![\w.])", message) is not None
+
+
+class TestServiceNonStringPriorityRejected:
+    """A non-string priority (a YAML int, a float, a bool, a list) is refused
+    the way an unknown string like ``urgent`` is: a ValueError whose message
+    names the value, and nothing is written (#153)."""
+
+    NON_STRINGS = (1, 1.5, True, ["high"])
+
+    def _existing(self, temp_repo: Path, priority: str = "low") -> Path:
+        path = temp_repo / "kanban-work" / "features" / "FEAT-001-Existing.md"
+        path.write_text(
+            f"---\nid: FEAT-001\ntitle: Existing\nstatus: backlog\npriority: {priority}\n---\n"
+        )
+        return path
+
+    @pytest.mark.parametrize("prio", NON_STRINGS, ids=repr)
+    def test_create_item_rejects_non_string_priority(self, temp_repo, software_config, prio):
+        svc = KanbanService(software_config, temp_repo)
+        before_files = _item_md_files(temp_repo)
+        before_log = _git_log(temp_repo)
+
+        with pytest.raises(ValueError) as excinfo:
+            svc.create_item(WorkItemType.FEATURE, "probe", priority=prio)
+
+        assert _names_value(str(excinfo.value), prio), str(excinfo.value)
+        assert _item_md_files(temp_repo) == before_files
+        assert _git_log(temp_repo) == before_log
+        assert svc.get_items() == []
+
+    def test_update_item_rejects_non_string_priority(self, temp_repo, software_config):
+        path = self._existing(temp_repo)
+        svc = KanbanService(software_config, temp_repo)
+        before_text = path.read_text()
+        before_log = _git_log(temp_repo)
+
+        with pytest.raises(ValueError) as excinfo:
+            svc.update_item("FEAT-001", priority=1)
+
+        assert _names_value(str(excinfo.value), 1), str(excinfo.value)
+        assert path.read_text() == before_text
+        assert _git_log(temp_repo) == before_log
+        assert svc.get_item("FEAT-001").priority == "low"
+
+    # --- negative controls --------------------------------------------------
+
+    def test_create_item_string_priority_still_normalised(self, temp_repo, software_config):
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.create_item(WorkItemType.FEATURE, "probe", priority="HIGH")
+
+        assert item.priority == "high"
+        assert "\npriority: high\n" in item.file_path.read_text()
+
+    def test_create_item_unknown_string_priority_still_value_error(
+        self, temp_repo, software_config,
+    ):
+        svc = KanbanService(software_config, temp_repo)
+        before = _item_md_files(temp_repo)
+
+        with pytest.raises(ValueError, match="urgent"):
+            svc.create_item(WorkItemType.FEATURE, "probe", priority="urgent")
+
+        assert _item_md_files(temp_repo) == before
+
+    def test_create_item_priority_none_means_default(self, temp_repo, software_config):
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.create_item(WorkItemType.FEATURE, "probe", priority=None)
+
+        assert item.priority == "medium"
+        assert "\npriority: medium\n" in item.file_path.read_text()
+
+    def test_update_item_priority_none_leaves_priority_unchanged(
+        self, temp_repo, software_config,
+    ):
+        path = self._existing(temp_repo, priority="critical")
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.update_item("FEAT-001", title="Renamed", priority=None, commit=False)
+
+        assert item.priority == "critical"
+        assert "\npriority: critical\n" in path.read_text()
+
+
+class TestIndexerMarkedUnused:
+    """``yurtle_kanban.indexer`` is kept (removing it would break the public
+    API) but its module docstring says it is unused and single-board only
+    (#153)."""
+
+    def test_indexer_docstring_says_unused_and_single_board(self):
+        import yurtle_kanban.indexer as indexer
+
+        doc = (indexer.__doc__ or "").lower()
+        assert "unused" in doc or "not used" in doc, indexer.__doc__
+        assert "single-board" in doc or "single board" in doc, indexer.__doc__
