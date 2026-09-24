@@ -144,3 +144,153 @@ class TestPriorityFilterCLI:
         data = json.loads(result.output)
         assert len(data) == 1
         assert data[0]["id"] == "EXP-002"
+
+
+def _md_files(root: Path) -> set[Path]:
+    return {p for p in root.rglob("*.md") if ".git" not in p.parts}
+
+
+def _new_item_files(root: Path, before: set[Path]) -> list[Path]:
+    return sorted(_md_files(root) - before)
+
+
+class TestCreatePriorityValidated:
+    """Plain `create -p` and the MCP create/update tools validate priority
+    against the same four values `list --priority` accepts, so no item can be
+    written with a priority that can never be filtered (#106)."""
+
+    VALID = ("critical", "high", "medium", "low")
+
+    # --- CLI: plain create -------------------------------------------------
+
+    def test_create_rejects_unknown_priority(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = CliRunner().invoke(main, ["create", "feature", "probe", "-p", "urgent"])
+
+        assert result.exit_code == 2, result.output  # click usage error
+        assert "urgent" in result.output
+        for p in self.VALID:
+            assert p in result.output
+        assert _new_item_files(temp_repo, before) == []
+
+    def test_create_push_rejects_unknown_priority(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = CliRunner().invoke(
+            main, ["create", "feature", "probe", "-p", "urgent", "--push"]
+        )
+
+        assert result.exit_code == 2, result.output
+        assert "urgent" in result.output
+        for p in self.VALID:
+            assert p in result.output
+        assert _new_item_files(temp_repo, before) == []
+
+    def test_create_priority_is_case_insensitive(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = CliRunner().invoke(main, ["create", "feature", "probe", "-p", "HIGH"])
+
+        assert result.exit_code == 0, result.output
+        new = _new_item_files(temp_repo, before)
+        assert len(new) == 1
+        assert "\npriority: high\n" in new[0].read_text()
+
+    # --- CLI: negative controls ---------------------------------------------
+
+    def test_create_without_priority_defaults_to_medium(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = CliRunner().invoke(main, ["create", "feature", "probe"])
+
+        assert result.exit_code == 0, result.output
+        new = _new_item_files(temp_repo, before)
+        assert len(new) == 1
+        assert "\npriority: medium\n" in new[0].read_text()
+
+    @pytest.mark.parametrize("prio", VALID)
+    def test_create_accepts_each_valid_priority(self, temp_repo, monkeypatch, prio):
+        monkeypatch.chdir(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = CliRunner().invoke(main, ["create", "feature", "probe", "-p", prio])
+
+        assert result.exit_code == 0, result.output
+        new = _new_item_files(temp_repo, before)
+        assert len(new) == 1
+        assert f"\npriority: {prio}\n" in new[0].read_text()
+
+    def test_list_priority_filter_still_works(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+
+        result = CliRunner().invoke(main, ["list", "--priority", "high", "--json"])
+
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert [d["id"] for d in data] == ["EXP-002"]
+
+    # --- MCP create / update tools ------------------------------------------
+
+    def _mcp(self, repo: Path):
+        mcp_server = pytest.importorskip("yurtle_kanban.mcp.server")
+        return mcp_server.KanbanMCPServer(repo_root=repo)
+
+    def test_mcp_create_rejects_unknown_priority(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = server.handle_tool_call(
+            "kanban_create_item",
+            {"item_type": "feature", "title": "probe", "priority": "urgent"},
+        )
+
+        assert not result.get("success"), result
+        assert "error" in result
+        assert _new_item_files(temp_repo, before) == []
+
+    def test_mcp_create_accepts_valid_priority(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = server.handle_tool_call(
+            "kanban_create_item",
+            {"item_type": "feature", "title": "probe", "priority": "high"},
+        )
+
+        assert result.get("success"), result
+        new = _new_item_files(temp_repo, before)
+        assert len(new) == 1
+        assert "\npriority: high\n" in new[0].read_text()
+
+    def test_mcp_update_rejects_unknown_priority(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-002-High-Item.md"
+
+        result = server.handle_tool_call(
+            "kanban_update_item", {"item_id": "EXP-002", "priority": "urgent"}
+        )
+
+        assert not result.get("success"), result
+        assert "error" in result
+        assert "urgent" not in path.read_text()
+        assert "\npriority: high\n" in path.read_text()
+
+    def test_mcp_update_accepts_valid_priority(self, temp_repo, monkeypatch):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-002-High-Item.md"
+
+        result = server.handle_tool_call(
+            "kanban_update_item", {"item_id": "EXP-002", "priority": "low"}
+        )
+
+        assert result.get("success"), result
+        assert "\npriority: low\n" in path.read_text()
