@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
+from .service import KanbanService
 from .template_engine import TemplateEngine
 
 console = Console()
@@ -108,7 +109,8 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         console.print(f"[yellow]Warning: Item {item_id} not found[/yellow]")
         return False
 
-    content = item.file_path.read_text()
+    # keep the item file's own line endings (#151)
+    content, eol = KanbanService._read_item_text(item.file_path)
     # Match frontmatter: opening --- through closing ---
     frontmatter_match = re.match(r"^---\n(.*?\n)---", content, re.DOTALL)
     if not frontmatter_match:
@@ -147,7 +149,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         close_pos = fm_end - 3
         new_content = content[:close_pos] + related_line + "\n" + content[close_pos:]
 
-    item.file_path.write_text(new_content)
+    KanbanService._write_item_text(item.file_path, new_content, eol)
     item.related = related
     return True
 

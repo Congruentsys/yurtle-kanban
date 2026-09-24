@@ -93,6 +93,43 @@ _turtle_string = turtle_string
 _turtle_unescape = turtle_unescape
 
 
+
+class LineEndings:
+    """A text file's original line endings, so an edit can keep them (#128, #151).
+
+    Lines an edit leaves unchanged keep their exact original ending; changed or
+    added lines take the file's majority ending (`\n` on a tie), so a mixed file
+    is not rewritten wholesale to one ending.
+    """
+
+    def __init__(self, lines: list[str], endings: list[str]) -> None:
+        self.lines = lines  # LF-normalised line contents, without their endings
+        self.endings = endings  # the original ending of each line ("" for none)
+        crlf = sum(1 for e in endings if e == "\r\n")
+        lf = sum(1 for e in endings if e == "\n")
+        self.majority = "\r\n" if crlf > lf else "\n"
+
+    @classmethod
+    def read(cls, raw: str) -> tuple[str, LineEndings]:
+        parts = re.split(r"(\r\n|\r|\n)", raw)
+        lines, endings = parts[0::2], parts[1::2] + [""]
+        return "\n".join(lines), cls(lines, endings)
+
+    def apply(self, text: str) -> str:
+        """Re-end LF `text`: untouched lines keep their ending, others the majority."""
+        import difflib
+
+        new_lines = text.split("\n")
+        new_endings = [self.majority] * (len(new_lines) - 1) + [""]
+        matcher = difflib.SequenceMatcher(a=self.lines, b=new_lines, autojunk=False)
+        for tag, i1, i2, j1, _ in matcher.get_opcodes():
+            if tag == "equal":
+                for k in range(i2 - i1):
+                    j = j1 + k
+                    if j < len(new_lines) - 1 and self.endings[i1 + k]:
+                        new_endings[j] = self.endings[i1 + k]
+        return "".join(line + end for line, end in zip(new_lines, new_endings))
+
 class KanbanService:
     """Service for managing kanban work items."""
 
@@ -2461,8 +2498,14 @@ class KanbanService:
         return transitions.get(status, [])
 
     def _update_item_file(self, item: WorkItem) -> None:
-        """Update the work item file with current state."""
-        item.file_path.write_text(item.to_markdown())
+        """Update the work item file with current state, keeping its line endings (#151)."""
+        eol: LineEndings | str = "\n"
+        text = item.to_markdown()
+        if item.file_path.exists():
+            old, eol = self._read_item_text(item.file_path)
+            if old.endswith("\n") and not text.endswith("\n"):
+                text += "\n"  # keep the file's final newline
+        self._write_item_text(item.file_path, text, eol)
 
     def _update_item_file_with_history(
         self,
@@ -2583,23 +2626,26 @@ class KanbanService:
     )
 
     @staticmethod
-    def _read_item_text(path: Path) -> tuple[str, str]:
-        """Read an item file as LF text plus its own line ending (#128).
+    def _read_item_text(path: Path) -> tuple[str, LineEndings]:
+        """Read an item file as LF text plus its line endings (#128, #151).
 
         `read_text()` silently turns CRLF into LF, so every edit used to rewrite a
-        CRLF file as LF. Edits work on LF text; `_write_item_text` restores CRLF.
+        CRLF file as LF. Edits work on LF text; `_write_item_text` puts each
+        untouched line's own ending back and gives changed lines the file's
+        majority ending. A lone `\r` is a line break too, as it is for
+        read_text() and the frontmatter parser; otherwise an edit's `.*` would
+        span it and drop the key after it.
         """
-        raw = path.read_bytes().decode("utf-8")
-        eol = "\r\n" if "\r\n" in raw else "\n"
-        # A lone `\r` is a line break too, as it is for read_text() and the
-        # frontmatter parser; otherwise an edit's `.*` would span it and drop
-        # the key after it
-        return re.sub(r"\r\n?", "\n", raw), eol
+        return LineEndings.read(path.read_bytes().decode("utf-8"))
 
     @staticmethod
-    def _write_item_text(path: Path, text: str, eol: str) -> None:
-        """Write LF text back with the file's own line ending (#128)."""
-        path.write_bytes((text.replace("\n", eol) if eol != "\n" else text).encode("utf-8"))
+    def _write_item_text(path: Path, text: str, eol: LineEndings | str) -> None:
+        """Write LF text back with the file's line endings (#128, #151)."""
+        if isinstance(eol, str):
+            out = text.replace("\n", eol) if eol != "\n" else text
+        else:
+            out = eol.apply(text)
+        path.write_bytes(out.encode("utf-8"))
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
