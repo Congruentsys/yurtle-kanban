@@ -4274,3 +4274,70 @@ class TestWarnOnUnparseableItems:
 
         assert [i.id for i in items] == ["FEAT-001"]
         assert items[0].title == "good item"
+
+    # ---- Must stay true: Yurtle docs with Turtle (not YAML) frontmatter ----
+
+    TURTLE_FRONTMATTER = {
+        "prefix": (
+            "---\n"
+            "@prefix paper: <https://nusy.dev/ontology/paper#> .\n"
+            "@prefix dc: <http://purl.org/dc/terms/> .\n"
+            "<> a paper:Paper ;\n"
+            '    dc:title "A research note" .\n'
+            "---\n\n# A research note\n\nBody text.\n"
+        ),
+        "base": (
+            "---\n"
+            "@base <https://nusy.dev/papers/> .\n"
+            "@prefix paper: <https://nusy.dev/ontology/paper#> .\n"
+            "<> a paper:Paper .\n"
+            "---\n\n# Based note\n"
+        ),
+        "sparql-prefix": (
+            "---\n"
+            "PREFIX ex: <https://example.org/ns#>\n"
+            '<> a ex:Doc ; ex:title "Sparql-style" .\n'
+            "---\n\n# Sparql-style note\n"
+        ),
+    }
+
+    @pytest.mark.parametrize("kind", list(TURTLE_FRONTMATTER))
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_turtle_frontmatter_doc_is_silent(
+        self, temp_repo, software_config, monkeypatch, kind, args,
+    ):
+        """A Yurtle document whose frontmatter is Turtle is legitimate, not broken."""
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "research-note.md").write_text(
+            self.TURTLE_FRONTMATTER[kind]
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        if args == ["list", "--json"]:
+            assert [d["id"] for d in json.loads(result.stdout)] == ["FEAT-001"]
+        assert result.stderr == "", result.stderr
+
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_mixed_turtle_doc_and_broken_item_warns_only_for_broken(
+        self, temp_repo, software_config, monkeypatch, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        turtle_rel = self.FEATURES / "research-note.md"
+        (temp_repo / turtle_rel).write_text(self.TURTLE_FRONTMATTER["prefix"])
+        broken_rel = self.FEATURES / "FEAT-003-broken.md"
+        (temp_repo / broken_rel).write_text(
+            "---\nid: FEAT-003\ntitle: [unclosed\ntype: feature\nstatus: backlog\n"
+            "---\n\n# broken\n"
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        warnings = [ln for ln in result.stderr.splitlines() if ln.strip()]
+        assert len(warnings) == 1, f"expected exactly one warning: {result.stderr!r}"
+        assert str(broken_rel) in warnings[0], warnings
+        assert not self._lines_naming(result.stderr, turtle_rel), result.stderr
