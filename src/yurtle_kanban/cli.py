@@ -262,6 +262,16 @@ kanban:
     config_path = kanban_dir / "config.yaml"
     config_path.write_text(config_content)
 
+    board_root = (repo_root / path).resolve()
+    if not _within(board_root, repo_root.resolve()):
+        # git commits nothing outside the repo; say so now, not at the first move (#174)
+        console.print(
+            f"[yellow]Warning: {escape(str(board_root))} is outside this repository, so "
+            "its items will not be git-tracked (no commits on create, move or comment)."
+            "[/yellow]",
+            soft_wrap=True,
+        )
+
     # Copy any additional theme templates
     templates_src = _get_templates_dir()
     theme_templates = templates_src / theme
@@ -490,7 +500,13 @@ def create(
             else:
                 console.print(f"[green]Created {result['id']}: {title}[/green]")
                 console.print(f"  File: {item.file_path}")
-                console.print("[dim]  (committed locally — no remote configured)[/dim]")
+                if result.get("committed", True):
+                    console.print("[dim]  (committed locally — no remote configured)[/dim]")
+                else:
+                    console.print(
+                        "[yellow]  (not committed: the board is outside the git repository)"
+                        "[/yellow]"
+                    )
         else:
             console.print(f"[red]Failed: {result['message']}[/red]")
             sys.exit(1)

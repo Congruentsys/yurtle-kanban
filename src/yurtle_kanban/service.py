@@ -267,6 +267,36 @@ class KanbanService:
 
         return items
 
+    def _repo_relative(self, path: Path) -> Path | None:
+        """`path` relative to the repo, also when it's reached through a symlink
+        (macOS `/tmp` → `/private/tmp`, #174); None when it lies outside the repo."""
+        try:
+            return path.relative_to(self.repo_root)
+        except ValueError:
+            pass
+        try:
+            return path.resolve().relative_to(self.repo_root.resolve())
+        except (ValueError, OSError):
+            return None
+
+    def _ignore_key(self, path: Path) -> str:
+        """What ignore patterns match: repo-relative inside the repo; a board root
+        outside it (#156) matches its absolute path (fnmatch's `*` spans `/`, so
+        `**/archive/**` still works)."""
+        rel = self._repo_relative(path)
+        return str(rel) if rel is not None else str(path)
+
+    def _outside_repo(self, *paths: Path) -> bool:
+        """True, with a warning, when any of `paths` lies outside the git repository,
+        so git can't commit it (#174): the caller skips git instead of failing late."""
+        outside = [str(p) for p in paths if self._repo_relative(p) is None]
+        if outside:
+            logger.warning(
+                f"Not committed: {', '.join(outside)} is outside the git repository "
+                f"at {self.repo_root}"
+            )
+        return bool(outside)
+
     def _should_ignore(self, path: Path) -> bool:
         """Check a path against the single-board ``paths.ignore`` patterns.
 
@@ -274,12 +304,7 @@ class KanbanService:
         ``BoardConfig.ignore`` via ``_should_ignore_for_board`` (#124), so
         ``paths.ignore`` does not govern it (#129).
         """
-        # Repo-relative inside the repo; a board root outside it (#156) matches
-        # its absolute path (fnmatch's `*` spans `/`, so `**/archive/**` still works)
-        try:
-            path_str = str(path.relative_to(self.repo_root))
-        except ValueError:
-            path_str = str(path)
+        path_str = self._ignore_key(path)
         for pattern in self.config.paths.ignore:
             if fnmatch.fnmatch(path_str, pattern):
                 return True
@@ -694,10 +719,7 @@ class KanbanService:
         Returns:
             True if the path should be ignored
         """
-        try:
-            path_str = str(path.relative_to(self.repo_root))
-        except ValueError:
-            path_str = str(path)
+        path_str = self._ignore_key(path)
 
         for pattern in board_config.ignore:
             if fnmatch.fnmatch(path_str, pattern):
@@ -1277,7 +1299,22 @@ class KanbanService:
             allocations = allocations[-100:]
             lock_file.write_text(json_mod.dumps(allocations, indent=2))
 
-            # Step 6: Commit both files
+            # Step 6: Commit both files. A board outside the repo can't be
+            # committed or pushed (#174): the item is created, and that's all.
+            if self._outside_repo(file_path):
+                self._items[current_id] = item
+                self._fire_create_hook(item)
+                return {
+                    "success": True,
+                    "item": item,
+                    "id": current_id,
+                    "pushed": False,
+                    "committed": False,
+                    "message": (
+                        f"Created {current_id}; not committed: the board is outside "
+                        "the git repository"
+                    ),
+                }
             try:
                 subprocess.run(
                     ["git", "add", str(file_path), str(lock_file)],
@@ -1741,6 +1778,8 @@ class KanbanService:
         Returns:
             True if commit (and optional push) succeeded, False otherwise.
         """
+        if self._outside_repo(file_path):
+            return False
         try:
             subprocess.run(
                 ["git", "add", str(file_path)],
@@ -2740,6 +2779,8 @@ class KanbanService:
 
     def _git_commit(self, file_path: Path, message: str) -> None:
         """Commit changes to git."""
+        if self._outside_repo(file_path):
+            return
         try:
             subprocess.run(
                 ["git", "add", str(file_path)],
