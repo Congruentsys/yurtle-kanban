@@ -2851,3 +2851,97 @@ class TestHDDCreatePriority:
         frontmatter = text.split("\n---\n", 1)[0]
         assert 'title: "A --- B"' in frontmatter
         assert "\npriority: high" in frontmatter
+
+
+# ---------------------------------------------------------------------------
+# Issue #141 — HDD creates write Turtle literals that parse and round-trip
+# ---------------------------------------------------------------------------
+
+_RDFS_LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
+
+
+def _fenced_turtle(text: str) -> str:
+    import re as _re
+
+    m = _re.search(r"^```turtle\n(.*?)^```", text, _re.DOTALL | _re.MULTILINE)
+    assert m, text
+    return m.group(1)
+
+
+def _parse_turtle(data: str):
+    from rdflib import Graph
+
+    g = Graph()
+    g.parse(data=data, format="turtle", publicID="http://x/")
+    return g
+
+
+def _objects(g, predicate: str) -> list[str]:
+    from rdflib import URIRef
+
+    return [str(o) for o in g.objects(None, URIRef(predicate))]
+
+
+class TestHDDCreateTurtleLiteralsIssue141:
+    """An HDD create whose title/target/unit/category carries a newline writes
+    a Turtle block that parses, the literal reads back exactly, the item keeps
+    its graph, and `show` works (#141)."""
+
+    def _create(self, runner, args):
+        result = runner.invoke(main, args, catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        return result
+
+    def test_idea_title_with_newline(self, runner, temp_repo, hdd_config):
+        self._create(runner, ["idea", "create", "p\nq"])
+        text = next((temp_repo / "research" / "ideas").glob("IDEA-R-001*.md")).read_text()
+        g = _parse_turtle(_fenced_turtle(text))
+        assert _objects(g, _RDFS_LABEL) == ["p\nq"]
+
+        item = KanbanService(hdd_config, temp_repo).get_item("IDEA-R-001")
+        assert item is not None and item.graph is not None
+        assert "p\nq" in _objects(item.graph, _RDFS_LABEL)
+
+        show = runner.invoke(main, ["show", "IDEA-R-001"], catch_exceptions=False)
+        assert show.exit_code == 0, show.output
+
+    def test_hypothesis_target_with_newline(self, runner, temp_repo, hdd_config):
+        self._create(
+            runner, ["hypothesis", "create", "Acc", "--paper", "130", "--target", ">= 95%\nand more"]
+        )
+        text = next((temp_repo / "research" / "hypotheses").glob("H130.1*.md")).read_text()
+        g = _parse_turtle(_fenced_turtle(text))
+        assert _objects(g, "https://nusy.dev/hypothesis/target") == [">= 95%\nand more"]
+        assert _objects(g, _RDFS_LABEL) == ["Acc"]
+
+        item = KanbanService(hdd_config, temp_repo).get_item("H130.1")
+        assert item is not None and item.graph is not None
+        assert ">= 95%\nand more" in _objects(item.graph, "https://nusy.dev/hypothesis/target")
+
+        show = runner.invoke(main, ["show", "H130.1"], catch_exceptions=False)
+        assert show.exit_code == 0, show.output
+
+    def test_measure_unit_and_category_with_newline(self, runner, temp_repo, hdd_config):
+        self._create(
+            runner,
+            ["measure", "create", "Latency", "--unit", "ms\nper req", "--category", "perf\nlat"],
+        )
+        text = next((temp_repo / "research" / "measures").glob("M-001*.md")).read_text()
+        g = _parse_turtle(_fenced_turtle(text))
+        assert _objects(g, "https://nusy.dev/measure/unit") == ["ms\nper req"]
+        assert _objects(g, "https://nusy.dev/measure/category") == ["perf\nlat"]
+
+        item = KanbanService(hdd_config, temp_repo).get_item("M-001")
+        assert item is not None and item.graph is not None
+        assert "ms\nper req" in _objects(item.graph, "https://nusy.dev/measure/unit")
+
+    def test_plain_idea_title_unchanged(self, runner, temp_repo, hdd_config):
+        """Negative control: a plain title is written byte-identically to before."""
+        self._create(runner, ["idea", "create", "Explore transfer learning"])
+        text = next((temp_repo / "research" / "ideas").glob("IDEA-R-001*.md")).read_text()
+        assert '    rdfs:label "Explore transfer learning" .\n```' in text
+        g = _parse_turtle(_fenced_turtle(text))
+        assert _objects(g, _RDFS_LABEL) == ["Explore transfer learning"]
+        item = KanbanService(hdd_config, temp_repo).get_item("IDEA-R-001")
+        assert item is not None and item.graph is not None
+        assert "Explore transfer learning" in _objects(item.graph, _RDFS_LABEL)
