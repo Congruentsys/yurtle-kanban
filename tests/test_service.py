@@ -3374,3 +3374,128 @@ class TestStatusChangeTurtleEscaping:
         path = self._item_file(temp_repo)
         assert f"kb:closedBy <{uri}> ;" in self._status_block(path)
         self._graph(path)
+
+
+# ---------------------------------------------------------------------------
+# Issue #121 -- every frontmatter value create writes reads back unchanged
+# ---------------------------------------------------------------------------
+
+_YAML_SPECIAL_TAGS = [
+    pytest.param("team: core", id="colon-space"),
+    pytest.param("yes", id="yes-bool"),
+    pytest.param("null", id="null"),
+    pytest.param("#core", id="leading-hash"),
+    pytest.param("[x]", id="leading-bracket"),
+    pytest.param("{x}", id="leading-brace"),
+    pytest.param("&a", id="leading-ampersand"),
+    pytest.param("*a", id="leading-star"),
+    pytest.param("123", id="int"),
+]
+
+_ORDINARY_ITEM_FILE = (
+    "---\n"
+    "id: FEAT-001\n"
+    'title: "Add dark mode"\n'
+    "type: feature\n"
+    "status: ready\n"
+    "priority: high\n"
+    "assignee: agent-x\n"
+    "created: 2026-01-12\n"
+    "tags: [backend, ui-polish]\n"
+    "depends_on: [EXP-001]\n"
+    "related: [FEAT-002, BUG-003]\n"
+    "compute_requirement: gpu\n"
+    "resolution: completed\n"
+    "superseded_by: [FEAT-009]\n"
+    "---\n"
+    "\n"
+    "# Add dark mode\n"
+    "\n"
+    "Body text."  # to_markdown writes no trailing newline
+)
+
+
+class TestAllFrontmatterValuesRoundTrip:
+    """create --tags values read back as the same strings; ordinary files are unchanged (#121)."""
+
+    @staticmethod
+    def _run(runner: CliRunner, args: list[str]):
+        """Invoke the CLI; a crash fails as an assertion, not a raw exception."""
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (
+            f"{args} exited {result.exit_code}: {result.exception!r}\n{result.output}"
+        )
+        return result
+
+    @staticmethod
+    def _item_file(repo: Path) -> Path:
+        files = list((repo / "kanban-work" / "features").glob("FEAT-001*.md"))
+        assert len(files) == 1, files
+        return files[0]
+
+    @staticmethod
+    def _frontmatter_text(path: Path) -> str:
+        lines = path.read_text().split("\n")
+        assert lines[0] == "---"
+        return "\n".join(lines[1:lines.index("---", 1)])
+
+    def _assert_tags_read_back(self, runner: CliRunner, repo: Path, tags: list[str]) -> None:
+        shown = self._run(runner, ["show", "FEAT-001", "--json"])
+        data = json.loads(shown.output)
+        assert data["id"] == "FEAT-001"
+        assert data["tags"] == tags
+
+        path = self._item_file(repo)
+        try:
+            fm = yaml.safe_load(self._frontmatter_text(path))
+        except yaml.YAMLError as exc:
+            pytest.fail(f"frontmatter is not valid YAML: {exc}\n{path.read_text()}")
+        assert fm["tags"] == tags
+
+    def test_issue_repro_create_tags_team_core(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """The issue's repro: create --tags "team: core" -> tags == ["team: core"]."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe", "--tags", "team: core"])
+
+        self._assert_tags_read_back(runner, temp_repo, ["team: core"])
+
+    @pytest.mark.parametrize("value", _YAML_SPECIAL_TAGS)
+    def test_create_special_tag_round_trips(
+        self, temp_repo, software_config, monkeypatch, value,
+    ):
+        """create --tags "backend,<value>" reads back as two strings, value intact."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe", "--tags", f"backend,{value}"])
+
+        self._assert_tags_read_back(runner, temp_repo, ["backend", value])
+
+    # -- must stay true (controls) -------------------------------------------
+
+    def test_control_create_ordinary_tags_unquoted(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """Ordinary tags are written plain, and depends_on stays `[]`."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe", "--tags", "backend,ui-polish"])
+
+        front = self._frontmatter_text(self._item_file(temp_repo)).split("\n")
+        assert "tags: [backend, ui-polish]" in front
+        assert "depends_on: []" in front
+        self._assert_tags_read_back(runner, temp_repo, ["backend", "ui-polish"])
+
+    def test_control_existing_ordinary_file_rewrites_identically(
+        self, temp_repo, software_config,
+    ):
+        """Parsing an existing ordinary file and re-writing it is byte-identical."""
+        path = temp_repo / "kanban-work" / "features" / "FEAT-001-add-dark-mode.md"
+        path.write_text(_ORDINARY_ITEM_FILE)
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc._parse_file(path)
+        assert item is not None
+        assert item.to_markdown() == _ORDINARY_ITEM_FILE

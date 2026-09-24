@@ -92,6 +92,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share no common parent** (#122). A multi-board board scans one path, and none
   covered e.g. `a/` and `b/`. `board-add` now refuses the upgrade, names the
   scan paths it can't cover, and leaves `.kanban/config.yaml` unchanged.
+- **Every frontmatter value `create`/`update` writes now reads back unchanged**
+  (#121, extending #104). `--tags "team: core"` was stored as a dict, `yes` as
+  `true`, and `#core` or `*a` broke the file. Tags, `depends_on`, `related`,
+  `superseded_by`, `resolution` and `compute_requirement` are now quoted when
+  YAML would misread them. Inside a flow list, `a, b` stays one element.
+  Titles and value summaries escape backslashes and newlines too. Ordinary
+  values are written byte-for-byte as before.
 
 ## [2.2.0] - 2026-08-30
 
