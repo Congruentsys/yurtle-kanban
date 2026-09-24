@@ -663,3 +663,139 @@ class TestToYurtlePlainValuesUnchangedIssue141:
     def test_quote_and_backslash_escaping_unchanged(self):
         y = _ordinary_item(resolution='a "b" C:\\d').to_yurtle()
         assert r'   kb:resolution "a \"b\" C:\\d" ;' in y
+
+
+# ---------------------------------------------------------------------------
+# Issue #148 -- characters outside YAML's printable set are escaped, not left raw
+# ---------------------------------------------------------------------------
+
+_YAML_FORBIDDEN_CHARS = [
+    pytest.param("\x7f", id="DEL"),
+    pytest.param("\x85", id="NEL"),
+    pytest.param("\x80", id="C1-0x80"),
+    pytest.param("\x9f", id="C1-0x9f"),
+    pytest.param(" ", id="LINE-SEP"),
+    pytest.param(" ", id="PARA-SEP"),
+    pytest.param("\x00", id="NUL"),
+    pytest.param("\x1b", id="ESC"),
+    pytest.param("﻿", id="BOM"),
+    pytest.param("￾", id="U+FFFE"),
+]
+
+_PRINTABLE_NON_ASCII = [
+    pytest.param("Café über naïve", id="latin"),
+    pytest.param("日本語", id="cjk"),
+    pytest.param("ship it 🚀", id="emoji"),
+]
+
+
+class TestYamlForbiddenCharactersRoundTripIssue148:
+    """A value with a character YAML won't accept raw still reads back exactly (#148)."""
+
+    @staticmethod
+    def _frontmatter_text(markdown: str) -> str:
+        lines = markdown.split("\n")
+        assert lines[0] == "---"
+        return "\n".join(lines[1:lines.index("---", 1)])
+
+    @classmethod
+    def _frontmatter(cls, item: WorkItem) -> dict:
+        markdown = item.to_markdown()
+        try:
+            fm = yaml.safe_load(cls._frontmatter_text(markdown))
+        except yaml.YAMLError as exc:
+            pytest.fail(f"frontmatter is not valid YAML: {exc}\n{markdown!r}")
+        assert isinstance(fm, dict), markdown
+        return fm
+
+    @pytest.mark.parametrize("ch", _YAML_FORBIDDEN_CHARS)
+    def test_title_round_trips(self, ch):
+        title = f"t{ch}u"
+        assert self._frontmatter(_ordinary_item(title=title))["title"] == title
+
+    @pytest.mark.parametrize("field_name", _LIST_FIELDS)
+    @pytest.mark.parametrize("ch", _YAML_FORBIDDEN_CHARS)
+    def test_list_element_round_trips(self, field_name, ch):
+        value = f"x{ch}y"
+        fm = self._frontmatter(_ordinary_item(**{field_name: ["backend", value]}))
+        assert fm[field_name] == ["backend", value]
+
+    @pytest.mark.parametrize(
+        "field_name", ["resolution", "assignee", "compute_requirement"]
+    )
+    @pytest.mark.parametrize("ch", _YAML_FORBIDDEN_CHARS)
+    def test_scalar_round_trips(self, field_name, ch):
+        value = f"a{ch}b"
+        fm = self._frontmatter(_ordinary_item(**{field_name: value}))
+        assert fm[field_name] == value
+
+    @pytest.mark.parametrize("ch", _YAML_FORBIDDEN_CHARS)
+    def test_value_summary_round_trips(self, ch):
+        value = f"v{ch}w"
+        fm = self._frontmatter(_ordinary_item(value_summary=value))
+        assert fm["value_summary"] == value
+
+    @pytest.mark.parametrize("ch", _YAML_FORBIDDEN_CHARS)
+    def test_cli_created_item_is_listed(self, ch, tmp_path, monkeypatch):
+        """`create feature "t<ch>u"` then `list` shows it with the exact title and tag."""
+        import json
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+        from yurtle_kanban.cli import main
+
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        assert runner.invoke(main, ["init"], catch_exceptions=False).exit_code == 0
+
+        title, tag, assignee = f"t{ch}u", f"x{ch}y", f"a{ch}b"
+        result = runner.invoke(
+            main,
+            ["create", "feature", title, "--tags", tag, "--assignee", assignee],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+        result = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        try:
+            items = json.loads(result.output)
+        except json.JSONDecodeError:
+            pytest.fail(f"item vanished from list: {result.output!r}")
+        assert [(i["title"], i["tags"], i["assignee"]) for i in items] == [
+            (title, [tag], assignee)
+        ]
+
+    # -- must stay true (controls) -------------------------------------------
+
+    @pytest.mark.parametrize("value", _PRINTABLE_NON_ASCII)
+    def test_control_printable_non_ascii_written_as_is(self, value):
+        """Printable non-ASCII is written literally -- no \\u escapes."""
+        front = self._frontmatter_text(
+            _ordinary_item(
+                title=value, tags=[value], resolution=value, assignee=value
+            ).to_markdown()
+        )
+        assert "\\u" not in front and "\\U" not in front
+        lines = front.split("\n")
+        assert f"title: \"{value}\"" in lines
+        assert any(line.startswith("tags: [") and value in line for line in lines)
+        assert any(line.startswith("resolution: ") and value in line for line in lines)
+        assert any(line.startswith("assignee: ") and value in line for line in lines)
+
+    @pytest.mark.parametrize("value", _PRINTABLE_NON_ASCII)
+    def test_control_printable_non_ascii_round_trips(self, value):
+        fm = self._frontmatter(
+            _ordinary_item(title=value, tags=[value], resolution=value, assignee=value)
+        )
+        assert fm["title"] == value
+        assert fm["tags"] == [value]
+        assert fm["resolution"] == value
+        assert fm["assignee"] == value
+
+    def test_control_ordinary_item_markdown_unchanged(self):
+        assert _ordinary_item().to_markdown() == _ORDINARY_MARKDOWN
