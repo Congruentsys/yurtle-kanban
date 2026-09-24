@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -372,3 +373,260 @@ class TestSkillDocumentsHelper:
         assert "core.commentChar" in text, (
             "pairit SKILL.md does not document rebasing with core.commentChar"
         )
+
+
+# =========================================================================== round 2
+#
+# Review of PR #163 found shapes where the helper exits 0 (or commits junk) even
+# though no rebase happened or the resolution was unsafe. In each case the helper
+# must STOP: non-zero exit, rebase left stopped or aborted, nothing mangled
+# committed, and the branch ref and its commits not lost. Case 3 may also resolve
+# correctly.
+
+Files = dict[str, "str | None"]  # path -> content; None deletes the path
+
+BRANCH = "fix/88-thing"
+
+
+def _write(wc: Path, files: Files) -> None:
+    for rel, content in files.items():
+        path = wc / rel
+        if content is None:
+            if path.exists():
+                path.unlink()
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+
+def _scenario(
+    tmp_path: Path,
+    base: Files,
+    branch_commits: list[tuple[str, Files]],
+    upstream_commits: list[tuple[str, Files]],
+    *,
+    branch: str = BRANCH,
+) -> dict[str, object]:
+    """origin (bare) + main working copy + feature checkout on `branch`.
+
+    `branch_commits` go on `branch` in the feature checkout (`main` means commits on
+    a local main). `upstream_commits` are pushed to origin/main afterwards, and the
+    feature checkout fetches them.
+    """
+    origin = tmp_path / "origin.git"
+    main_wc = tmp_path / "main_wc"
+    feature = tmp_path / "feature"
+    _git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
+    _git(tmp_path, "init", "-q", "-b", "main", str(main_wc))
+    _git(main_wc, "remote", "add", "origin", str(origin))
+    _write(main_wc, base)
+    _commit_all(main_wc, "chore: initial")
+    _git(main_wc, "push", "-q", "-u", "origin", "main")
+
+    _git(tmp_path, "clone", "-q", str(origin), str(feature))
+    if branch != "main":
+        _git(feature, "checkout", "-q", "-b", branch)
+    for subject, files in branch_commits:
+        _write(feature, files)
+        _commit_all(feature, subject)
+    tip = _git(feature, "rev-parse", "HEAD").stdout.strip()
+
+    for subject, files in upstream_commits:
+        _write(main_wc, files)
+        _commit_all(main_wc, subject)
+    _git(main_wc, "push", "-q", "origin", "main")
+    _git(feature, "fetch", "-q", "origin")
+
+    return {"feature": feature, "tip": tip, "branch": branch, "tmp": tmp_path}
+
+
+def _tree_paths(repo: Path, rev: str) -> list[str]:
+    out = _git(repo, "ls-tree", "-r", "-z", "--name-only", rev).stdout
+    return [p for p in out.split("\0") if p]
+
+
+def _assert_stopped(
+    sc: dict[str, object],
+    result: subprocess.CompletedProcess[str],
+    check_commit: Callable[[str], None] | None = None,
+) -> None:
+    """Non-zero exit; rebase stopped or never applied; branch not lost; nothing bad committed."""
+    feature: Path = sc["feature"]  # type: ignore[assignment]
+    tip: str = sc["tip"]  # type: ignore[assignment]
+    branch: str = sc["branch"]  # type: ignore[assignment]
+    assert result.returncode != 0, (
+        "helper exited 0 on a shape it must stop on:\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    ref = _git(feature, "rev-parse", f"refs/heads/{branch}").stdout.strip()
+    assert ref == tip, f"branch ref {branch} was rewritten ({tip[:8]} -> {ref[:8]})"
+    if _rebase_in_progress(feature):
+        if check_commit is not None:
+            for sha in _git(feature, "rev-list", "origin/main..HEAD").stdout.split():
+                check_commit(sha)
+    else:
+        head = _git(feature, "rev-parse", "HEAD").stdout.strip()
+        assert head == tip, "rebase neither left stopped nor aborted back to the branch tip"
+
+
+class TestRound2ModifyDelete:
+    def test_upstream_deleted_file_branch_appended_to_stops(self, tmp_path: Path) -> None:
+        base_t = "import os\n\n\nclass A:\n    pass\n"
+        sc = _scenario(
+            tmp_path,
+            {"t.py": base_t, "README": "x\n"},
+            [("#88: tests (red)", {"t.py": base_t + "\n\nclass B(os.PathLike):\n    pass\n"})],
+            [("chore: drop t.py (#87)", {"t.py": None})],
+        )
+        result = _run_helper(sc["feature"])  # type: ignore[arg-type]
+
+        def check(sha: str) -> None:
+            shown = _git(sc["feature"], "show", f"{sha}:t.py", check=False)  # type: ignore[arg-type]
+            if shown.returncode == 0:
+                assert "import os" in shown.stdout, f"{sha} committed a t.py fragment"
+
+        _assert_stopped(sc, result, check)
+
+
+class TestRound2AddAdd:
+    def test_both_sides_create_same_file_stops(self, tmp_path: Path) -> None:
+        mine = "import json\n\n\ndef test_new():\n    assert json.loads('1') == 1\n"
+        theirs = "import re\n\n\ndef test_new():\n    assert re.match('a', 'a')\n"
+        sc = _scenario(
+            tmp_path,
+            {"README": "x\n"},
+            [("#88: tests (red)", {"tests_new.py": mine})],
+            [("test: new (#87)", {"tests_new.py": theirs})],
+        )
+        result = _run_helper(sc["feature"])  # type: ignore[arg-type]
+
+        def check(sha: str) -> None:
+            shown = _git(sc["feature"], "show", f"{sha}:tests_new.py", check=False)  # type: ignore[arg-type]
+            if shown.returncode == 0:
+                assert shown.stdout.count("def test_new") == 1, f"{sha} concatenated both files"
+
+        _assert_stopped(sc, result, check)
+
+
+JUNK_NAMES = {"my", "file.txt"}
+
+
+@pytest.mark.parametrize("name", ["my file.txt", "café.txt"])
+class TestRound2AwkwardFilenames:
+    def test_append_conflict_on_awkward_name_never_creates_junk(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        base = "line one\n"
+        sc = _scenario(
+            tmp_path,
+            {name: base, "README": "x\n"},
+            [("#88: append (red)", {name: base + "branch line\n"})],
+            [("chore: append (#87)", {name: base + "upstream line\n"})],
+        )
+        feature: Path = sc["feature"]  # type: ignore[assignment]
+        result = _run_helper(feature)
+
+        def is_junk(p: str) -> bool:
+            return p in JUNK_NAMES or p.startswith('"') or "\\3" in p
+
+        on_disk = [
+            str(p.relative_to(feature))
+            for p in feature.rglob("*")
+            if ".git" not in p.relative_to(feature).parts
+        ]
+        index = [p for p in _git(feature, "ls-files", "-z").stdout.split("\0") if p]
+        for where, paths in (
+            ("worktree", on_disk),
+            ("index", index),
+            ("HEAD", _tree_paths(feature, "HEAD")),
+        ):
+            junk = [p for p in paths if is_junk(p)]
+            assert not junk, f"junk paths in {where}: {junk!r}"
+
+        if result.returncode == 0:
+            assert not _rebase_in_progress(feature)
+            ok = _git(feature, "merge-base", "--is-ancestor", "origin/main", "HEAD", check=False)
+            assert ok.returncode == 0, "exit 0 but branch does not descend from origin/main"
+            text = (feature / name).read_text()
+            assert text.startswith(base + "upstream line\n"), f"upstream text altered: {text!r}"
+            assert text.count("branch line\n") == 1 and text.rstrip("\n").endswith("branch line")
+            for marker in CONFLICT_MARKERS:
+                assert marker not in text
+        else:
+            _assert_stopped(sc, result)
+
+
+class TestRound2NoRebaseHappened:
+    def test_dirty_worktree_exits_nonzero(self, tmp_path: Path) -> None:
+        sc = _scenario(
+            tmp_path,
+            {"notes.txt": "a\n", "README": "x\n"},
+            [("#88: tests (red)", {"b.txt": "branch\n"})],
+            [("chore: up (#87)", {"up.txt": "up\n"})],
+        )
+        feature: Path = sc["feature"]  # type: ignore[assignment]
+        (feature / "notes.txt").write_text("a\nlocal unstaged edit\n")
+        result = _run_helper(feature)
+        _assert_stopped(sc, result)
+        assert (feature / "notes.txt").read_text() == "a\nlocal unstaged edit\n", "dirty edit lost"
+
+    def test_untracked_file_upstream_adds_exits_nonzero(self, tmp_path: Path) -> None:
+        sc = _scenario(
+            tmp_path,
+            {"README": "x\n"},
+            [("#88: tests (red)", {"b.txt": "branch\n"})],
+            [("chore: add new.txt (#87)", {"new.txt": "upstream\n"})],
+        )
+        feature: Path = sc["feature"]  # type: ignore[assignment]
+        (feature / "new.txt").write_text("my local untracked\n")
+        result = _run_helper(feature)
+        _assert_stopped(sc, result)
+        assert (feature / "new.txt").read_text() == "my local untracked\n", "untracked file lost"
+
+
+class TestRound2RefusesMain:
+    def test_run_on_main_exits_nonzero_and_rewrites_nothing(self, tmp_path: Path) -> None:
+        sc = _scenario(
+            tmp_path,
+            {"README": "x\n"},
+            [("local: main commit", {"local.txt": "local\n"})],
+            [("chore: up (#87)", {"up.txt": "up\n"})],
+            branch="main",
+        )
+        result = _run_helper(sc["feature"])  # type: ignore[arg-type]
+        _assert_stopped(sc, result)
+
+
+class TestRound2FetchFailure:
+    def test_fetch_failure_exits_nonzero(self, tmp_path: Path) -> None:
+        sc = _scenario(
+            tmp_path,
+            {"README": "x\n"},
+            [("#88: tests (red)", {"b.txt": "branch\n"})],
+            [("chore: up (#87)", {"up.txt": "up\n"})],
+        )
+        feature: Path = sc["feature"]  # type: ignore[assignment]
+        _git(feature, "remote", "set-url", "origin", str(tmp_path / "does-not-exist.git"))
+        result = _run_helper(feature)
+        _assert_stopped(sc, result)
+
+
+class TestRound2ChangelogEdit:
+    def test_changelog_line_edit_is_not_auto_resolved(self, tmp_path: Path) -> None:
+        old = "- Existing entry two (#11)"
+        new = "- Existing entry two, reworded (#11)"
+        sc = _scenario(
+            tmp_path,
+            {"CHANGELOG.md": BASE_CHANGELOG},
+            [("docs: reword #11 entry (#88)", {"CHANGELOG.md": BASE_CHANGELOG.replace(old, new)})],
+            [("fix: board sorting (#76)", {"CHANGELOG.md": _changelog_with(MAIN_ENTRY)})],
+        )
+        result = _run_helper(sc["feature"])  # type: ignore[arg-type]
+
+        def check(sha: str) -> None:
+            text = _git(sc["feature"], "show", f"{sha}:CHANGELOG.md").stdout  # type: ignore[arg-type]
+            for marker in CONFLICT_MARKERS:
+                assert marker not in text, f"{sha} committed conflict markers"
+            assert not (old + "\n" in text and new in text), f"{sha} kept both old and edited line"
+
+        _assert_stopped(sc, result, check)
