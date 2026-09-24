@@ -873,3 +873,36 @@ class TestHookCreateItemPriorityValidated:
         bugs = self._bug_files(root)
         assert len(bugs) == 1
         assert "\npriority: low\n" in bugs[0].read_text()
+
+
+# ─── #153: a non-string hook priority is refused and logged by value ─────
+
+
+class TestHookCreateItemNonStringPriority:
+    """A hooks-config ``create_item`` action whose ``priority`` is a YAML int
+    writes no item, and the log names the value the way it names ``urgent``
+    (#153)."""
+
+    # Same repo/hooks harness as the #125 class, without re-running its tests.
+    repo = TestHookCreateItemPriorityValidated.repo
+    _service = TestHookCreateItemPriorityValidated._service
+    _bug_files = staticmethod(TestHookCreateItemPriorityValidated._bug_files)
+    _trigger = TestHookCreateItemPriorityValidated._trigger
+
+    def test_hook_create_item_int_priority_writes_nothing_and_logs_value(
+        self, repo, caplog,
+    ):
+        import re
+
+        root, _ = repo
+        svc = self._service(repo, "1")  # unquoted in YAML -> int 1
+
+        with caplog.at_level("DEBUG"):
+            trigger = self._trigger(svc)
+
+        assert trigger.file_path.exists()  # the triggering create itself succeeds
+        assert self._bug_files(root) == []
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= 30]
+        assert warnings, caplog.text  # the refusal is logged, not silent
+        assert any(re.search(r"(?<![\w.])1(?![\w.])", m) for m in warnings), warnings
+        assert "has no attribute" not in caplog.text, caplog.text

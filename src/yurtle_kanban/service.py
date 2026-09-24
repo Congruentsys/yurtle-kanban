@@ -2627,10 +2627,14 @@ class KanbanService:
         """
         if priority is None:
             return None
+        if not isinstance(priority, str):  # e.g. `priority: 1` in a hooks config (#153)
+            raise ValueError(
+                f"Unknown priority: {priority!r}; valid: {', '.join(PRIORITIES)}"
+            )
         normalized = priority.strip().lower()
         if normalized not in PRIORITIES:
             raise ValueError(
-                f"Unknown priority: {priority!r}. Valid: {', '.join(PRIORITIES)}"
+                f"Unknown priority: {priority!r}; valid: {', '.join(PRIORITIES)}"
             )
         return normalized
 
