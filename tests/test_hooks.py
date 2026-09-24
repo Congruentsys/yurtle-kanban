@@ -767,3 +767,109 @@ class TestCallbackRegistration:
 
         mock_cb.assert_called_once()
         assert mock_cb.call_args[1]["title"] == "Auto from IDEA-R-011"
+
+
+# ─── #125: hook create_item goes through the service's priority rule ─────
+
+
+_HOOK_PRIORITY_YAML = """\
+---
+type: kanban-hooks
+id: priority-hooks
+version: 1
+hooks:
+  on_create:
+    - item_types: [feature]
+      actions:
+        - type: create_item
+          item_type: bug
+          title: "Follow-up for {item_id}"
+          priority: {priority}
+---
+"""
+
+
+class TestHookCreateItemPriorityValidated:
+    """A hooks-config ``create_item`` action goes through the same priority
+    validation as every other write path: an unknown priority is refused (and
+    logged), a mixed-case one is lowercased (#125)."""
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        from yurtle_kanban.config import KanbanConfig, PathConfig
+
+        subprocess.run(
+            ["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True, check=True,
+        )
+        (tmp_path / ".kanban" / "hooks").mkdir(parents=True)
+        (tmp_path / "kanban-work" / "features").mkdir(parents=True)
+        (tmp_path / "kanban-work" / "bugs").mkdir(parents=True)
+        config = KanbanConfig(
+            theme="software",
+            paths=PathConfig(
+                root="kanban-work/",
+                scan_paths=["kanban-work/features/", "kanban-work/bugs/"],
+            ),
+        )
+        config.save(tmp_path / ".kanban" / "config.yaml")
+        return tmp_path, config
+
+    def _service(self, repo, priority: str):
+        from yurtle_kanban.service import KanbanService
+
+        root, config = repo
+        hooks_path = root / ".kanban" / "hooks" / "kanban-hooks.yurtle.md"
+        hooks_path.write_text(_HOOK_PRIORITY_YAML.replace("{priority}", priority))
+        return KanbanService(config, root, hooks_config=hooks_path)
+
+    @staticmethod
+    def _bug_files(root: Path) -> list[Path]:
+        return sorted((root / "kanban-work" / "bugs").glob("*.md"))
+
+    def _trigger(self, svc):
+        from yurtle_kanban.models import WorkItemType
+
+        with patch("yurtle_kanban.hooks.subprocess.run"):
+            return svc.create_item(WorkItemType.FEATURE, "Trigger")
+
+    def test_hook_create_item_does_not_write_unknown_priority(self, repo, caplog):
+        root, _ = repo
+        svc = self._service(repo, "urgent")
+
+        with caplog.at_level("DEBUG"):
+            trigger = self._trigger(svc)
+
+        assert trigger.file_path.exists()  # the triggering create itself succeeds
+        for f in self._bug_files(root):
+            assert "priority: urgent" not in f.read_text(), f.read_text()
+        assert self._bug_files(root) == []
+        assert "urgent" in caplog.text
+
+    def test_hook_create_item_uppercase_priority_is_lowercased(self, repo):
+        root, _ = repo
+        svc = self._service(repo, "HIGH")
+
+        self._trigger(svc)
+
+        bugs = self._bug_files(root)
+        assert len(bugs) == 1
+        assert "\npriority: high\n" in bugs[0].read_text()
+
+    # --- negative control ---------------------------------------------------
+
+    def test_hook_create_item_valid_priority_is_written(self, repo):
+        root, _ = repo
+        svc = self._service(repo, "low")
+
+        self._trigger(svc)
+
+        bugs = self._bug_files(root)
+        assert len(bugs) == 1
+        assert "\npriority: low\n" in bugs[0].read_text()

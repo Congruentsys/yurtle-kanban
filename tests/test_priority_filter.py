@@ -294,3 +294,116 @@ class TestCreatePriorityValidated:
 
         assert result.get("success"), result
         assert "\npriority: low\n" in path.read_text()
+
+
+class TestMcpPriorityCaseInsensitive:
+    """MCP create/update accept any case like the CLI does and write the
+    lowercased value; unknown priorities are still rejected (#125)."""
+
+    def _mcp(self, repo: Path):
+        mcp_server = pytest.importorskip("yurtle_kanban.mcp.server")
+        return mcp_server.KanbanMCPServer(repo_root=repo)
+
+    @pytest.mark.parametrize("prio", ["High", "HIGH"])
+    def test_mcp_create_mixed_case_priority_written_lowercase(
+        self, temp_repo, monkeypatch, prio,
+    ):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = server.handle_tool_call(
+            "kanban_create_item",
+            {"item_type": "feature", "title": "probe", "priority": prio},
+        )
+
+        assert result.get("success"), result
+        new = _new_item_files(temp_repo, before)
+        assert len(new) == 1
+        assert "\npriority: high\n" in new[0].read_text()
+
+    @pytest.mark.parametrize("prio", ["High", "HIGH"])
+    def test_mcp_update_mixed_case_priority_written_lowercase(
+        self, temp_repo, monkeypatch, prio,
+    ):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-004-Low-Item.md"
+
+        result = server.handle_tool_call(
+            "kanban_update_item", {"item_id": "EXP-004", "priority": prio}
+        )
+
+        assert result.get("success"), result
+        assert "\npriority: high\n" in path.read_text()
+
+    # --- negative controls --------------------------------------------------
+
+    @pytest.mark.parametrize("prio", ["urgent", "Urgent", "P0"])
+    def test_mcp_create_still_rejects_unknown_priority(self, temp_repo, monkeypatch, prio):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        before = _md_files(temp_repo)
+
+        result = server.handle_tool_call(
+            "kanban_create_item",
+            {"item_type": "feature", "title": "probe", "priority": prio},
+        )
+
+        assert not result.get("success"), result
+        assert "error" in result
+        assert _new_item_files(temp_repo, before) == []
+
+    @pytest.mark.parametrize("prio", ["urgent", "Urgent", "P0"])
+    def test_mcp_update_still_rejects_unknown_priority(self, temp_repo, monkeypatch, prio):
+        monkeypatch.chdir(temp_repo)
+        server = self._mcp(temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-002-High-Item.md"
+        before = path.read_text()
+
+        result = server.handle_tool_call(
+            "kanban_update_item", {"item_id": "EXP-002", "priority": prio}
+        )
+
+        assert not result.get("success"), result
+        assert "error" in result
+        assert path.read_text() == before
+
+
+class TestTemplateCreatePriorityLowercase:
+    """Template creates (the `_apply_priority` path) write the lowercased
+    priority to frontmatter, with or without --push (#125)."""
+
+    @pytest.fixture
+    def hdd_repo(self, tmp_path, monkeypatch):
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "t@t.com"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True, check=True,
+        )
+        (tmp_path / ".kanban").mkdir()
+        (tmp_path / "research" / "ideas").mkdir(parents=True)
+        KanbanConfig(
+            theme="hdd",
+            paths=PathConfig(root="research/", scan_paths=["research/ideas/"]),
+        ).save(tmp_path / ".kanban" / "config.yaml")
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    @pytest.mark.parametrize("extra", [[], ["--push"]])
+    def test_idea_create_uppercase_priority_written_lowercase(self, hdd_repo, extra):
+        before = _md_files(hdd_repo)
+
+        result = CliRunner().invoke(
+            main, ["idea", "create", "probe", "-p", "HIGH", *extra], catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        new = _new_item_files(hdd_repo, before)
+        assert len(new) == 1
+        text = new[0].read_text()
+        assert "\npriority: high\n" in text
+        assert "HIGH" not in text
