@@ -5,6 +5,7 @@ Supports both single-board (v1) and multi-board (v2) configurations.
 Multi-board is opt-in: detected when config has 'version: 2.0' and 'boards' key.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -267,10 +268,15 @@ class KanbanConfig:
         """Load v2 multi-board configuration."""
         boards = [BoardConfig.from_dict(b) for b in data.get("boards", [])]
 
-        # Aggregate scan_paths from all boards for Priority 3 fallback
+        # Aggregate scan_paths from all boards for Priority 3 fallback, and the
+        # boards' ignore patterns: scanning checks paths.ignore, so a per-board
+        # `ignore:` (e.g. `**/_TEMPLATE*` carried over by board-add, #94) must
+        # reach it
         all_scan_paths: list[str] = []
+        all_ignore: list[str] = []
         for board in boards:
             all_scan_paths.extend(board.scan_paths)
+            all_ignore.extend(p for p in board.ignore if p not in all_ignore)
 
         return cls(
             version=CONFIG_VERSION_MULTI,
@@ -282,6 +288,7 @@ class KanbanConfig:
             paths=PathConfig(
                 root=boards[0].path if boards else "work/",
                 scan_paths=all_scan_paths,
+                ignore=all_ignore or ["**/archive/**", "**/templates/**"],
             ),
         )
 
@@ -335,6 +342,26 @@ class KanbanConfig:
 
         return data
 
+    def _single_board_path(self) -> str:
+        """The directory a single-board config really scans, as one board path.
+
+        A multi-board board scans only its ``path``, so upgrading must not use a
+        ``root`` the board never scanned. A default ``init`` writes ``root: work/``
+        but scans ``kanban-work/*`` (#94). When a scan path contains ``root``, use that
+        scan path (the board must cover everything the config scanned, not narrow
+        to ``root``); else the common parent of the scan paths.
+        """
+        root = self.paths.root
+        scans = [Path(p) for p in self.paths.scan_paths]
+        if not scans:
+            return root or "work/"
+        if root:
+            for raw, scan in zip(self.paths.scan_paths, scans):
+                if Path(root) == scan or scan in Path(root).parents:
+                    return raw
+        common = Path(os.path.commonpath([str(s) for s in scans]))
+        return f"{common.as_posix()}/" if str(common) not in ("", ".") else (root or "work/")
+
     def add_board(self, board: BoardConfig) -> None:
         """Add a board to the configuration.
 
@@ -343,11 +370,14 @@ class KanbanConfig:
         if not self.is_multi_board:
             # Upgrade to multi-board
             self.version = CONFIG_VERSION_MULTI
-            # Convert existing single-board config to a board
+            # Convert existing single-board config to a board, keeping it where
+            # its items actually are (#94)
             existing = BoardConfig(
                 name="default",
                 preset=self.theme,
-                path=self.paths.root or "work/",
+                path=self._single_board_path(),
+                scan_paths=list(self.paths.scan_paths),
+                ignore=list(self.paths.ignore),
             )
             self.boards = [existing]
 
