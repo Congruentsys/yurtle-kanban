@@ -56,7 +56,7 @@ existing helpers (`_add_or_update_frontmatter_field`, `PRIORITIES`, …). Add an
 
 **3. The review, by a DISTINCT session.**
 ```bash
-git -C /tmp/yk-<N> fetch -q origin main && git -C /tmp/yk-<N> rebase origin/main   # see "Rebased" below
+(cd /tmp/yk-<N> && bash .claude/skills/pairit/rebase_append.sh)   # see "Rebasing" below
 git -C /tmp/yk-<N> push -q --force-with-lease -u origin HEAD   # the rebase rewrote the branch
 gh pr create --head <branch> --title "<type>: <what> (#<N>)" --body "Fixes #<N>. …"
 claude --dangerously-skip-permissions -p "$(cat <brief file>)" < /dev/null   # run it in the background
@@ -104,9 +104,22 @@ gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
 verdict. Done means the merge is on `origin/main` and the issue is closed.
 
+**Rebasing.** Always rebase with `.claude/skills/pairit/rebase_append.sh`, never a plain `git rebase`.
+Parallel PRs append in the same two places, and plain git gets both wrong:
+- **Two test classes appended at the end of one file:** git aligns lines they share (`@staticmethod`,
+  `def _run`) and splits the conflict mid-class, so "keep both sides" produces broken Python. The helper
+  resolves from the index stages instead: upstream's file plus the commit's appended text, used only when
+  the commit's side purely appended.
+- **Test-commit subjects start with `#`** (`#<N>: tests (red)`). On a conflicted pick git reopens the
+  message with `#` as the comment character and drops the subject. The helper runs git with
+  `core.commentChar=';'`.
+- `CHANGELOG.md`: upstream's entries plus the commit's new lines, above the first release heading.
+Anything else makes it exit non-zero and leave the rebase stopped for you. After any rebase, run the check and
+confirm every commit subject is still `#<N>: tests …` or `fix…(#<N>)` before pushing.
+
 **Rebased after approval?** Every PR adds its entry at the same place under `## [Unreleased]`, so parallel
-PRs conflict in `CHANGELOG.md` as soon as a sibling merges. Before each review, `git rebase origin/main`
-(keep both sides of a CHANGELOG conflict) and push with `--force-with-lease`. If a rebase is needed AFTER an
+PRs conflict in `CHANGELOG.md` as soon as a sibling merges. Before each review, rebase onto `origin/main`
+with the helper, and push with `--force-with-lease`. If a rebase is needed AFTER an
 `approve`, the verdict doesn't carry to the new head by itself. Run one short distinct-session check that
 `git range-diff <old-base>..<old> origin/main..<new>` differs only in `CHANGELOG.md` (`<old-base>` is
 `git merge-base <old> origin/main`, taken BEFORE the fetch that moved `origin/main`), and that the PR's `src`/`tests`
