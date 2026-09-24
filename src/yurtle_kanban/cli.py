@@ -196,6 +196,13 @@ def init(theme: str, path: str | None):
     dirs_created = []
     for type_id, type_def in item_types.items():
         type_path = type_def.get("path")
+        if type_path and path:
+            # An explicit --path is the board root: scaffold each type folder
+            # under it, where `create` will write (#113's <root>/<type folder>/),
+            # not under the theme's own root, which nothing would scan (#134)
+            parts = Path(type_path).parts
+            folder = Path(*parts[1:]) if len(parts) > 1 else Path(type_path)
+            type_path = f"{(Path(path) / folder).as_posix()}/"
         if type_path:
             type_dir = repo_root / type_path
             type_dir.mkdir(parents=True, exist_ok=True)

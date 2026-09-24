@@ -110,6 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its value when more items follow. A comment before the next key is kept.
   Every edit of an existing item file (move, rank, comments, parent links,
   backfill) now keeps the file's own line endings.
+- **`init --path <dir>` scaffolded the theme's `kanban-work/*` folders, which
+  nothing then scanned** (#134). With an explicit `--path`, the type folders and
+  their `_TEMPLATE.md` files now go under that root (`custom/features/`, …),
+  which is where `create` writes. A default `init` is unchanged.
 
 ## [2.2.0] - 2026-08-30
 
