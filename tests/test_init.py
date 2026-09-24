@@ -610,3 +610,57 @@ class TestInitWritesThemeRoot:
         listed = self._listed_ids(tmp_path, monkeypatch)
         assert listed == ["FEAT-001"], listed
         assert config_file.read_text() == config_text, "existing config was rewritten"
+
+    # ---- round 2: a custom theme whose type folders sit at the repo root ----
+
+    @classmethod
+    def _write_flat_theme(cls, tmp_path) -> None:
+        """A local `.kanban/themes/flat.yaml`: the software theme with its type
+        folders moved to the repo root (`features/`, `bugs/`), so the per-type
+        paths share NO common parent."""
+        theme = yaml.safe_load((cls.THEMES_DIR / "software.yaml").read_text())
+        theme["name"] = "Flat"
+        theme["item_types"] = {
+            "feature": {**theme["item_types"]["feature"], "path": "features/"},
+            "bug": {**theme["item_types"]["bug"], "path": "bugs/"},
+        }
+        themes_dir = tmp_path / ".kanban" / "themes"
+        themes_dir.mkdir(parents=True)
+        (themes_dir / "flat.yaml").write_text(yaml.safe_dump(theme, sort_keys=False))
+
+    def test_flat_custom_theme_create_lands_at_repo_root_folder(self, tmp_path, monkeypatch):
+        """`create feature` lands at ./features/ exactly as before, not work/features/."""
+        self._write_flat_theme(tmp_path)
+        self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), "non-vacuity: flat not scaffolded"
+
+        self._run(tmp_path, monkeypatch, "create", "feature", "probe")
+        found = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("FEAT-001*"))
+        assert found == ["features/FEAT-001-probe.md"], (
+            f"flat theme: create feature landed at {found}, expected features/FEAT-001-probe.md"
+        )
+        assert self._listed_ids(tmp_path, monkeypatch) == ["FEAT-001"]
+
+    def test_flat_custom_theme_scans_every_scaffolded_folder(self, tmp_path, monkeypatch):
+        """Both scaffolded folders are scanned: a feature and a bug are both listed."""
+        self._write_flat_theme(tmp_path)
+        self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        self._run(tmp_path, monkeypatch, "create", "feature", "probe")
+        self._run(tmp_path, monkeypatch, "create", "bug", "x")
+
+        on_disk = sorted(
+            str(p.relative_to(tmp_path))
+            for p in tmp_path.rglob("*.md")
+            if p.name.startswith(("FEAT-", "BUG-"))
+        )
+        assert on_disk == ["bugs/BUG-001-x.md", "features/FEAT-001-probe.md"], on_disk
+        assert sorted(self._listed_ids(tmp_path, monkeypatch)) == ["BUG-001", "FEAT-001"]
+
+    def test_flat_custom_theme_never_scans_repo_root(self, tmp_path, monkeypatch):
+        """No scan path may be the repo root: it would pull in .claude/**/*.md."""
+        self._write_flat_theme(tmp_path)
+        self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        scan_paths = self._config_paths(tmp_path).get("scan_paths") or []
+        assert scan_paths, "non-vacuity: init wrote no scan_paths"
+        bad = [p for p in scan_paths if self._norm(p) in ("", ".", "./")]
+        assert not bad, f"init --theme flat scans the repo root: {scan_paths!r}"
