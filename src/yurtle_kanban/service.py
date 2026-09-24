@@ -2452,13 +2452,16 @@ class KanbanService:
         """Add or update a field in the frontmatter.
 
         If the field exists, update it. If not, insert it before the closing ---.
+        An existing value is replaced whole: its first line plus any continuation
+        lines (indented lines, or `- item` lines, which YAML allows at column 0
+        under a key), so a block list or folded value leaves nothing behind (#105).
         """
         match = self._FRONTMATTER_RE.match(content)
         if not match:
             return content
 
         frontmatter = match.group(1)
-        pattern = rf"^{field}:.*$"
+        pattern = rf"^{re.escape(field)}:.*(?:\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*$"
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
             frontmatter = re.sub(
