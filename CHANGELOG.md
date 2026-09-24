@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into the frontmatter, and into any `kb:priority` triple the template carries.
   Note: `epic create` without `-p` now gets its documented default, `high`.
   `-p` on these commands now only accepts critical/high/medium/low (any
-  case), since the value is written into Turtle, and frontmatter edits split
-  on whole `---` lines, so a title like `"A --- B"` is no longer cut in two.
+  case), since the value is written into Turtle. Frontmatter edits now find the
+  closing `---` by line, so writing a field no longer cuts a title like
+  `"A --- B"` in two (reading such an item back is still #103).
 
 ## [2.2.0] - 2026-08-30
 

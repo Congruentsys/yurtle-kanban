@@ -2401,20 +2401,10 @@ class KanbanService:
 
         item.file_path.write_text(content)
 
-    # Frontmatter delimiters are whole `---` lines. Splitting on the substring
+    # Frontmatter is closed by the first line that STARTS with `---` (the same
+    # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
     # instead would cut inside a value such as `title: "A --- B"`.
-    _FRONTMATTER_RE = re.compile(r"\A---[ \t\r]*\n(.*?)^---[ \t\r]*$", re.DOTALL | re.MULTILINE)
-
-    def _update_frontmatter_field(self, content: str, field: str, value: str) -> str:
-        """Update a single existing field in the frontmatter."""
-        match = self._FRONTMATTER_RE.match(content)
-        if not match:
-            return content
-        frontmatter = re.sub(
-            rf"^{field}:.*$", lambda _: f"{field}: {value}", match.group(1),
-            flags=re.MULTILINE,
-        )
-        return content[: match.start(1)] + frontmatter + content[match.end(1) :]
+    _FRONTMATTER_RE = re.compile(r"\A---[ \t\r]*\n(.*?)^---", re.DOTALL | re.MULTILINE)
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
