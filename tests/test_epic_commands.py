@@ -510,3 +510,49 @@ class TestEpicCreatePriority:
         result = software_runner.invoke(main, ["epic", "create", "Auth", "-p", "very high"])
         assert result.exit_code == 2
         assert not list(software_repo.rglob("EPIC-*.md"))
+
+
+# ---------------------------------------------------------------------------
+# Issue #102 — epic create must land under the configured root
+# ---------------------------------------------------------------------------
+
+
+class TestThemePathsUnderConfiguredRoot:
+    """epic create on a board whose root is not kanban-work/ must place the
+    epic under that root so board/list can see it (#102)."""
+
+    def test_epic_create_lands_under_configured_root(self, software_runner, software_repo):
+        """Issue repro: software theme, root work/ → epic create goes under work/."""
+        result = software_runner.invoke(
+            main, ["epic", "create", "Auth"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+        files = sorted(
+            p.relative_to(software_repo) for p in software_repo.rglob("EPIC-*.md")
+        )
+        assert len(files) == 1, files
+        assert files[0].parts[0] == "work", (
+            f"epic created at {files[0]}, outside the configured root work/"
+        )
+        assert not (software_repo / "kanban-work").exists()
+
+    def test_created_epic_is_listed(self, software_runner, software_repo):
+        """After epic create, list must show the epic."""
+        software_runner.invoke(main, ["epic", "create", "Auth"], catch_exceptions=False)
+        result = software_runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+
+        assert result.exit_code == 0, result.output
+        assert "EPIC-001" in result.output
+
+    def test_control_epic_create_default_root_unchanged(self, nautical_runner, nautical_repo):
+        """Control: nautical board at kanban-work/ keeps epics beside the theme default."""
+        result = nautical_runner.invoke(
+            main, ["voyage", "create", "Campaign"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        files = sorted(
+            p.relative_to(nautical_repo) for p in nautical_repo.rglob("VOY-*.md")
+        )
+        assert len(files) == 1, files
+        assert files[0].parent == Path("kanban-work/voyages")

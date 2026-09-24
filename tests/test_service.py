@@ -1542,3 +1542,240 @@ class TestFrontmatterCloser:
         assert "\nassignee: agent-x" in head
         assert "\nstatus: ready" in head
         assert "assignee" not in body
+
+
+# ---------------------------------------------------------------------------
+# Issue #102 — theme per-type paths must live under the configured root
+# ---------------------------------------------------------------------------
+
+
+def _init_board_repo(root: Path, config_yaml: str) -> Path:
+    """Init a git repo at ``root`` with ``.kanban/config.yaml`` = ``config_yaml``."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=root, capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=root, capture_output=True, check=True,
+    )
+    (root / ".kanban").mkdir()
+    (root / ".kanban" / "config.yaml").write_text(config_yaml)
+    return root
+
+
+def _single_board_yaml(theme: str, root: str) -> str:
+    return (
+        "kanban:\n"
+        f"  theme: {theme}\n"
+        "  paths:\n"
+        f"    root: {root}\n"
+        "    scan_paths:\n"
+        f"      - {root}\n"
+    )
+
+
+@pytest.fixture
+def board_runner(monkeypatch):
+    """Factory: build a board repo from config YAML, chdir into it, return a runner."""
+    from yurtle_kanban import config as config_mod
+
+    def _make(repo: Path, config_yaml: str) -> CliRunner:
+        _init_board_repo(repo, config_yaml)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(repo)
+        return CliRunner()
+
+    yield _make
+    config_mod._theme_cache.clear()
+
+
+def _created_files(repo: Path, prefix: str) -> list[Path]:
+    """All work-item files with the given ID prefix, repo-relative, outside .kanban/."""
+    return sorted(
+        p.relative_to(repo)
+        for p in repo.rglob(f"{prefix}-*.md")
+        if ".kanban" not in p.relative_to(repo).parts
+    )
+
+
+class TestThemePathsUnderConfiguredRoot:
+    """create must place items under the board's configured root/path, so that
+    board/list can see them — theme per-type paths are not repo-absolute (#102)."""
+
+    def test_software_create_feature_lands_under_root(self, tmp_path, board_runner):
+        """Issue repro: software theme, root work/ → create feature goes under work/."""
+        runner = board_runner(tmp_path, _single_board_yaml("software", "work/"))
+
+        result = runner.invoke(main, ["create", "feature", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        files = _created_files(tmp_path, "FEAT")
+        assert len(files) == 1, files
+        assert files[0].parts[0] == "work", (
+            f"feature created at {files[0]}, outside the configured root work/"
+        )
+        assert not (tmp_path / "kanban-work").exists()
+
+    def test_software_created_feature_is_listed(self, tmp_path, board_runner):
+        """Issue repro: after create feature, list must show it (not 'No work items')."""
+        runner = board_runner(tmp_path, _single_board_yaml("software", "work/"))
+
+        runner.invoke(main, ["create", "feature", "probe"], catch_exceptions=False)
+        result = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+
+        assert result.exit_code == 0, result.output
+        assert "No work items found" not in result.output
+        assert "FEAT-001" in result.output
+
+    def test_nautical_create_expedition_lands_under_root(self, tmp_path, board_runner):
+        """Issue repro: nautical theme, root work/ → create expedition goes under work/."""
+        runner = board_runner(tmp_path, _single_board_yaml("nautical", "work/"))
+
+        result = runner.invoke(main, ["create", "expedition", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        files = _created_files(tmp_path, "EXP")
+        assert len(files) == 1, files
+        assert files[0].parts[0] == "work", (
+            f"expedition created at {files[0]}, outside the configured root work/"
+        )
+        assert not (tmp_path / "kanban-work").exists()
+
+    def test_nautical_created_expedition_is_listed(self, tmp_path, board_runner):
+        """Issue repro: after create expedition, list must show it."""
+        runner = board_runner(tmp_path, _single_board_yaml("nautical", "work/"))
+
+        runner.invoke(main, ["create", "expedition", "probe"], catch_exceptions=False)
+        result = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+
+        assert result.exit_code == 0, result.output
+        assert "No work items found" not in result.output
+        assert "EXP-001" in result.output
+
+    def test_multi_board_software_path_create_feature_lands_under_board_path(
+        self, tmp_path, board_runner,
+    ):
+        """Multi-board form: a software board with path work/ → feature under work/."""
+        config_yaml = (
+            'version: "2.0"\n'
+            "boards:\n"
+            "  - name: dev\n"
+            "    preset: software\n"
+            "    path: work/\n"
+            "default_board: dev\n"
+        )
+        runner = board_runner(tmp_path, config_yaml)
+
+        result = runner.invoke(main, ["create", "feature", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        files = _created_files(tmp_path, "FEAT")
+        assert len(files) == 1, files
+        assert files[0].parts[0] == "work", (
+            f"feature created at {files[0]}, outside the dev board path work/"
+        )
+
+        listed = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+        assert "FEAT-001" in listed.output
+
+    # -- negative controls: boards whose root IS the theme default -----------
+
+    def test_control_default_root_software_placement_unchanged(self, tmp_path, board_runner):
+        """Control: root kanban-work/ keeps kanban-work/features/FEAT-001-….md."""
+        runner = board_runner(tmp_path, _single_board_yaml("software", "kanban-work/"))
+
+        result = runner.invoke(main, ["create", "feature", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        files = _created_files(tmp_path, "FEAT")
+        assert files == [Path("kanban-work/features/FEAT-001-probe.md")]
+
+        listed = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+        assert "FEAT-001" in listed.output
+
+    def test_control_default_root_nautical_placement_unchanged(self, tmp_path, board_runner):
+        """Control: root kanban-work/ keeps kanban-work/expeditions/EXP-001-….md."""
+        runner = board_runner(tmp_path, _single_board_yaml("nautical", "kanban-work/"))
+
+        result = runner.invoke(main, ["create", "expedition", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        files = _created_files(tmp_path, "EXP")
+        assert files == [Path("kanban-work/expeditions/EXP-001-probe.md")]
+
+    def test_control_hdd_research_root_placement_unchanged(self, tmp_path, board_runner):
+        """Control: hdd board with root research/ keeps research/ideas/, research/hypotheses/."""
+        runner = board_runner(tmp_path, _single_board_yaml("hdd", "research/"))
+
+        result = runner.invoke(main, ["create", "idea", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(
+            main, ["create", "hypothesis", "probe"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+
+        created = sorted(
+            p.relative_to(tmp_path).parent
+            for p in (tmp_path / "research").rglob("*.md")
+        )
+        assert Path("research/ideas") in created
+        assert Path("research/hypotheses") in created
+        assert all(p.parts[0] == "research" for p in created)
+
+    # -- negative controls: boards made by the default `init` ---------------
+    # `init` (no --path) writes root: work/ but scan_paths under kanban-work/.
+    # The invariant is "create writes somewhere the board SCANS", so these
+    # boards must keep placing items under kanban-work/ and keep listing them.
+
+    @pytest.fixture
+    def init_runner(self, tmp_path, monkeypatch):
+        """Factory: `yurtle-kanban init --theme <theme>` in a fresh git repo."""
+        import subprocess
+
+        from yurtle_kanban import config as config_mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True,
+        )
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+
+        def _make(theme: str) -> CliRunner:
+            runner = CliRunner()
+            result = runner.invoke(main, ["init", "--theme", theme], catch_exceptions=False)
+            assert result.exit_code == 0, result.output
+            config_mod._theme_cache.clear()
+            return runner
+
+        yield _make
+        config_mod._theme_cache.clear()
+
+    def test_control_default_init_software_placement_unchanged(self, tmp_path, init_runner):
+        """Control: default `init --theme software` board keeps kanban-work/features/."""
+        runner = init_runner("software")
+
+        result = runner.invoke(main, ["create", "feature", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        assert _created_files(tmp_path, "FEAT") == [
+            Path("kanban-work/features/FEAT-001-probe.md")
+        ]
+        listed = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+        assert "FEAT-001" in listed.output
+
+    def test_control_default_init_nautical_placement_unchanged(self, tmp_path, init_runner):
+        """Control: default `init --theme nautical` board keeps kanban-work/expeditions/."""
+        runner = init_runner("nautical")
+
+        result = runner.invoke(main, ["create", "expedition", "probe"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+
+        assert _created_files(tmp_path, "EXP") == [
+            Path("kanban-work/expeditions/EXP-001-probe.md")
+        ]
+        listed = runner.invoke(main, ["list", "--json"], catch_exceptions=False)
+        assert "EXP-001" in listed.output
