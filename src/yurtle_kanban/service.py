@@ -376,7 +376,14 @@ class KanbanService:
             # A file that can't be read or crashes after its frontmatter parsed is
             # reported like any unparseable item, not dropped silently (#158)
             logger.debug(f"Failed to parse {file_path}: {e}")
-            self.parse_warnings.append((file_path, f"{type(e).__name__}: {e}"))
+            # only files that look like items, as for #139's warnings: they start
+            # with `---` and aren't templates (a non-UTF-8 plain note stays silent)
+            try:
+                looks_like_item = file_path.read_bytes().startswith(b"---")
+            except OSError:
+                looks_like_item = False
+            if looks_like_item and not file_path.name.startswith("_TEMPLATE"):
+                self.parse_warnings.append((file_path, f"{type(e).__name__}: {e}"))
             return None
 
     def _split_frontmatter(self, content: str) -> tuple[str, str] | None:

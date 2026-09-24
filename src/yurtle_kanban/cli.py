@@ -26,6 +26,7 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.markup import escape
 
 from .board import (
     render_board,
@@ -607,7 +608,12 @@ def show(item_id: str, as_json: bool):
                     shown = path.relative_to(service.repo_root)
                 except ValueError:
                     shown = path
-                console.print(f"  found {shown}, but it doesn't parse: {reason}", soft_wrap=True)
+                # escape: a YAML error quotes the bad line, and `[...]` in it would
+                # otherwise be read as Rich markup (crash or swallowed text)
+                console.print(
+                    f"  found {escape(str(shown))}, but it doesn't parse: {escape(reason)}",
+                    soft_wrap=True,
+                )
         sys.exit(1)
 
     if as_json:
