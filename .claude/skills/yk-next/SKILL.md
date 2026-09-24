@@ -13,7 +13,13 @@ Run from the repo root:
 ```bash
 python3 .claude/skills/yk-next/yk_next.py            # claims (assigns the issue to you on GitHub)
 python3 .claude/skills/yk-next/yk_next.py --dry-run  # prints the ordered candidates, claims nothing
+python3 .claude/skills/yk-next/yk_next.py --skip-prs # jump straight to claiming a NEW issue
 ```
+
+`--skip-prs` is for pipelining (yk-loop): while one of your PRs is in review, it goes straight to rule 4
+(claim), skipping rules 1–3. It doesn't resume your PRs, doesn't review others', and **doesn't resume an
+issue already assigned to you**, so it claims a new one even if you hold one with no PR yet. Every claim
+rule still applies. Outside yk-loop, use the plain picker.
 
 **The rules** all live in `yk_next.py`, so this file can't drift from them:
 1. **Finish before you start.** Your own open PR comes first. The script prints one of these states:
