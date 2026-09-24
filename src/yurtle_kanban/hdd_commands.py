@@ -28,6 +28,15 @@ def _get_service():
     return get_service()
 
 
+def _render(engine: TemplateEngine, theme: str, item_type: str, variables: dict) -> str:
+    """Render a template; a value the Turtle builder refuses (an unsafe ID) is a
+    clean CLI error, not a traceback (#161)."""
+    try:
+        return engine.render(theme, item_type, variables)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+
+
 def _get_engine() -> TemplateEngine:
     """Get the template engine."""
     # Import from cli.py to avoid duplication (lazy import to avoid circular import)
@@ -551,7 +560,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
     # Render template
     variables = {"id": item_id, "title": title}
     try:
-        content = engine.render("hdd", "idea", variables)
+        content = _render(engine, "hdd", "idea", variables)
     except FileNotFoundError:
         raise click.ClickException("HDD idea template not found")
 
@@ -620,7 +629,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
         variables["source_idea"] = source_idea
 
     try:
-        content = engine.render("hdd", "literature", variables)
+        content = _render(engine, "hdd", "literature", variables)
     except FileNotFoundError:
         raise click.ClickException("HDD literature template not found")
 
@@ -703,7 +712,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
         variables["authors"] = authors
 
     try:
-        content = engine.render("hdd", "paper", variables)
+        content = _render(engine, "hdd", "paper", variables)
     except FileNotFoundError:
         raise click.ClickException("HDD paper template not found")
 
@@ -867,7 +876,7 @@ def hypothesis_create(
         variables["literature"] = [lit.strip() for lit in literature.split(",")]
 
     try:
-        content = engine.render("hdd", "hypothesis", variables)
+        content = _render(engine, "hdd", "hypothesis", variables)
     except FileNotFoundError:
         raise click.ClickException("HDD hypothesis template not found")
 
@@ -997,7 +1006,7 @@ def experiment_create(
         variables["measures"] = [m.strip() for m in measures.split(",")]
 
     try:
-        content = engine.render("hdd", "experiment", variables)
+        content = _render(engine, "hdd", "experiment", variables)
     except FileNotFoundError:
         raise click.ClickException("HDD experiment template not found")
 
@@ -1235,7 +1244,7 @@ def measure_create(
     }
 
     try:
-        content = engine.render("hdd", "measure", variables)
+        content = _render(engine, "hdd", "measure", variables)
     except FileNotFoundError:
         raise click.ClickException("HDD measure template not found")
 

@@ -32,7 +32,8 @@ def _validate_turtle_local_name(value: str) -> str:
     """
     if not _SAFE_LOCAL_NAME.match(value):
         raise ValueError(
-            f"Invalid Turtle local name: {value!r} — "
+            # the value as the user typed it, not its repr (`H1\b`, not `'H1\\b'`)
+            f'Invalid Turtle local name: "{value}" — '
             "only [A-Za-z0-9._-] are allowed"
         )
     return value
