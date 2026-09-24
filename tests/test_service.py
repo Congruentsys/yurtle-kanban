@@ -2979,6 +2979,74 @@ class TestFrontmatterOpeningLineComment:
         assert "assignee" not in body
         assert body.startswith(self._BODY), body
 
+    # --- Round 2: YAML-strict openers and a performance bound -----------
+
+    @pytest.mark.parametrize("opener", ["---\t# x", "---#x"])
+    def test_opener_yaml_rejects_is_not_frontmatter(
+        self, temp_repo, software_config, monkeypatch, opener,
+    ):
+        """Openers YAML itself rejects (tab before `#`, no space) are not frontmatter."""
+        with pytest.raises(yaml.YAMLError):
+            list(yaml.safe_load_all(f"{opener}\nid: FEAT-001\n"))
+        monkeypatch.chdir(temp_repo)
+        self._write(temp_repo, opener)
+        assert self._list(CliRunner()) == []
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "--- #" + " " * 64_000 + "x",
+            "--- # c" + " " * 1000 + "\n" + "line\n" * 10_000,
+        ],
+        ids=["one-long-line", "long-line-then-10k-lines-no-closer"],
+    )
+    def test_unclosed_commented_opener_is_fast(
+        self, temp_repo, software_config, content,
+    ):
+        """A pathological unclosed opener must not trigger regex backtracking."""
+        import time
+
+        svc = KanbanService(software_config, temp_repo)
+        start = time.perf_counter()
+        split = svc._split_frontmatter(content)
+        parsed = svc._parse_frontmatter(content)
+        elapsed = time.perf_counter() - start
+        assert split is None and parsed is None
+        assert elapsed < 0.5, f"frontmatter split took {elapsed:.2f}s"
+
+    def test_unclosed_commented_opener_list_is_fast(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """Same bound end to end: the file sits under a scan path and `list` runs."""
+        import time
+
+        monkeypatch.chdir(temp_repo)
+        (temp_repo / "kanban-work" / "features" / "FEAT-001-probe.md").write_text(
+            "--- #" + " " * 64_000 + "x"
+        )
+        runner = CliRunner()
+        start = time.perf_counter()
+        items = self._list(runner)
+        elapsed = time.perf_counter() - start
+        assert items == []
+        assert elapsed < 0.5 + self._baseline_list(runner), (
+            f"list took {elapsed:.2f}s"
+        )
+
+    def _baseline_list(self, runner: CliRunner) -> float:
+        """Time of `list` on the same board with the probe file emptied."""
+        import time
+
+        path = self._path(Path.cwd())
+        saved = path.read_text()
+        path.write_text("")
+        try:
+            start = time.perf_counter()
+            self._list(runner)
+            return time.perf_counter() - start
+        finally:
+            path.write_text(saved)
+
     # --- Negative controls (already green) --------------------------------
 
     def test_control_plain_opener_list_show_move(
