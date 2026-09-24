@@ -35,6 +35,7 @@ from .models import (
     WorkItem,
     WorkItemStatus,
     WorkItemType,
+    check_encodable,
     turtle_string,
     turtle_unescape,
     unknown_priority_message,
@@ -1092,6 +1093,9 @@ class KanbanService:
                      (e.g., H130.1, EXPR-130, PAPER-130).
         """
         priority = self._normalize_priority(priority) or "medium"
+        self._check_text(
+            title=title, description=description, assignee=assignee, tags=tags, content=content
+        )
         # Generate or use provided ID
         if item_id is None:
             prefix = self._get_type_prefix(item_type)
@@ -1187,6 +1191,9 @@ class KanbanService:
             dict with 'success', 'item', 'id', 'pushed', and 'message' keys
         """
         priority = self._normalize_priority(priority) or "medium"
+        self._check_text(
+            title=title, description=description, assignee=assignee, tags=tags, content=content
+        )
         import json as json_mod
 
         has_remote = self._has_remote()
@@ -2689,6 +2696,12 @@ class KanbanService:
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
     @staticmethod
+    def _check_text(**fields: str | list[str] | None) -> None:
+        """Refuse user text that can't be written as UTF-8 (#172)."""
+        for field, value in fields.items():
+            check_encodable(field, value)
+
+    @staticmethod
     def _normalize_priority(priority: str | None) -> str | None:
         """Lowercase a priority and reject anything outside PRIORITIES (#125).
 
@@ -2751,6 +2764,7 @@ class KanbanService:
         commit: bool = True,
     ) -> WorkItem:
         """Add a comment to a work item."""
+        self._check_text(comment=content, author=author)
         item = self.get_item(item_id)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
@@ -2990,6 +3004,8 @@ class KanbanService:
         item = self.get_item(item_id)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
+
+        self._check_text(title=title, description=description, assignee=assignee, tags=tags)
 
         # Track what changed for commit message
         changes = []

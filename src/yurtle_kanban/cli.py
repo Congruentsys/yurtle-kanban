@@ -46,7 +46,13 @@ from .export import (
     export_research_index,
 )
 from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure, paper
-from .models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
+from .models import (
+    PRIORITIES,
+    WorkItemStatus,
+    WorkItemType,
+    check_encodable,
+    unknown_priority_message,
+)
 from .service import KanbanService
 
 
@@ -456,6 +462,15 @@ def create(
         sys.exit(1)
 
     tag_list = [t.strip() for t in tags.split(",")] if tags else None
+
+    try:
+        check_encodable("title", title)
+        check_encodable("description", description)
+        check_encodable("assignee", assignee)
+        check_encodable("tags", tag_list)
+    except ValueError as e:
+        console.print(f"[red]{escape(str(e))}[/red]", soft_wrap=True)
+        sys.exit(1)
 
     if push:
         result = service.create_item_and_push(

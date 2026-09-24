@@ -28,6 +28,20 @@ def unknown_priority_message(shown: str) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
+def check_encodable(field: str, value: str | list[str] | None) -> None:
+    """Refuse text that can't be written as UTF-8: a lone surrogate, which is what
+    Python's surrogateescape makes of undecodable argv bytes (#172). Checked before
+    anything is written, so a bad value never leaves a 0-byte item file behind."""
+    for text in value if isinstance(value, list) else [value]:
+        if isinstance(text, str):
+            try:
+                text.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError(
+                    f"{field} contains invalid UTF-8 (undecodable bytes): {text!r}"
+                ) from None
+
+
 # Turtle short-string escaping (ECHAR): the one escaper for every Turtle literal
 # built from user input — titles, targets, units, ids, agents (#120, #141). A
 # value with `"`, `\\`, a newline or a CR must stay one literal and never break
