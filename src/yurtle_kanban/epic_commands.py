@@ -11,11 +11,9 @@ Both auto-detect the current theme and create the appropriate item type:
 
 from __future__ import annotations
 
-import re
 from datetime import date
 
 import click
-import yaml
 from rich.console import Console
 from rich.table import Table
 
@@ -111,43 +109,29 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
 
     # keep the item file's own line endings (#151)
     content, eol = KanbanService._read_item_text(item.file_path)
-    # Match frontmatter: opening --- through closing ---
-    frontmatter_match = re.match(r"^---\n(.*?\n)---", content, re.DOTALL)
-    if not frontmatter_match:
+    # the service's own frontmatter reader and writer (#169): they handle a
+    # block-style `related:` list, `--- # comment` openers and continuation lines
+    fm = service._parse_frontmatter(content)
+    if not isinstance(fm, dict):
         console.print(f"[yellow]Warning: No frontmatter in {item_id}[/yellow]")
         return False
 
-    fm_text = frontmatter_match.group(1)
-    fm_end = frontmatter_match.end()  # position of closing ---'s last char
-    fm = yaml.safe_load(fm_text) or {}
-
-    related = fm.get("related", [])
+    related = fm.get("related") or []  # `related: null` / empty → []
     if isinstance(related, str):
-        related = [r.strip() for r in related.split(",")]
+        related = [r.strip() for r in related.split(",") if r.strip()]
+    elif not isinstance(related, list):
+        related = [related]
+    related = [str(r) for r in related]
 
     if epic_id in related:
         return False  # Already linked
 
     related.append(epic_id)
-    # the shared writer keeps elements like `"a, b"` one element (#121, #148)
-    related_line = f"related: {yaml_flow_list([str(r) for r in related])}"
-
-    # Update the frontmatter in the file
-    if re.search(r"^related:", fm_text, re.MULTILINE):
-        # Replace existing related line
-        new_content = re.sub(
-            r"^(related:\s*).*$",
-            lambda m: m.group(1) + related_line[len("related: "):],
-            content,
-            count=1,
-            flags=re.MULTILINE,
-        )
-    else:
-        # Insert related before the closing --- using the match position
-        # fm_end points to the end of "---\n...---", so the closing ---
-        # starts at fm_end - 3
-        close_pos = fm_end - 3
-        new_content = content[:close_pos] + related_line + "\n" + content[close_pos:]
+    # the shared writer keeps elements like `"a, b"` one element (#121, #148) and
+    # replaces the whole old value, block-list lines included (#169)
+    new_content = service._add_or_update_frontmatter_field(
+        content, "related", yaml_flow_list(related)
+    )
 
     KanbanService._write_item_text(item.file_path, new_content, eol)
     item.related = related

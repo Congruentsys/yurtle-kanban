@@ -175,6 +175,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   authors corrupted the file. IDs, paper refs and authors now use function
   replacements, and authors go through the shared flow-list writer. An ID the
   Turtle builder refuses is a clean `Error:` naming the value, not a traceback.
+- **Epic linking handles block-style and empty `related:` values** (#169).
+  Linking an item whose `related:` was a block list (`- FEAT-009` lines)
+  left the old lines behind, broke the YAML, and dropped the item from the
+  board. `related: null` crashed. Linking now uses the shared frontmatter
+  writer, which replaces the whole value.
 
 ## [2.2.0] - 2026-08-30
 
