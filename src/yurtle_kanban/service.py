@@ -311,17 +311,25 @@ class KanbanService:
             logger.debug(f"Failed to parse {file_path}: {e}")
             return None
 
+    def _split_frontmatter(self, content: str) -> tuple[str, str] | None:
+        """Split content into (frontmatter text, everything after the closing `---`).
+
+        Uses the same line-anchored match as the frontmatter writers, so a `---`
+        inside a value (`title: "A --- B"`) is not taken as a delimiter (#103).
+        """
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
+            return None
+        return match.group(1), content[match.end() :]
+
     def _parse_frontmatter(self, content: str) -> dict[str, Any] | None:
         """Parse YAML frontmatter from markdown content."""
-        if not content.startswith("---"):
-            return None
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
+        split = self._split_frontmatter(content)
+        if split is None:
             return None
 
         try:
-            return yaml.safe_load(parts[1])
+            return yaml.safe_load(split[0])
         except yaml.YAMLError:
             return None
 
@@ -352,10 +360,9 @@ class KanbanService:
     def _extract_description(self, content: str) -> str | None:
         """Extract description from markdown content."""
         # Remove frontmatter
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                content = parts[2]
+        split = self._split_frontmatter(content)
+        if split is not None:
+            content = split[1]
 
         # Remove yurtle and turtle knowledge blocks
         content = re.sub(r"```(?:yurtle|turtle).*?```", "", content, flags=re.DOTALL)
@@ -1771,18 +1778,13 @@ class KanbanService:
 
         Places the block between the closing --- and the first # heading.
         """
-        if not content.startswith("---"):
+        split = self._split_frontmatter(content)
+        if split is None:
             return content + "\n\n" + block + "\n"
 
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            return content + "\n\n" + block + "\n"
-
-        after_frontmatter = parts[2]
-        return (
-            parts[0] + "---" + parts[1] + "---\n\n"
-            + block + "\n" + after_frontmatter.lstrip("\n")
-        )
+        after_frontmatter = split[1]
+        head = content[: len(content) - len(after_frontmatter)]
+        return head + "\n\n" + block + "\n" + after_frontmatter.lstrip("\n")
 
     def allocate_next_id(
         self,
