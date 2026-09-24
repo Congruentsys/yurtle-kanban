@@ -212,10 +212,19 @@ def init(theme: str, path: str | None):
     # The root is the theme's own root, the common parent of its per-type
     # folders (kanban-work/, research/), unless --path says otherwise; the
     # board scans that one root, so new types are covered too (#112)
+    scanned = [path] if path else []
     if path is None:
         common = os.path.commonpath([p.rstrip("/") for p in scan_paths]) if scan_paths else ""
-        path = f"{common}/" if common else "work/"
-    scan_paths_yaml = f'    - "{path}"'
+        if common:
+            path, scanned = f"{common}/", [f"{common}/"]
+        elif scan_paths:
+            # Type folders with no common parent (e.g. a custom theme's
+            # `features/` and `bugs/` at the repo root): scan them as they are,
+            # never `./` (that would pull in `.claude/**/*.md`)
+            path, scanned = "work/", scan_paths
+        else:
+            path, scanned = "work/", ["work/"]
+    scan_paths_yaml = "\n".join(f'    - "{p}"' for p in scanned)
     config_content = f"""# yurtle-kanban configuration
 kanban:
   theme: {theme}
@@ -243,9 +252,9 @@ kanban:
             shutil.copy(template_file, templates_dst / template_file.name)
             templates_copied += 1
 
-    # Create root work directory (fallback)
-    work_dir = repo_root / path
-    work_dir.mkdir(parents=True, exist_ok=True)
+    # Create the root directory only when the board scans it
+    if path in scanned:
+        (repo_root / path).mkdir(parents=True, exist_ok=True)
 
     # Install theme-matched Claude Code skills
     skills_src = _get_skills_dir()
