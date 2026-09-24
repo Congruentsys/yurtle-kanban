@@ -1743,3 +1743,260 @@ class TestScanUsesEachBoardsIgnore:
 
         # v1 ignore is exactly what the config lists (no default merged in).
         assert self._listed_ids(runner) == {"TASK-030", "TASK-032"}
+
+
+class TestCreateHonoursDefaultBoard:
+    """Multi-board ``create`` with no board uses ``default_board`` when its
+    theme defines the type; otherwise the first board in config order that
+    does (today's behaviour). Configs without ``default_board``, or where only
+    one board defines the type, are unchanged (#114)."""
+
+    @pytest.fixture
+    def repo_runner(self, tmp_path, monkeypatch):
+        """Empty git repo as cwd, fresh theme cache, and a CliRunner."""
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+
+        for cmd in (
+            ["git", "init", "-b", "main"],
+            ["git", "config", "user.email", "test@test.com"],
+            ["git", "config", "user.name", "Test"],
+        ):
+            subprocess.run(cmd, cwd=tmp_path, capture_output=True, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        yield tmp_path, CliRunner()
+        config_mod._theme_cache.clear()
+
+    @staticmethod
+    def _write_config(repo: Path, text: str) -> None:
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        cfg.write_text(text)
+
+    @staticmethod
+    def _run(runner, args: list[str]):
+        from yurtle_kanban.cli import main
+
+        result = runner.invoke(main, args, catch_exceptions=False)
+        assert result.exit_code == 0, f"{args} failed:\n{result.output}"
+        return result
+
+    @classmethod
+    def _create(cls, runner, repo: Path, item_type: str, title: str) -> tuple[str, str]:
+        """Run ``create`` and return (item id, file path relative to repo)."""
+        import re
+
+        out = cls._run(runner, ["create", item_type, title]).output
+        m_id = re.search(r"Created (\S+):", out)
+        assert m_id, out
+        item_id = m_id.group(1)
+        # Rich wraps the "File:" line, so find the new file by its id instead.
+        matches = [
+            f for f in repo.rglob(f"{item_id}*.md") if ".kanban" not in f.parts
+        ]
+        assert len(matches) == 1, f"expected one file for {item_id}: {matches}\n{out}"
+        rel = matches[0].resolve().relative_to(repo.resolve()).as_posix()
+        return item_id, rel
+
+    @classmethod
+    def _listed_ids(cls, runner, board: str) -> set[str]:
+        import json
+
+        out = cls._run(runner, ["list", "--json", "--board", board]).output
+        # An empty board prints plain text, not JSON.
+        if "No work items found" in out:
+            return set()
+        data = json.loads(out)
+        items = data["items"] if isinstance(data, dict) else data
+        return {i["id"] for i in items}
+
+    # -- Do: default_board wins when its theme defines the type ---------------
+
+    def test_default_board_wins_when_both_boards_define_type(self, repo_runner):
+        """dev + ops both software; default_board ops → feature lands on ops."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: dev\n"
+            "  preset: software\n"
+            "  path: dev/\n"
+            "- name: ops\n"
+            "  preset: software\n"
+            "  path: ops/\n"
+            "default_board: ops\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "feature", "probe")
+
+        assert rel.startswith("ops/"), f"feature should land under ops/, got {rel}"
+        assert item_id in self._listed_ids(runner, "ops")
+        assert item_id not in self._listed_ids(runner, "dev")
+
+    def test_default_board_wins_for_type_shared_by_different_themes(self, repo_runner):
+        """idea is defined by software AND hdd; default_board research → research/."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: development\n"
+            "  preset: software\n"
+            "  path: kanban-work/\n"
+            "- name: research\n"
+            "  preset: hdd\n"
+            "  path: research/\n"
+            "default_board: research\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "idea", "probe idea")
+
+        assert rel.startswith("research/"), f"idea should land under research/, got {rel}"
+        assert item_id in self._listed_ids(runner, "research")
+
+    # -- Do: fallback when default_board's theme lacks the type ---------------
+
+    def test_default_board_without_type_falls_back_to_first_in_config_order(
+        self, repo_runner,
+    ):
+        """default_board research (hdd) has no feature → first software board."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: research\n"
+            "  preset: hdd\n"
+            "  path: research/\n"
+            "- name: alpha\n"
+            "  preset: software\n"
+            "  path: alpha/\n"
+            "- name: beta\n"
+            "  preset: software\n"
+            "  path: beta/\n"
+            "default_board: research\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "feature", "fallback probe")
+
+        assert rel.startswith("alpha/"), f"feature should fall back to alpha/, got {rel}"
+        assert item_id in self._listed_ids(runner, "alpha")
+
+    # -- Must stay true: negative controls ------------------------------------
+
+    def test_control_no_default_board_first_in_config_order(self, repo_runner):
+        """No default_board → first board in config order defining the type."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: dev\n"
+            "  preset: software\n"
+            "  path: dev/\n"
+            "- name: ops\n"
+            "  preset: software\n"
+            "  path: ops/\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "feature", "no default probe")
+
+        assert rel.startswith("dev/"), f"feature should land under dev/, got {rel}"
+        assert item_id in self._listed_ids(runner, "dev")
+
+    def test_control_only_one_board_defines_type_ignores_default_board(self, repo_runner):
+        """hypothesis only in hdd → research, even with default_board development."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: development\n"
+            "  preset: nautical\n"
+            "  path: kanban-work/\n"
+            "- name: research\n"
+            "  preset: hdd\n"
+            "  path: research/\n"
+            "default_board: development\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "hypothesis", "only hdd has it")
+
+        assert rel.startswith("research/hypotheses/"), rel
+        assert item_id in self._listed_ids(runner, "research")
+
+    def test_control_only_one_board_defines_type_default_elsewhere(self, repo_runner):
+        """expedition only in nautical → kanban-work, even with default_board research."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: development\n"
+            "  preset: nautical\n"
+            "  path: kanban-work/\n"
+            "- name: research\n"
+            "  preset: hdd\n"
+            "  path: research/\n"
+            "default_board: research\n",
+        )
+
+        item_id, rel = self._create(runner, repo, "expedition", "only nautical has it")
+
+        assert rel.startswith("kanban-work/expeditions/"), rel
+        assert item_id in self._listed_ids(runner, "development")
+
+    def test_control_nusy_product_team_config(self, repo_runner):
+        """nusy-product-team shape (no default_board): each type to its own board."""
+        repo, runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: development\n"
+            "  preset: nautical\n"
+            "  path: kanban-work/\n"
+            "- name: research\n"
+            "  preset: hdd\n"
+            "  path: research/\n",
+        )
+
+        exp_id, exp_rel = self._create(runner, repo, "expedition", "nusy expedition")
+        hyp_id, hyp_rel = self._create(runner, repo, "hypothesis", "nusy hypothesis")
+
+        assert exp_rel.startswith("kanban-work/expeditions/"), exp_rel
+        assert hyp_rel.startswith("research/hypotheses/"), hyp_rel
+        assert exp_id in self._listed_ids(runner, "development")
+        assert hyp_id in self._listed_ids(runner, "research")
+
+    def test_control_explicit_board_wins_over_default_board(self, repo_runner):
+        """The service's explicit board_name beats default_board.
+
+        ``create`` has no --board option, so this exercises the service's
+        board-aware placement directly.
+        """
+        repo, _runner = repo_runner
+        self._write_config(
+            repo,
+            "version: '2.0'\n"
+            "boards:\n"
+            "- name: dev\n"
+            "  preset: software\n"
+            "  path: dev/\n"
+            "- name: ops\n"
+            "  preset: software\n"
+            "  path: ops/\n"
+            "default_board: ops\n",
+        )
+        config = KanbanConfig.load(repo / ".kanban" / "config.yaml")
+        service = KanbanService(config, repo)
+
+        type_dir = service._get_type_directory(WorkItemType.FEATURE, board_name="dev")
+
+        rel = type_dir.resolve().relative_to(repo.resolve()).as_posix()
+        assert rel.startswith("dev/"), f"explicit dev should win, got {rel}"

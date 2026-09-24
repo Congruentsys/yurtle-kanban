@@ -870,8 +870,15 @@ class KanbanService:
         # Priority 1: Theme-defined path, kept where the board scans it (#102),
         # else its own folder under the board root (#113)
         if self.config.is_multi_board:
-            # Multi-board: check specific board or search all boards
-            boards = [self.config.get_board(board_name)] if board_name else self.config.boards
+            # Multi-board: the named board; else the default_board first, then the
+            # others in config order, taking the first whose theme defines the type (#114)
+            if board_name:
+                boards = [self.config.get_board(board_name)]
+            else:
+                default = self.config.get_default_board()
+                boards = ([default] if default else []) + [
+                    b for b in self.config.boards if b is not default
+                ]
             for board in boards:
                 if board is None:
                     continue
