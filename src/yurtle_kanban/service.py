@@ -152,6 +152,14 @@ class KanbanService:
         """Scan configured paths for work items."""
         self._items.clear()
 
+        if self.config.is_multi_board:
+            # Each board applies its OWN ignore patterns to its own path, exactly
+            # as `board` does, so list/show/move agree with it (#124)
+            for board in self.config.boards:
+                for item in self._scan_board(board):
+                    self._items[item.id] = item
+            return list(self._items.values())
+
         for scan_path in self.config.get_work_paths():
             full_path = self.repo_root / scan_path
             if full_path.exists():
