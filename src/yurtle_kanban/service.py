@@ -2538,7 +2538,10 @@ class KanbanService:
         """
         raw = path.read_bytes().decode("utf-8")
         eol = "\r\n" if "\r\n" in raw else "\n"
-        return raw.replace("\r\n", "\n"), eol
+        # A lone `\r` is a line break too, as it is for read_text() and the
+        # frontmatter parser; otherwise an edit's `.*` would span it and drop
+        # the key after it
+        return re.sub(r"\r\n?", "\n", raw), eol
 
     @staticmethod
     def _write_item_text(path: Path, text: str, eol: str) -> None:
