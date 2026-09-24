@@ -1253,3 +1253,184 @@ default_board: development
         # Theme (nautical) has in_progress wip_limit=10, but config overrides to 2
         in_progress_col = next(c for c in board.columns if c.id == "in_progress")
         assert in_progress_col.wip_limit == 2
+
+
+class TestBoardAddKeepsDefaultBoardPath:
+    """board-add must not move the default board off where its items live.
+
+    Converting a single-board (v1) config to multi-board takes the default
+    board's ``path`` from the existing config -- its ``root`` if that is
+    scanned, else the common parent of its ``scan_paths`` (e.g.
+    ``kanban-work/``) -- never a hardcoded ``work/``. Existing items must
+    stay on the board after ``board-add``. (#94)
+    """
+
+    @pytest.fixture
+    def repo_runner(self, tmp_path, monkeypatch):
+        """Empty git repo as cwd, fresh theme cache, and a CliRunner."""
+        import subprocess
+
+        from click.testing import CliRunner
+
+        from yurtle_kanban import config as config_mod
+
+        for cmd in (
+            ["git", "init", "-b", "main"],
+            ["git", "config", "user.email", "test@test.com"],
+            ["git", "config", "user.name", "Test"],
+        ):
+            subprocess.run(cmd, cwd=tmp_path, capture_output=True, check=True)
+        config_mod._theme_cache.clear()
+        monkeypatch.chdir(tmp_path)
+        yield tmp_path, CliRunner()
+        config_mod._theme_cache.clear()
+
+    @staticmethod
+    def _run(runner, args: list[str]):
+        from yurtle_kanban.cli import main
+
+        result = runner.invoke(main, args, catch_exceptions=False)
+        assert result.exit_code == 0, f"{args} failed:\n{result.output}"
+        return result
+
+    @staticmethod
+    def _saved_boards(repo: Path) -> dict[str, dict]:
+        import yaml
+
+        data = yaml.safe_load((repo / ".kanban" / "config.yaml").read_text())
+        assert "boards" in data, f"config not multi-board:\n{data}"
+        return {b["name"]: b for b in data["boards"]}
+
+    @staticmethod
+    def _write_v1(repo: Path, root: str, scan_paths: list[str]) -> None:
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "kanban:",
+            "  theme: software",
+            "  paths:",
+            f"    root: {root}",
+            "    scan_paths:",
+            *[f'    - "{p}"' for p in scan_paths],
+            "    ignore:",
+            '      - "**/archive/**"',
+            '      - "**/templates/**"',
+            '      - "**/_TEMPLATE*"',
+        ]
+        cfg.write_text("\n".join(lines) + "\n")
+        for p in scan_paths:
+            (repo / p).mkdir(parents=True, exist_ok=True)
+
+    # -- the issue's own repro ------------------------------------------------
+
+    def test_issue_repro_item_stays_on_board_after_board_add(self, repo_runner):
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        assert "IDEA-001" in self._run(runner, ["board"]).output
+
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        assert "IDEA-001" in self._run(runner, ["board"]).output
+        assert "IDEA-001" in self._run(runner, ["list"]).output
+        # The file itself was never moved.
+        assert list((repo / "kanban-work" / "ideas").glob("IDEA-001-*.md"))
+
+    def test_issue_repro_show_still_finds_item(self, repo_runner):
+        _, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        from yurtle_kanban.cli import main
+
+        result = runner.invoke(main, ["show", "IDEA-001"], catch_exceptions=False)
+        assert "Item not found" not in result.output
+        assert result.exit_code == 0
+        assert "Fresh probe item" in result.output
+
+    def test_issue_repro_saved_default_path_is_kanban_work(self, repo_runner):
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        boards = self._saved_boards(repo)
+        assert boards["default"]["path"].rstrip("/") == "kanban-work"
+        assert boards["default"]["path"].rstrip("/") != "work"
+
+    # -- hand-written v1 configs -----------------------------------------------
+
+    def test_v1_explicit_kanban_work_root_is_kept(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_v1(
+            repo,
+            root="kanban-work/",
+            scan_paths=["kanban-work/features/", "kanban-work/ideas/"],
+        )
+        self._run(runner, ["create", "idea", "Hand config item"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        assert self._saved_boards(repo)["default"]["path"].rstrip("/") == "kanban-work"
+        assert "IDEA-001" in self._run(runner, ["list"]).output
+
+    def test_v1_scanned_root_work_is_kept(self, repo_runner):
+        repo, runner = repo_runner
+        self._write_v1(repo, root="work/", scan_paths=["work/"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        assert self._saved_boards(repo)["default"]["path"].rstrip("/") == "work"
+
+    # -- the new board works ---------------------------------------------------
+
+    def test_new_research_board_lists_hdd_item(self, repo_runner):
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        created = self._run(runner, ["create", "hypothesis", "Probe hypothesis"])
+        assert "research/" in created.output.replace("\n", "")
+        listed = self._run(runner, ["list", "--board", "research"]).output
+        assert "H-001" in listed
+        assert list((repo / "research").rglob("H-001-*.md"))
+
+    def test_existing_item_listed_on_default_board_after_board_add(self, repo_runner):
+        _, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["create", "idea", "Fresh probe item"])
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        assert "IDEA-001" in self._run(runner, ["list", "--board", "default"]).output
+
+    # -- negative controls (must stay green) -----------------------------------
+
+    def test_control_board_add_on_multiboard_keeps_existing_paths(self, repo_runner):
+        repo, runner = repo_runner
+        cfg = repo / ".kanban" / "config.yaml"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_text(
+            'version: "2.0"\n'
+            "boards:\n"
+            "  - name: development\n"
+            "    preset: nautical\n"
+            "    path: ship-work/\n"
+            "  - name: tasks\n"
+            "    preset: software\n"
+            "    path: work/\n"
+            "default_board: development\n"
+        )
+        self._run(runner, ["board-add", "research", "--preset", "hdd", "--path", "research/"])
+
+        boards = self._saved_boards(repo)
+        assert boards["development"]["path"] == "ship-work/"
+        assert boards["tasks"]["path"] == "work/"
+        assert boards["research"]["path"] == "research/"
+
+    def test_control_added_board_path_is_honoured(self, repo_runner):
+        repo, runner = repo_runner
+        self._run(runner, ["init", "--theme", "software"])
+        self._run(runner, ["board-add", "lab", "--preset", "hdd", "--path", "lab-notes/"])
+
+        assert self._saved_boards(repo)["lab"]["path"] == "lab-notes/"
+        assert (repo / "lab-notes").is_dir()
