@@ -3499,3 +3499,261 @@ class TestAllFrontmatterValuesRoundTrip:
         item = svc._parse_file(path)
         assert item is not None
         assert item.to_markdown() == _ORDINARY_ITEM_FILE
+
+
+# --- #125: priority validated once in the service's write paths ------------
+
+
+def _item_md_files(root: Path) -> set[Path]:
+    return {p for p in root.rglob("*.md") if ".git" not in p.parts}
+
+
+def _git_log(root: Path) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "log", "--oneline", "--all"], cwd=root, capture_output=True, text=True,
+    ).stdout
+
+
+_TEMPLATE_CONTENT = (
+    "---\n"
+    "id: FEAT-001\n"
+    "title: Templated\n"
+    "type: feature\n"
+    "status: backlog\n"
+    "priority: medium\n"
+    "---\n"
+    "\n"
+    "# Templated\n"
+    "\n"
+    "```turtle\n"
+    "@prefix kb: <https://yurtle.dev/kanban/> .\n"
+    "\n"
+    "<> kb:priority kb:medium .\n"
+    "```\n"
+)
+
+
+class TestServicePriorityValidated:
+    """KanbanService create/update validate priority against PRIORITIES and
+    lowercase it, so every entry point (hooks, direct callers) shares the
+    rule the CLI and MCP already apply (#125)."""
+
+    VALID = ("critical", "high", "medium", "low")
+
+    # --- create_item -------------------------------------------------------
+
+    def test_create_item_rejects_unknown_priority(self, temp_repo, software_config):
+        svc = KanbanService(software_config, temp_repo)
+        before = _item_md_files(temp_repo)
+
+        with pytest.raises(ValueError, match="urgent"):
+            svc.create_item(WorkItemType.FEATURE, "probe", priority="urgent")
+
+        assert _item_md_files(temp_repo) == before
+        assert all(i.priority != "urgent" for i in svc.get_items())
+
+    def test_create_item_uppercase_priority_is_lowercased(self, temp_repo, software_config):
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.create_item(WorkItemType.FEATURE, "probe", priority="HIGH")
+
+        assert item.priority == "high"
+        assert "\npriority: high\n" in item.file_path.read_text()
+
+    def test_create_item_with_template_content_rejects_unknown_priority(
+        self, temp_repo, software_config,
+    ):
+        svc = KanbanService(software_config, temp_repo)
+        before = _item_md_files(temp_repo)
+
+        with pytest.raises(ValueError, match="urgent"):
+            svc.create_item(
+                WorkItemType.FEATURE, "Templated", priority="urgent",
+                content=_TEMPLATE_CONTENT, item_id="FEAT-001",
+            )
+
+        assert _item_md_files(temp_repo) == before
+
+    def test_create_item_with_template_content_lowercases_priority(
+        self, temp_repo, software_config,
+    ):
+        """The _apply_priority path writes lowercase to frontmatter and triple."""
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.create_item(
+            WorkItemType.FEATURE, "Templated", priority="HIGH",
+            content=_TEMPLATE_CONTENT, item_id="FEAT-001",
+        )
+
+        text = item.file_path.read_text()
+        assert "\npriority: high\n" in text
+        assert "kb:priority kb:high" in text
+        assert "HIGH" not in text
+
+    # --- create_item_and_push ---------------------------------------------
+
+    def test_create_item_and_push_rejects_unknown_priority(self, temp_repo, software_config):
+        svc = KanbanService(software_config, temp_repo)
+        before_files = _item_md_files(temp_repo)
+        before_log = _git_log(temp_repo)
+
+        try:
+            result = svc.create_item_and_push(
+                WorkItemType.FEATURE, "probe", priority="urgent",
+            )
+        except ValueError as e:
+            assert "urgent" in str(e)
+        else:
+            assert not result.get("success"), result
+
+        assert _item_md_files(temp_repo) == before_files
+        assert _git_log(temp_repo) == before_log
+
+    def test_create_item_and_push_uppercase_priority_is_lowercased(
+        self, temp_repo, software_config,
+    ):
+        svc = KanbanService(software_config, temp_repo)
+        before = _item_md_files(temp_repo)
+
+        result = svc.create_item_and_push(WorkItemType.FEATURE, "probe", priority="HIGH")
+
+        assert result.get("success"), result
+        new = sorted(_item_md_files(temp_repo) - before)
+        assert len(new) == 1
+        assert "\npriority: high\n" in new[0].read_text()
+
+    def test_create_item_and_push_template_content_lowercases_priority(
+        self, temp_repo, software_config,
+    ):
+        svc = KanbanService(software_config, temp_repo)
+        before = _item_md_files(temp_repo)
+
+        result = svc.create_item_and_push(
+            WorkItemType.FEATURE, "Templated", priority="HIGH",
+            content=_TEMPLATE_CONTENT, item_id="FEAT-001",
+        )
+
+        assert result.get("success"), result
+        new = sorted(_item_md_files(temp_repo) - before)
+        assert len(new) == 1
+        text = new[0].read_text()
+        assert "\npriority: high\n" in text
+        assert "kb:priority kb:high" in text
+
+    # --- update_item --------------------------------------------------------
+
+    def _existing(self, temp_repo: Path, priority: str = "low") -> Path:
+        path = temp_repo / "kanban-work" / "features" / "FEAT-001-Existing.md"
+        path.write_text(
+            f"---\nid: FEAT-001\ntitle: Existing\nstatus: backlog\npriority: {priority}\n---\n"
+        )
+        return path
+
+    def test_update_item_rejects_unknown_priority(self, temp_repo, software_config):
+        path = self._existing(temp_repo)
+        svc = KanbanService(software_config, temp_repo)
+        before_text = path.read_text()
+        before_log = _git_log(temp_repo)
+
+        with pytest.raises(ValueError, match="urgent"):
+            svc.update_item("FEAT-001", priority="urgent")
+
+        assert path.read_text() == before_text
+        assert _git_log(temp_repo) == before_log
+        assert svc.get_item("FEAT-001").priority == "low"
+
+    def test_update_item_uppercase_priority_is_lowercased(self, temp_repo, software_config):
+        path = self._existing(temp_repo)
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.update_item("FEAT-001", priority="HIGH", commit=False)
+
+        assert item.priority == "high"
+        assert "\npriority: high\n" in path.read_text()
+
+    # --- negative controls --------------------------------------------------
+
+    @pytest.mark.parametrize("prio", VALID)
+    def test_create_item_accepts_each_valid_priority(self, temp_repo, software_config, prio):
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.create_item(WorkItemType.FEATURE, "probe", priority=prio)
+
+        assert item.priority == prio
+        assert f"\npriority: {prio}\n" in item.file_path.read_text()
+
+    @pytest.mark.parametrize("prio", VALID)
+    def test_update_item_accepts_each_valid_priority(self, temp_repo, software_config, prio):
+        path = self._existing(temp_repo, priority="medium" if prio != "medium" else "low")
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.update_item("FEAT-001", priority=prio, commit=False)
+
+        assert item.priority == prio
+        assert f"\npriority: {prio}\n" in path.read_text()
+
+    def test_create_item_default_priority_is_medium(self, temp_repo, software_config):
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.create_item(WorkItemType.FEATURE, "probe")
+
+        assert item.priority == "medium"
+        assert "\npriority: medium\n" in item.file_path.read_text()
+
+    def test_update_item_priority_none_leaves_priority_unchanged(
+        self, temp_repo, software_config,
+    ):
+        path = self._existing(temp_repo, priority="critical")
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.update_item("FEAT-001", title="Renamed", priority=None, commit=False)
+
+        assert item.priority == "critical"
+        assert "\npriority: critical\n" in path.read_text()
+
+    def test_update_item_other_field_on_legacy_priority_item_still_works(
+        self, temp_repo, software_config,
+    ):
+        """Reads stay permissive: editing a legacy `P0` item's title is fine."""
+        path = self._existing(temp_repo, priority="P0")
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.update_item("FEAT-001", title="Renamed", commit=False)
+
+        assert item.title == "Renamed"
+        assert item.priority == "P0"
+        assert "\npriority: P0\n" in path.read_text()
+
+    @pytest.mark.parametrize(
+        "legacy,score",
+        [("P0", 50), ("HIGH", 50), ("normal", 50), ("strategic", 50), ("backlog", 10)],
+    )
+    def test_legacy_priorities_still_read(self, temp_repo, software_config, legacy, score):
+        """Items already on disk with non-canonical priorities still load, list
+        and score; `backlog` keeps its score of 10 (#125 triage)."""
+        self._existing(temp_repo, priority=legacy)
+        svc = KanbanService(software_config, temp_repo)
+
+        item = svc.get_item("FEAT-001")
+        assert item is not None
+        assert item.priority == legacy
+        assert item.priority_score == score
+        assert [i.id for i in svc.get_items()] == ["FEAT-001"]
+
+    @pytest.mark.parametrize("legacy", ["P0", "HIGH", "normal", "strategic"])
+    def test_legacy_priorities_list_and_show_via_cli(
+        self, temp_repo, software_config, monkeypatch, legacy,
+    ):
+        self._existing(temp_repo, priority=legacy)
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+
+        listed = runner.invoke(main, ["list", "--json"])
+        assert listed.exit_code == 0, listed.output
+        assert [d["id"] for d in json.loads(listed.output)] == ["FEAT-001"]
+
+        shown = runner.invoke(main, ["show", "FEAT-001", "--json"])
+        assert shown.exit_code == 0, shown.output
+        assert json.loads(shown.output)["priority"] == legacy

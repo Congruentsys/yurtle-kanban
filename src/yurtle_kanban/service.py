@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .config import BoardConfig
     from .gates import GateResult
 from .models import (
+    PRIORITIES,
     Board,
     Column,
     Comment,
@@ -987,6 +988,7 @@ class KanbanService:
                      Useful for HDD types with non-standard ID formats
                      (e.g., H130.1, EXPR-130, PAPER-130).
         """
+        priority = self._normalize_priority(priority) or "medium"
         # Generate or use provided ID
         if item_id is None:
             prefix = self._get_type_prefix(item_type)
@@ -1081,6 +1083,7 @@ class KanbanService:
         Returns:
             dict with 'success', 'item', 'id', 'pushed', and 'message' keys
         """
+        priority = self._normalize_priority(priority) or "medium"
         import json as json_mod
 
         has_remote = self._has_remote()
@@ -2553,6 +2556,24 @@ class KanbanService:
 
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
+    @staticmethod
+    def _normalize_priority(priority: str | None) -> str | None:
+        """Lowercase a priority and reject anything outside PRIORITIES (#125).
+
+        Every write path (CLI, MCP, hooks, direct callers) goes through the
+        service, so this is the one place priorities are validated. Reading
+        stays permissive: existing items may carry legacy values (`P0`,
+        `normal`, `backlog`), which still load and score.
+        """
+        if priority is None:
+            return None
+        normalized = priority.strip().lower()
+        if normalized not in PRIORITIES:
+            raise ValueError(
+                f"Unknown priority: {priority!r}. Valid: {', '.join(PRIORITIES)}"
+            )
+        return normalized
+
     def _apply_priority(self, content: str, priority: str | None) -> str:
         """Write the requested priority into pre-rendered template content.
 
@@ -2829,6 +2850,7 @@ class KanbanService:
             commit: Whether to git commit the change
             message: Optional commit message
         """
+        priority = self._normalize_priority(priority)
         item = self.get_item(item_id)
         if not item:
             raise ValueError(f"Item not found: {item_id}")

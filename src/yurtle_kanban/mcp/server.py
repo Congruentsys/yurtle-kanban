@@ -373,8 +373,9 @@ class KanbanMCPServer:
 
     @staticmethod
     def _check_priority(priority: str | None) -> dict[str, Any] | None:
-        """Reject a priority outside PRIORITIES; the schema enum is not enforced (#106)."""
-        if priority is not None and priority not in PRIORITIES:
+        """Reject a priority outside PRIORITIES, any case like the CLI (#106, #125);
+        the schema enum is not enforced. The service lowercases what it writes."""
+        if priority is not None and priority.strip().lower() not in PRIORITIES:
             return {"error": f"Unknown priority: {priority}. Valid: {', '.join(PRIORITIES)}"}
         return None
 
