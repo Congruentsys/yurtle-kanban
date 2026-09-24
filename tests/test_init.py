@@ -674,8 +674,11 @@ class TestInitExplicitPathScaffolding:
     scaffolded `kanban-work/*/_TEMPLATE.md` from the theme's per-type paths,
     while `create` writes to `custom/<type folder>/` (#102/#113) -- leaving a
     `kanban-work/` tree nothing uses. Decided: scaffold each type folder (the
-    last component of the theme's per-type path) and its `_TEMPLATE.md` under
-    the explicit root, and create no `kanban-work/` (or `research/`) tree.
+    theme's per-type path minus its first component, the theme root -- so
+    `kw/x/features/` maps to `custom/x/features/`) and its `_TEMPLATE.md`
+    under the explicit root, and create no `kanban-work/` (or `research/`)
+    tree. With `--path .` the template and the item `create` writes must
+    share one folder, and no scaffolded type folder may go unused.
     Also pinned (round-2 follow-up A): `init` creates no unscanned root, e.g.
     no `work/` for a flat custom theme. Default `init` (no `--path`) is
     unchanged. (#134)
@@ -684,14 +687,80 @@ class TestInitExplicitPathScaffolding:
     H = TestInitWritesThemeRoot
     THEMES = ["software", "nautical", "hdd"]
 
-    # Pinned digest of the whole tree default `init --theme <t>` creates
-    # (every path except .git/, plus every file's bytes), taken on main before
-    # #134. A change here means default init's output changed.
-    DEFAULT_TREE_DIGESTS = {
-        "software": "941afbdb56f1e98afe993700aa2cd68ff17f204f4cae4bf1730295bbb2eeea8e",
-        "nautical": "9d8f1219781c8e98d349dc41867101c20abc2e312c8004236728088406ce11ea",
-        "hdd": "d151829138cf36a587e9c929cd4f9cc673349ff3b10e9fdd8d0b9ce33409f74b",
+    # What default `init --theme <t>` writes, recorded as literals from
+    # origin/main before #134 (not derived from the code under test).
+    # Type folders under the theme root, by type id:
+    DEFAULT_TYPE_DIRS = {
+        "software": {
+            "feature": "kanban-work/features", "bug": "kanban-work/bugs",
+            "epic": "kanban-work/epics", "issue": "kanban-work/issues",
+            "task": "kanban-work/tasks", "idea": "kanban-work/ideas",
+        },
+        "nautical": {
+            "expedition": "kanban-work/expeditions", "voyage": "kanban-work/voyages",
+            "chore": "kanban-work/chores", "hazard": "kanban-work/hazards",
+            "signal": "kanban-work/signals",
+        },
+        "hdd": {
+            "idea": "research/ideas", "literature": "research/literature",
+            "paper": "research/papers", "hypothesis": "research/hypotheses",
+            "experiment": "research/experiments", "measure": "research/measures",
+        },
     }
+    # (ID prefix, sections) each type's _TEMPLATE.md carries.
+    DEFAULT_TEMPLATE_PARTS = {
+        "feature": ("FEAT", ["Goal", "Acceptance Criteria"]),
+        "bug": ("BUG", ["Description", "Steps to Reproduce", "Expected Behavior",
+                        "Actual Behavior"]),
+        "epic": ("EPIC", ["Goal", "Scope", "Milestones"]),
+        "issue": ("ISSUE", ["Description", "Context"]),
+        "task": ("TASK", ["Goal", "Steps", "Acceptance Criteria"]),
+        "expedition": ("EXP", ["Context", "Plan", "Definition of Done"]),
+        "voyage": ("VOY", ["Vision", "Expeditions", "Success Criteria"]),
+        "chore": ("CHORE", ["Description"]),
+        "hazard": ("HAZ", ["Description", "Impact", "Mitigation"]),
+        "signal": ("SIG", ["Observation", "Potential Value"]),
+        "literature": ("LIT", ["Topic", "Search Strategy", "Key Findings", "Gaps",
+                               "References"]),
+        "paper": ("PAPER", ["Abstract", "Introduction", "Methodology", "Results",
+                            "Conclusion"]),
+        "hypothesis": ("H", ["Hypothesis Statement", "Target", "Rationale",
+                             "Testable Predictions"]),
+        "experiment": ("EXPR", ["Purpose", "Method", "Results", "Conclusion"]),
+        "measure": ("M", ["Description", "Specification", "Collection Method"]),
+    }
+    DEFAULT_IDEA_PARTS = {  # `idea` differs by theme only in its prefix
+        "software": ("IDEA", ["Description", "Motivation"]),
+        "hdd": ("IDEA-R", ["Description", "Motivation"]),
+    }
+    TEMPLATE_FORMAT = (
+        "---\n"
+        "id: {prefix}-XXX\n"
+        'title: ""\n'
+        "type: {type_id}\n"
+        "status: backlog\n"
+        "created: YYYY-MM-DD\n"
+        "priority: medium\n"
+        "assignee:\n"
+        "tags: []\n"
+        "related: []\n"
+        "---\n"
+        "\n"
+        "# {prefix}-XXX: Title\n"
+        "\n"
+        "{sections}"
+    )
+    DEFAULT_PATHS_BLOCK = (
+        "  paths:\n"
+        "    root: {root}/\n"
+        "    scan_paths:\n"
+        '    - "{root}/"\n'
+        "\n"
+        "    ignore:\n"
+        '      - "**/archive/**"\n'
+        '      - "**/templates/**"\n'
+        '      - "**/_TEMPLATE*"\n'
+    )
 
     @pytest.fixture(autouse=True)
     def _clear_theme_cache(self):
@@ -705,9 +774,10 @@ class TestInitExplicitPathScaffolding:
 
     @classmethod
     def _type_folders(cls, theme: str) -> dict[str, str]:
-        """type id -> last component of the theme's per-type path (e.g. 'features')."""
+        """type id -> the theme's per-type path minus its first component (the
+        theme root), e.g. 'kanban-work/features/' -> 'features'."""
         folders = {
-            type_id: Path(p.rstrip("/")).name
+            type_id: Path(*Path(p.rstrip("/")).parts[1:]).as_posix()
             for type_id, p in cls.H._theme_type_paths(theme).items()
         }
         assert folders, f"non-vacuity: theme {theme!r} declares no per-type paths"
@@ -717,18 +787,28 @@ class TestInitExplicitPathScaffolding:
     def _init_custom(cls, tmp_path, monkeypatch, theme: str):
         return cls.H._run(tmp_path, monkeypatch, "init", "--theme", theme, "--path", "custom/")
 
-    @staticmethod
-    def _tree_digest(root: Path) -> str:
-        import hashlib
+    @classmethod
+    def _expected_template(cls, theme: str, type_id: str) -> str:
+        if type_id == "idea":
+            prefix, sections = cls.DEFAULT_IDEA_PARTS[theme]
+        else:
+            prefix, sections = cls.DEFAULT_TEMPLATE_PARTS[type_id]
+        return cls.TEMPLATE_FORMAT.format(
+            prefix=prefix,
+            type_id=type_id,
+            sections="\n\n".join(f"## {s}\n" for s in sections),
+        )
 
-        h = hashlib.sha256()
-        for f in sorted(x for x in root.rglob("*") if x.relative_to(root).parts[0] != ".git"):
-            rel = f.relative_to(root).as_posix()
-            h.update(rel.encode() + b"\0")
-            if f.is_file():
-                h.update(f.read_bytes())
-            h.update(b"\1")
-        return h.hexdigest()
+    @staticmethod
+    def _created_paths(root: Path) -> list[str]:
+        """Every path init created, minus .git/, .claude/ and .kanban/templates/*."""
+        out = []
+        for f in root.rglob("*"):
+            parts = f.relative_to(root).parts
+            if parts[0] in (".git", ".claude") or parts[:2] == (".kanban", "templates") and len(parts) > 2:
+                continue
+            out.append(f.relative_to(root).as_posix())
+        return sorted(out)
 
     # ---- the change ----------------------------------------------------
 
@@ -768,8 +848,9 @@ class TestInitExplicitPathScaffolding:
 
         config_mod._theme_cache.clear()
         self._init_custom(custom_dir, monkeypatch, theme)
+        folders = self._type_folders(theme)
         for type_id, type_path in self.H._theme_type_paths(theme).items():
-            folder = Path(type_path.rstrip("/")).name
+            folder = folders[type_id]
             got = custom_dir / "custom" / folder / "_TEMPLATE.md"
             assert got.is_file(), f"missing custom/{folder}/_TEMPLATE.md ({type_id})"
             assert got.read_bytes() == (default_dir / type_path / "_TEMPLATE.md").read_bytes(), (
@@ -809,6 +890,40 @@ class TestInitExplicitPathScaffolding:
         listed = self.H._listed_ids(tmp_path, monkeypatch)
         assert listed == [], f"fresh --path board lists {listed}"
 
+    @pytest.mark.parametrize("theme", ["software", "nautical"])
+    @pytest.mark.parametrize("dot", [".", "./"])
+    def test_dot_path_template_and_item_share_a_folder(self, tmp_path, monkeypatch, theme, dot):
+        """`init --path .` then `create` of every type: each item lands in the
+        folder holding that type's _TEMPLATE.md, and no scaffolded type folder
+        is left unused (PR #154 round-1 review)."""
+        self.H._run(tmp_path, monkeypatch, "init", "--theme", theme, "--path", dot)
+        type_ids = list(self.H._theme_type_paths(theme))
+        assert type_ids, "non-vacuity"
+        for type_id in type_ids:
+            self.H._run(tmp_path, monkeypatch, "create", type_id, "probe")
+
+        def rel(p: Path) -> str:
+            return p.relative_to(tmp_path).as_posix()
+
+        items = {
+            f.parent
+            for f in tmp_path.rglob("*-001-probe.md")
+            if rel(f).split("/")[0] not in (".git", ".claude", ".kanban")
+        }
+        templates = {
+            f.parent
+            for f in tmp_path.rglob("_TEMPLATE.md")
+            if rel(f).split("/")[0] not in (".git", ".claude", ".kanban")
+        }
+        assert len(items) == len(type_ids), sorted(rel(p) for p in items)
+        stray_items = sorted(rel(p) for p in items - templates)
+        unused_templates = sorted(rel(p) for p in templates - items)
+        assert not stray_items and not unused_templates, (
+            f"init --theme {theme} --path {dot}: items created in folders with no "
+            f"_TEMPLATE.md {stray_items}; scaffolded type folders create never "
+            f"writes to {unused_templates}"
+        )
+
     def test_flat_custom_theme_creates_no_work_dir(self, tmp_path, monkeypatch):
         """Round-2 follow-up A: init creates no unscanned root (no work/)."""
         self.H._write_flat_theme(tmp_path)
@@ -822,14 +937,29 @@ class TestInitExplicitPathScaffolding:
 
     @pytest.mark.parametrize("theme", THEMES)
     def test_default_init_tree_unchanged(self, tmp_path, monkeypatch, theme):
-        """Default init (no --path) writes byte-for-byte the tree it wrote before #134."""
+        """Default init (no --path) scaffolds the same tree, template bytes and
+        paths: block it did before #134 (literals recorded from origin/main)."""
         self.H._run(tmp_path, monkeypatch, "init", "--theme", theme)
-        theme_root = self.H._norm(self.H._theme_root(theme))
-        top = sorted(p.name for p in tmp_path.iterdir() if p.name != ".git")
-        assert top == sorted([".claude", ".kanban", theme_root]), top
-        assert self._tree_digest(tmp_path) == self.DEFAULT_TREE_DIGESTS[theme], (
-            f"default init --theme {theme} output changed"
+        type_dirs = self.DEFAULT_TYPE_DIRS[theme]
+        root = {d.split("/")[0] for d in type_dirs.values()}.pop()
+
+        expected = {".kanban", ".kanban/config.yaml", ".kanban/templates",
+                    ".kanban/workflows", root}
+        for d in type_dirs.values():
+            expected |= {d, f"{d}/_TEMPLATE.md"}
+        assert self._created_paths(tmp_path) == sorted(expected), (
+            f"default init --theme {theme} scaffolded a different tree"
         )
+
+        for type_id, d in type_dirs.items():
+            got = (tmp_path / d / "_TEMPLATE.md").read_text()
+            assert got == self._expected_template(theme, type_id), (
+                f"default init --theme {theme}: {d}/_TEMPLATE.md bytes changed"
+            )
+
+        config = (tmp_path / ".kanban" / "config.yaml").read_text()
+        block = config[config.index("  paths:\n"):]
+        assert block == self.DEFAULT_PATHS_BLOCK.format(root=root), block
 
     @pytest.mark.parametrize("theme", THEMES)
     def test_default_init_scaffolds_under_theme_root(self, tmp_path, monkeypatch, theme):
