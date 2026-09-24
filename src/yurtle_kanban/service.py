@@ -225,7 +225,12 @@ class KanbanService:
         ``BoardConfig.ignore`` via ``_should_ignore_for_board`` (#124), so
         ``paths.ignore`` does not govern it (#129).
         """
-        path_str = str(path.relative_to(self.repo_root))
+        # Repo-relative inside the repo; a board root outside it (#156) matches
+        # its absolute path (fnmatch's `*` spans `/`, so `**/archive/**` still works)
+        try:
+            path_str = str(path.relative_to(self.repo_root))
+        except ValueError:
+            path_str = str(path)
         for pattern in self.config.paths.ignore:
             if fnmatch.fnmatch(path_str, pattern):
                 return True

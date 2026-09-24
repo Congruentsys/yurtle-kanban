@@ -149,6 +149,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escape characters YAML won't take literally (DEL, C1 controls, NEL, U+FFFE),
   so such a title no longer makes the item vanish. Printable non-ASCII text
   is written as before.
+- **A board root outside the repo (`init --path /abs/dir/`, `root: /abs/…`)
+  crashed `create` and `list`** (#156). Single-board ignore matching now uses the
+  absolute path for files outside the repo, so such boards work and their
+  `archive/` and `_TEMPLATE` files stay hidden.
 
 ## [2.2.0] - 2026-08-30
 
