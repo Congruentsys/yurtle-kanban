@@ -2003,3 +2003,133 @@ class TestFrontmatterDashInValue:
         assert "```" not in self._frontmatter_block(content)
         after = content.split("\n---\n", 1)[1]
         assert after.index("```turtle") < after.index("# IDEA-R-105")
+
+
+# ---------------------------------------------------------------------------
+# Issue #104 — frontmatter values must be written YAML-safe (quoted as needed)
+# ---------------------------------------------------------------------------
+
+# Values YAML would misread if written bare: a mapping (`team: core`), a
+# boolean (`yes`), null (`null`), a comment (`#…`, `… #…`), an anchor (`&`),
+# an alias (`*`), a flow sequence (`[`) and a flow mapping (`{`).
+_YAML_SPECIAL_ASSIGNEES = [
+    pytest.param("team: core", id="colon-space"),
+    pytest.param("yes", id="yes-bool"),
+    pytest.param("null", id="null"),
+    pytest.param("#core", id="leading-hash"),
+    pytest.param("core #1", id="space-hash"),
+    pytest.param("&anchor", id="leading-ampersand"),
+    pytest.param("*alias", id="leading-star"),
+    pytest.param("[core]", id="leading-bracket"),
+    pytest.param("{core}", id="leading-brace"),
+]
+
+
+class TestFrontmatterValuesRoundTrip:
+    """A frontmatter value always reads back as the same string (#104)."""
+
+    @staticmethod
+    def _item_file(repo: Path, item_id: str) -> Path:
+        files = list((repo / "kanban-work" / "features").glob(f"{item_id}*.md"))
+        assert len(files) == 1, files
+        return files[0]
+
+    @staticmethod
+    def _frontmatter_text(path: Path) -> str:
+        lines = path.read_text().split("\n")
+        assert lines[0] == "---"
+        return "\n".join(lines[1:lines.index("---", 1)])
+
+    @classmethod
+    def _frontmatter(cls, path: Path) -> dict:
+        return yaml.safe_load(cls._frontmatter_text(path))
+
+    @staticmethod
+    def _run(runner: CliRunner, args: list[str]):
+        """Invoke the CLI; a crash fails as an assertion, not a raw exception."""
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (
+            f"{args} exited {result.exit_code}: {result.exception!r}\n{result.output}"
+        )
+        return result
+
+    def _assert_reads_back(self, runner: CliRunner, repo: Path, value: str) -> None:
+        """`list`, `show --json` and the file all see assignee == value (a str)."""
+        listed = self._run(runner, ["list"])
+        assert "No work items found" not in listed.output
+        assert "FEAT-001" in listed.output
+
+        shown = self._run(runner, ["show", "FEAT-001", "--json"])
+        data = json.loads(shown.output)
+        assert data["id"] == "FEAT-001"
+        assert data["assignee"] == value
+
+        path = self._item_file(repo, "FEAT-001")
+        try:
+            fm = self._frontmatter(path)
+        except yaml.YAMLError as exc:
+            pytest.fail(f"frontmatter is not valid YAML: {exc}\n{path.read_text()}")
+        assert fm["assignee"] == value
+        assert isinstance(fm["assignee"], str)
+
+    # -- move --assign on an existing item ---------------------------------
+
+    @pytest.mark.parametrize("value", _YAML_SPECIAL_ASSIGNEES)
+    def test_move_assign_special_value_round_trips(
+        self, temp_repo, software_config, monkeypatch, value,
+    ):
+        """`move FEAT-001 ready -a <value>` reads back exactly <value>."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", value, "--no-commit"])
+
+        self._assert_reads_back(runner, temp_repo, value)
+
+    # -- create --assignee (WorkItem.to_markdown) --------------------------
+
+    @pytest.mark.parametrize("value", _YAML_SPECIAL_ASSIGNEES)
+    def test_create_assignee_special_value_round_trips(
+        self, temp_repo, software_config, monkeypatch, value,
+    ):
+        """`create feature probe --assignee <value>` reads back exactly <value>."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe", "--assignee", value])
+
+        self._assert_reads_back(runner, temp_repo, value)
+
+    # -- negative controls (must stay green) --------------------------------
+
+    @pytest.mark.parametrize("value", ["Claude-M5", "agent-x"])
+    def test_control_move_plain_assignee_unquoted(
+        self, temp_repo, software_config, monkeypatch, value,
+    ):
+        """An ordinary assignee is written plain, and status keeps its plain form."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", value, "--no-commit"])
+
+        front = self._frontmatter_text(self._item_file(temp_repo, "FEAT-001"))
+        assert f"\nassignee: {value}\n" in f"\n{front}\n"
+        assert "\nstatus: ready\n" in f"\n{front}\n"
+        self._assert_reads_back(runner, temp_repo, value)
+
+    @pytest.mark.parametrize("value", ["Claude-M5", "agent-x"])
+    def test_control_create_plain_assignee_unquoted(
+        self, temp_repo, software_config, monkeypatch, value,
+    ):
+        """create writes an ordinary assignee, status and priority plain."""
+        monkeypatch.chdir(temp_repo)
+        runner = CliRunner()
+        self._run(
+            runner,
+            ["create", "feature", "probe", "--assignee", value, "--priority", "high"],
+        )
+
+        front = self._frontmatter_text(self._item_file(temp_repo, "FEAT-001"))
+        assert f"\nassignee: {value}\n" in f"\n{front}\n"
+        assert "\nstatus: backlog\n" in f"\n{front}\n"
+        assert "\npriority: high\n" in f"\n{front}\n"
+        self._assert_reads_back(runner, temp_repo, value)

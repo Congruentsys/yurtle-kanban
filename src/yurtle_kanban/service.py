@@ -27,7 +27,15 @@ from .hooks import HookContext, HookEngine, HookEvent
 if TYPE_CHECKING:
     from .config import BoardConfig
     from .gates import GateResult
-from .models import Board, Column, Comment, WorkItem, WorkItemStatus, WorkItemType
+from .models import (
+    Board,
+    Column,
+    Comment,
+    WorkItem,
+    WorkItemStatus,
+    WorkItemType,
+    yaml_scalar,
+)
 from .turtle_builder import PREFIXES
 from .workflow import WorkflowConfig, WorkflowParser
 
@@ -2367,7 +2375,9 @@ class KanbanService:
         # move/assignment it never recorded (issue #97).
         content = self._add_or_update_frontmatter_field(content, "status", native_status)
         if assignee:
-            content = self._add_or_update_frontmatter_field(content, "assignee", assignee)
+            content = self._add_or_update_frontmatter_field(
+                content, "assignee", yaml_scalar(assignee),
+            )
 
         # Create TTL status change entry (use canonical name for RDF consistency)
         timestamp = datetime.now().isoformat(timespec="seconds")

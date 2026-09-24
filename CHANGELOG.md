@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the board** (#103). The reader, the description extractor and the Turtle
   backfill found frontmatter by the substring `---`. They now share the
   line-anchored match the writers use (#101).
+- **Assignee values that YAML reads as something else were corrupted** (#104). `move -a` and
+  `create --assignee` wrote values unquoted, so `team: core` made the item
+  vanish, `yes` became `true`, `null`/`#core` dropped the assignee and `[core]`
+  became a list. They are now quoted when needed and read back as the same string.
+  Plain names (`agent-x`) are written as before.
 
 ## [2.2.0] - 2026-08-30
 
