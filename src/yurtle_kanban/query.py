@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from rdflib import RDF, Graph, Literal, Namespace
 from rdflib.namespace import XSD
 
-from .models import WorkItem
+from .models import WorkItem, turtle_string
 
 if TYPE_CHECKING:
     from .service import KanbanService
@@ -548,12 +548,16 @@ class QueryEngine:
         # Assignee
         if parsed.assignee:
             wheres.append("?item kb:assignee ?assignee .")
-            filters.append(f'FILTER(CONTAINS(LCASE(?assignee), "{parsed.assignee.lower()}"))')
+            # escaped: a quote or backslash in the value can't break or inject into
+            # the query (#162); SPARQL string escapes are Turtle's
+            needle = turtle_string(parsed.assignee.lower())
+            filters.append(f'FILTER(CONTAINS(LCASE(?assignee), "{needle}"))')
 
         # Tag
         if parsed.tag:
             wheres.append("?item kb:tag ?tag .")
-            filters.append(f'FILTER(CONTAINS(LCASE(?tag), "{parsed.tag.lower()}"))')
+            needle = turtle_string(parsed.tag.lower())
+            filters.append(f'FILTER(CONTAINS(LCASE(?tag), "{needle}"))')
 
         sparql_query = (
             "PREFIX kb: <https://yurtle.dev/kanban/>\n"

@@ -37,6 +37,7 @@ from .models import (
     WorkItemType,
     turtle_string,
     turtle_unescape,
+    yaml_quote,
     yaml_scalar,
 )
 from .turtle_builder import PREFIXES
@@ -3062,9 +3063,9 @@ class KanbanService:
         content, eol = self._read_item_text(item.file_path)
         content = self._add_or_update_frontmatter_field(content, "priority_rank", str(rank))
         if value_summary is not None:
-            escaped = value_summary.replace('"', '\\"')
+            # yaml_quote escapes \\, newlines and every YAML-unsafe character (#162)
             content = self._add_or_update_frontmatter_field(
-                content, "value_summary", f'"{escaped}"'
+                content, "value_summary", yaml_quote(value_summary)
             )
         self._write_item_text(item.file_path, content, eol)
 
