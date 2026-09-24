@@ -37,6 +37,7 @@ from .models import (
     WorkItemType,
     turtle_string,
     turtle_unescape,
+    unknown_priority_message,
     yaml_quote,
     yaml_scalar,
 )
@@ -2700,12 +2701,12 @@ class KanbanService:
             return None
         if not isinstance(priority, str):  # e.g. `priority: 1` in a hooks config (#153)
             raise ValueError(
-                f"Unknown priority: {priority!r}; valid: {', '.join(PRIORITIES)}"
+                unknown_priority_message(repr(priority))
             )
         normalized = priority.strip().lower()
         if normalized not in PRIORITIES:
             raise ValueError(
-                f"Unknown priority: {priority!r}; valid: {', '.join(PRIORITIES)}"
+                unknown_priority_message(repr(priority))
             )
         return normalized
 

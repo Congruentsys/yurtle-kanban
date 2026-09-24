@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 PRIORITIES = ("critical", "high", "medium", "low")
 
 
+def unknown_priority_message(shown: str) -> str:
+    """The one wording for a refused priority, everywhere (CLI, MCP, service; #171)."""
+    return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
+
+
 # Turtle short-string escaping (ECHAR): the one escaper for every Turtle literal
 # built from user input — titles, targets, units, ids, agents (#120, #141). A
 # value with `"`, `\\`, a newline or a CR must stay one literal and never break

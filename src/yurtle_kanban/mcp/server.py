@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import KanbanConfig
-from ..models import PRIORITIES, WorkItemStatus, WorkItemType
+from ..models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
 from ..service import KanbanService
 
 logger = logging.getLogger("yurtle-kanban-mcp")
@@ -375,8 +375,12 @@ class KanbanMCPServer:
     def _check_priority(priority: str | None) -> dict[str, Any] | None:
         """Reject a priority outside PRIORITIES, any case like the CLI (#106, #125);
         the schema enum is not enforced. The service lowercases what it writes."""
-        if priority is not None and priority.strip().lower() not in PRIORITIES:
-            return {"error": f"Unknown priority: {priority}. Valid: {', '.join(PRIORITIES)}"}
+        if priority is None:
+            return None
+        if not isinstance(priority, str):  # a JSON number / bool / list (#171)
+            return {"error": unknown_priority_message(repr(priority))}
+        if priority.strip().lower() not in PRIORITIES:
+            return {"error": unknown_priority_message(priority)}
         return None
 
     def _create_item(self, args: dict[str, Any]) -> dict[str, Any]:
