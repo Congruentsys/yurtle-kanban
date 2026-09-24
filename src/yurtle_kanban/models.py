@@ -42,8 +42,9 @@ def turtle_unescape(value: str) -> str:
 
 # Characters YAML won't take literally inside a double-quoted scalar: outside
 # its printable set (C1 controls, DEL, U+FFFE/FFFF, lone surrogates), plus NEL
-# (U+0085), which YAML folds to a space. json.dumps leaves them raw (#148).
-_YAML_UNSAFE = re.compile("[\x7f-\x9f\ufffe\uffff\ud800-\udfff]")
+# (U+0085) and LINE/PARAGRAPH SEPARATOR (U+2028/2029), which YAML treats as
+# line breaks and folds with adjacent spaces. json.dumps leaves them raw (#148).
+_YAML_UNSAFE = re.compile("[\x7f-\x9f\u2028\u2029\ufffe\uffff\ud800-\udfff]")
 
 
 def yaml_quote(value: str) -> str:
