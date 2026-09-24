@@ -159,6 +159,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that crash after their frontmatter parses (e.g. `status: [backlog]`) are
   reported too. `show <ID>` names the file and the reason when the ID's file
   exists but doesn't parse.
+- **Edits keep every line's own line ending** (#151, extending #128). A file
+  with mixed endings is no longer rewritten wholesale to one ending: untouched
+  lines keep theirs, and changed lines use the file's majority ending. Epic
+  linking and `update` now keep CRLF files CRLF, and `update` keeps the file's
+  final newline.
 
 ## [2.2.0] - 2026-08-30
 
