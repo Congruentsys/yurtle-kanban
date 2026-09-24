@@ -77,6 +77,12 @@ def _normalize_paper_num(raw: str | int) -> str:
     return _PAPER_PREFIX_RE.sub("", str(raw))
 
 
+# First meaningful line of a Turtle (not YAML) frontmatter block: `@prefix`,
+# `@base`, or SPARQL-style `PREFIX` / `BASE`, after optional blank/`#` lines
+_TURTLE_FRONTMATTER = re.compile(
+    r"\A(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*(?:@prefix\b|@base\b|(?i:prefix|base)[ \t]+\S)"
+)
+
 # Turtle short-string escaping (ECHAR) for literals the status history writes,
 # e.g. `kb:by "<agent>"`: an agent like `x"y` or one with a newline must stay one
 # literal, never break the block or inject triples (#120)
@@ -101,6 +107,9 @@ class KanbanService:
         self.config = config
         self.repo_root = repo_root
         self._items: dict[str, WorkItem] = {}
+        # Files that look like items (start with `---`) but don't parse, with a
+        # reason; the CLI reports them instead of dropping them silently (#139)
+        self.parse_warnings: list[tuple[Path, str]] = []
         self._board: Board | None = None
         self._workflow_parser = WorkflowParser(repo_root / ".kanban")
         self._workflows: dict[str, WorkflowConfig] = {}
@@ -169,6 +178,7 @@ class KanbanService:
     def scan(self) -> list[WorkItem]:
         """Scan configured paths for work items."""
         self._items.clear()
+        self.parse_warnings = []
 
         if self.config.is_multi_board:
             # Each board applies its OWN ignore patterns to its own path, exactly
@@ -238,7 +248,8 @@ class KanbanService:
 
             # Parse frontmatter
             frontmatter = self._parse_frontmatter(content)
-            if not frontmatter:
+            if not isinstance(frontmatter, dict) or not frontmatter:
+                self._note_unparseable(file_path, content)
                 return None
 
             # Get required fields
@@ -377,6 +388,37 @@ class KanbanService:
         if not match:
             return None
         return match.group(1), content[match.end() :]
+
+    def _note_unparseable(self, file_path: Path, content: str) -> None:
+        """Record why a file that looks like an item (starts with `---`) didn't
+        parse (#139). Plain notes and `_TEMPLATE*` files stay silent."""
+        if not content.startswith("---") or file_path.name.startswith("_TEMPLATE"):
+            return
+        split = self._split_frontmatter(content)
+        if split is not None and _TURTLE_FRONTMATTER.match(split[0]):
+            # Yurtle frontmatter may be Turtle, not YAML (`@prefix …`): a document,
+            # not a broken item
+            return
+        if split is None:
+            first_newline = content.find("\n")
+            later = content[first_newline + 1 :] if first_newline != -1 else ""
+            reason = (
+                "opening line is not a plain `---` (or `--- # comment`)"
+                if re.search(r"^---", later, re.MULTILINE)
+                else "no closing ---"
+            )
+        else:
+            try:
+                data = yaml.safe_load(split[0])
+            except yaml.YAMLError as e:
+                reason = "YAML error: " + " ".join(str(e).split())[:120]
+            else:
+                reason = (
+                    "frontmatter is empty"
+                    if not data
+                    else "frontmatter is not a key: value mapping"
+                )
+        self.parse_warnings.append((file_path, reason))
 
     def _parse_frontmatter(self, content: str) -> dict[str, Any] | None:
         """Parse YAML frontmatter from markdown content."""

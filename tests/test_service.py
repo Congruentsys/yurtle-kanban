@@ -4057,3 +4057,287 @@ class TestServicePriorityValidated:
         shown = runner.invoke(main, ["show", "FEAT-001", "--json"])
         assert shown.exit_code == 0, shown.output
         assert json.loads(shown.output)["priority"] == legacy
+
+
+class TestWarnOnUnparseableItems:
+    """A scanned `.md` that starts with `---` but doesn't parse is reported on
+    stderr by `list`/`board`, instead of vanishing silently; valid items, plain
+    notes, templates and ignored paths are unaffected (#139)."""
+
+    FEATURES = Path("kanban-work") / "features"
+
+    # name -> (file content, reason substring the warning must carry, or None
+    # when the issue doesn't name the reason text for that case)
+    BROKEN = {
+        "no-closing": (
+            "---\nid: FEAT-002\ntitle: \"broken\"\ntype: feature\nstatus: backlog\n"
+            "\n# broken\n\nNo closing delimiter anywhere.\n",
+            "no closing ---",
+        ),
+        "invalid-yaml": (
+            "---\nid: FEAT-002\ntitle: \"unterminated\ntype: feature\nstatus: backlog\n"
+            "---\n\n# broken\n",
+            "YAML error",
+        ),
+        "rejected-opener": (
+            "---\t# x\nid: FEAT-002\ntitle: \"broken\"\ntype: feature\nstatus: backlog\n"
+            "---\n\n# broken\n",
+            None,
+        ),
+        "non-mapping": (
+            "---\n- id: FEAT-002\n- title: broken\n---\n\n# broken\n",
+            None,
+        ),
+    }
+
+    @staticmethod
+    def _write_valid(repo: Path) -> Path:
+        path = repo / "kanban-work" / "features" / "FEAT-001-good.md"
+        path.write_text(
+            "---\n"
+            "id: FEAT-001\n"
+            'title: "good item"\n'
+            "type: feature\n"
+            "status: backlog\n"
+            "---\n\n# good item\n"
+        )
+        return path
+
+    @staticmethod
+    def _invoke(args: list[str]):
+        result = CliRunner().invoke(main, args)
+        assert result.exit_code == 0, (
+            f"{args} exited {result.exit_code}: {result.exception!r}\n"
+            f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
+        )
+        return result
+
+    @staticmethod
+    def _lines_naming(text: str, rel: Path) -> list[str]:
+        return [ln for ln in text.splitlines() if str(rel) in ln]
+
+    def _assert_one_line_warning(self, result, rel: Path, reason: str | None) -> None:
+        lines = self._lines_naming(result.stderr, rel)
+        assert len(lines) == 1, (
+            f"expected exactly one stderr line naming {rel}; stderr={result.stderr!r}"
+        )
+        line = lines[0]
+        if reason is not None:
+            assert reason in line, f"warning lacks reason {reason!r}: {line!r}"
+        else:
+            # Some reason beyond the path itself.
+            rest = line.replace(str(rel), "")
+            assert re.search(r"[A-Za-z]{3,}", rest), f"warning has no reason: {line!r}"
+        assert not self._lines_naming(result.stdout, rel), (
+            f"warning leaked onto stdout: {result.stdout!r}"
+        )
+
+    # ---- Expected: broken files are warned about -------------------------
+
+    @pytest.mark.parametrize("case", list(BROKEN))
+    def test_list_warns_on_stderr_and_shows_valid_items(
+        self, temp_repo, software_config, monkeypatch, case,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        content, reason = self.BROKEN[case]
+        rel = self.FEATURES / "FEAT-002-broken.md"
+        (temp_repo / rel).write_text(content)
+
+        result = self._invoke(["list"])
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        self._assert_one_line_warning(result, rel, reason)
+
+    @pytest.mark.parametrize("case", list(BROKEN))
+    def test_board_warns_on_stderr_and_shows_valid_items(
+        self, temp_repo, software_config, monkeypatch, case,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        content, reason = self.BROKEN[case]
+        rel = self.FEATURES / "FEAT-002-broken.md"
+        (temp_repo / rel).write_text(content)
+
+        result = self._invoke(["board"])
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        self._assert_one_line_warning(result, rel, reason)
+
+    @pytest.mark.parametrize("case", list(BROKEN))
+    def test_list_json_stdout_is_clean_and_warning_on_stderr(
+        self, temp_repo, software_config, monkeypatch, case,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        content, reason = self.BROKEN[case]
+        rel = self.FEATURES / "FEAT-002-broken.md"
+        (temp_repo / rel).write_text(content)
+
+        result = self._invoke(["list", "--json"])
+
+        data = json.loads(result.stdout)
+        assert [d["id"] for d in data] == ["FEAT-001"], data
+        self._assert_one_line_warning(result, rel, reason)
+
+    def test_each_broken_file_gets_its_own_warning(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        rels = []
+        for n, (content, _reason) in enumerate(self.BROKEN.values(), start=2):
+            rel = self.FEATURES / f"FEAT-00{n}-broken.md"
+            (temp_repo / rel).write_text(content)
+            rels.append(rel)
+
+        result = self._invoke(["list", "--json"])
+
+        assert [d["id"] for d in json.loads(result.stdout)] == ["FEAT-001"]
+        for rel in rels:
+            assert len(self._lines_naming(result.stderr, rel)) == 1, (
+                f"{rel}: stderr={result.stderr!r}"
+            )
+
+    # ---- Must stay true: silent cases ------------------------------------
+
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_valid_items_only_prints_nothing_to_stderr(
+        self, temp_repo, software_config, monkeypatch, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout
+        assert result.stderr == "", result.stderr
+
+    @pytest.mark.parametrize(
+        "name,content",
+        [
+            ("notes.md", "# Notes\n\nSome plain notes.\n\n---\n\nmore\n"),
+            (
+                "KANBAN-BOARD.md",
+                "# Kanban Board\n\n| ID | Title |\n|----|-------|\n| FEAT-001 | good item |\n",
+            ),
+            ("empty.md", ""),
+        ],
+    )
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_plain_note_without_frontmatter_is_silent(
+        self, temp_repo, software_config, monkeypatch, name, content, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / name).write_text(content)
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout
+        assert result.stderr == "", result.stderr
+
+    @pytest.mark.parametrize("case", list(BROKEN))
+    @pytest.mark.parametrize(
+        "rel",
+        [
+            FEATURES / "_TEMPLATE.md",
+            FEATURES / "archive" / "FEAT-009-old.md",
+            FEATURES / "templates" / "feature.md",
+        ],
+    )
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_templates_and_ignored_paths_are_silent_even_if_malformed(
+        self, temp_repo, software_config, monkeypatch, case, rel, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        path = temp_repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self.BROKEN[case][0])
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout
+        assert result.stderr == "", result.stderr
+
+    def test_valid_items_still_parse_alongside_broken_ones(
+        self, temp_repo, software_config,
+    ):
+        """Service level: a broken file doesn't disturb the valid item."""
+        self._write_valid(temp_repo)
+        for n, (content, _reason) in enumerate(self.BROKEN.values(), start=2):
+            (temp_repo / self.FEATURES / f"FEAT-00{n}-broken.md").write_text(content)
+        svc = KanbanService(software_config, temp_repo)
+
+        items = svc.scan()
+
+        assert [i.id for i in items] == ["FEAT-001"]
+        assert items[0].title == "good item"
+
+    # ---- Must stay true: Yurtle docs with Turtle (not YAML) frontmatter ----
+
+    TURTLE_FRONTMATTER = {
+        "prefix": (
+            "---\n"
+            "@prefix paper: <https://nusy.dev/ontology/paper#> .\n"
+            "@prefix dc: <http://purl.org/dc/terms/> .\n"
+            "<> a paper:Paper ;\n"
+            '    dc:title "A research note" .\n'
+            "---\n\n# A research note\n\nBody text.\n"
+        ),
+        "base": (
+            "---\n"
+            "@base <https://nusy.dev/papers/> .\n"
+            "@prefix paper: <https://nusy.dev/ontology/paper#> .\n"
+            "<> a paper:Paper .\n"
+            "---\n\n# Based note\n"
+        ),
+        "sparql-prefix": (
+            "---\n"
+            "PREFIX ex: <https://example.org/ns#>\n"
+            '<> a ex:Doc ; ex:title "Sparql-style" .\n'
+            "---\n\n# Sparql-style note\n"
+        ),
+    }
+
+    @pytest.mark.parametrize("kind", list(TURTLE_FRONTMATTER))
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_turtle_frontmatter_doc_is_silent(
+        self, temp_repo, software_config, monkeypatch, kind, args,
+    ):
+        """A Yurtle document whose frontmatter is Turtle is legitimate, not broken."""
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        (temp_repo / self.FEATURES / "research-note.md").write_text(
+            self.TURTLE_FRONTMATTER[kind]
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        if args == ["list", "--json"]:
+            assert [d["id"] for d in json.loads(result.stdout)] == ["FEAT-001"]
+        assert result.stderr == "", result.stderr
+
+    @pytest.mark.parametrize("args", [["list"], ["list", "--json"], ["board"]])
+    def test_mixed_turtle_doc_and_broken_item_warns_only_for_broken(
+        self, temp_repo, software_config, monkeypatch, args,
+    ):
+        monkeypatch.chdir(temp_repo)
+        self._write_valid(temp_repo)
+        turtle_rel = self.FEATURES / "research-note.md"
+        (temp_repo / turtle_rel).write_text(self.TURTLE_FRONTMATTER["prefix"])
+        broken_rel = self.FEATURES / "FEAT-003-broken.md"
+        (temp_repo / broken_rel).write_text(
+            "---\nid: FEAT-003\ntitle: [unclosed\ntype: feature\nstatus: backlog\n"
+            "---\n\n# broken\n"
+        )
+
+        result = self._invoke(args)
+
+        assert "FEAT-001" in result.stdout, result.stdout
+        warnings = [ln for ln in result.stderr.splitlines() if ln.strip()]
+        assert len(warnings) == 1, f"expected exactly one warning: {result.stderr!r}"
+        assert str(broken_rel) in warnings[0], warnings
+        assert not self._lines_naming(result.stderr, turtle_rel), result.stderr

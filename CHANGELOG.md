@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing then scanned** (#134). With an explicit `--path`, the type folders and
   their `_TEMPLATE.md` files now go under that root (`custom/features/`, …),
   which is where `create` writes. A default `init` is unchanged.
+- **A scanned `.md` that starts with `---` but doesn't parse is reported, not
+  dropped silently** (#139). `list` and `board` print one stderr line per
+  file, naming it and giving a reason (no closing `---`, YAML error, not a
+  key: value mapping, invalid opening line), so `--json` output stays clean.
+  Plain notes, `_TEMPLATE*` files, ignored paths and Yurtle documents with
+  Turtle frontmatter (`@prefix …`) stay silent.
 
 ## [2.2.0] - 2026-08-30
 
