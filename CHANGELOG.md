@@ -5,6 +5,9 @@ All notable changes to yurtle-kanban are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+New entries go in `changelog.d/` (one file per PR; see `changelog.d/README.md`)
+and are assembled into a release section by `scripts/assemble_changelog.py`.
+
 ## [Unreleased]
 
 ### Fixed

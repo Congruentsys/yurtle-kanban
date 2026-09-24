@@ -21,7 +21,7 @@ pytest's `pythonpath = ["src"]` means a worktree's tests import that worktree's 
 ```text
 0. BRANCH  a worktree + branch from origin/main
 1. TESTS   the test partner (a fresh Agent sub-agent) writes pytest tests from the issue → commit T, proven RED
-2. CODE    the driver writes code to GREEN without editing T's tests, adds a CHANGELOG entry, runs the check
+2. CODE    the driver writes code to GREEN without editing T's tests, adds a changelog.d/ fragment, runs the check
 3. REVIEW  push, open the PR, and a DISTINCT `claude -p` session posts a verdict comment (max 2 rounds)
 4. MERGE   verdict approve at head + CI green → `safe_merge.sh <P>`; the issue closes through `Fixes #N`
 ```
@@ -37,11 +37,11 @@ Every later step uses the literal path `/tmp/yk-<N>`.
 **1. The partner's brief** (Agent tool, fresh context). Give it these lines verbatim:
 - *"Read issue #<N> (`gh issue view <N>`). Write tests for what the issue SAYS — its repro and its Expected
   section — not for how you would fix it. Work only in /tmp/yk-<N>."*
-- *"pytest, in the existing `tests/test_<module>.py` that owns the behaviour, as a NEW class named after the
-  issue (e.g. `TestMoveAssignMissingKey`, docstring ending `(#<N>)`). Reproduce the issue's own commands
-  through `CliRunner` where it gives CLI steps. Add a negative control, where one applies, that must stay
-  green. Use the file's existing fixtures."*
-- *"Commit the tests ALONE as `#<N>: tests (red)`. Run them and confirm they are RED for the RIGHT reason (an
+- *"pytest, in a NEW file `tests/issues/test_<N>_<slug>.py` (module docstring naming the issue); import or
+  copy the fixtures you need from the owning module's tests. Never append to a shared test module: a new
+  file can't conflict with a parallel PR. Reproduce the issue's own commands through `CliRunner` where it
+  gives CLI steps. Add a negative control, where one applies, that must stay green."*
+- *"Commit the tests ALONE as `test(#<N>): red`. Run them and confirm they are RED for the RIGHT reason (an
   assertion, never an import or fixture error), and that the rest of the suite is still green. Return the
   sha, the paths and the failing test names."*
 
@@ -50,13 +50,15 @@ says so and commits nothing. Comment the finding on the issue, then close it or 
 
 **2. Code to green.** Never edit T's test files; if a test is wrong, send it back to the partner. Keep the
 change the smallest one that fixes the issue. Match the surrounding code: type hints, comment density,
-existing helpers (`_add_or_update_frontmatter_field`, `PRIORITIES`, …). Add an entry under
-`## [Unreleased]` → `### Fixed` (or `### Added`) in `CHANGELOG.md` that names `(#<N>)`. Run the check. The
+existing helpers (`_add_or_update_frontmatter_field`, `PRIORITIES`, …). Add a changelog fragment
+`changelog.d/<N>.md` (first line `<!-- section: Fixed -->`, or Added…; see `changelog.d/README.md`) that
+names `(#<N>)`. Never edit `CHANGELOG.md` itself; the release assembles the fragments. Run the check. The
 80 ruff findings in `tests/` are known, and CI lints only `src/`.
 
 **3. The review, by a DISTINCT session.**
 ```bash
-git -C /tmp/yk-<N> fetch -q origin main && git -C /tmp/yk-<N> rebase origin/main   # see "Rebased" below
+git -C /tmp/yk-<N> fetch -q origin main
+git -C /tmp/yk-<N> -c core.commentChar=';' rebase origin/main   # see "Rebased" below
 git -C /tmp/yk-<N> push -q --force-with-lease -u origin HEAD   # the rebase rewrote the branch
 gh pr create --head <branch> --title "<type>: <what> (#<N>)" --body "Fixes #<N>. …"
 claude --dangerously-skip-permissions -p "$(cat <brief file>)" < /dev/null   # run it in the background
@@ -103,11 +105,14 @@ because `gh pr checks --json` exits 0 whatever the states are (#167). `safe_merg
 state instead. Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
 verdict. Done means the merge is on `origin/main` and the issue is closed.
 
-**Rebased after approval?** Every PR adds its entry at the same place under `## [Unreleased]`, so parallel
-PRs conflict in `CHANGELOG.md` as soon as a sibling merges. Before each review, `git rebase origin/main`
-(keep both sides of a CHANGELOG conflict) and push with `--force-with-lease`. If a rebase is needed AFTER an
+**Rebased after approval?** Each PR adds only new files for its tests (`tests/issues/`) and its changelog
+entry (`changelog.d/`), so a rebase onto a moved `origin/main` is normally clean. Rebase before each
+review with `git -c core.commentChar=';' rebase origin/main`: with the default `#` comment character a
+conflicted pick re-opens the message and drops any line starting with `#`, which is why test commits are
+named `test(#<N>): …`. A real conflict in `src/` is resolved by hand and re-tested. Push with
+`--force-with-lease`. If a rebase is needed AFTER an
 `approve`, the verdict doesn't carry to the new head by itself. Run one short distinct-session check that
-`git range-diff <old-base>..<old> origin/main..<new>` differs only in `CHANGELOG.md` (`<old-base>` is
+`git range-diff <old-base>..<old> origin/main..<new>` shows no change to the PR's own patch (`<old-base>` is
 `git merge-base <old> origin/main`, taken BEFORE the fetch that moved `origin/main`), and that the PR's `src`/`tests`
 patch is unchanged. That session posts a new `reviewed-at-sha: <new>` / `verdict: approve` comment.
 

@@ -22,6 +22,9 @@ Thank you for your interest in contributing to this project!
    - Clear description of what changed and why
    - Reference to any related issues
    - Test results or evidence the change works
+8. **Changelog:** add a fragment `changelog.d/<issue>.md` (see
+   [`changelog.d/README.md`](changelog.d/README.md)) rather than editing `CHANGELOG.md`,
+   so parallel PRs don't conflict
 
 ### Code Review Process
 
@@ -51,6 +54,20 @@ cargo fmt --check
 npm test
 npm run lint
 ```
+
+### Releasing (maintainers)
+
+Before following the release steps in `skills/release/SKILL.md`, assemble the
+changelog fragments into the new version's section:
+
+```bash
+python scripts/assemble_changelog.py X.Y.Z   # --date YYYY-MM-DD to override today
+git add CHANGELOG.md changelog.d/
+```
+
+It moves every `changelog.d/<N>.md` (and anything still under `## [Unreleased]`) into
+`## [X.Y.Z] - <date>`, grouped by section and ordered by issue number, and deletes the
+fragments. With nothing to release it changes nothing.
 
 ### License
 
