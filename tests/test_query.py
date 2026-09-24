@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
-from yurtle_kanban.query import NLDecomposer, QueryEngine, UnifiedGraph
+from yurtle_kanban.query import NLDecomposer, ParsedQuery, QueryEngine, UnifiedGraph
 
 try:
     import numpy  # noqa: F401
@@ -608,3 +608,82 @@ class TestQueryEngineHybrid:
         results = engine.query("not-done expeditions above 700 that improve brain")
         assert all(r.combined_score > 0 for r in results)
         assert any(r.semantic_score > 0 for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Issue #162 — assignee / tag values are escaped in the generated SPARQL
+# ---------------------------------------------------------------------------
+
+
+# Values that break or inject into a raw SPARQL "..." literal. Lowercase so the
+# existing case-insensitive match is not what is under test.
+_SPARQL_SPECIAL_VALUES = [
+    'say "hi"',
+    "back\\slash",
+    "trailing\\",
+    "line1\nline2",
+    'x" || true || "',
+    'zz") || contains("", "',
+]
+
+
+class TestStructuredQueryEscaping:
+    """Assignee / tag values reach SPARQL as escaped literals, never as syntax (#162)."""
+
+    @staticmethod
+    def _engine(field: str, value: str) -> QueryEngine:
+        """One item whose assignee/tag IS ``value``, one plain item, one other."""
+        def item(item_id: str, v: str | None) -> WorkItem:
+            if field == "assignee":
+                return _make_item(item_id, f"Item {item_id}", assignee=v)
+            return _make_item(item_id, f"Item {item_id}", tags=[v] if v else [])
+
+        ug = UnifiedGraph()
+        ug.add_items([
+            item("EXP-101", value),
+            item("EXP-102", "bob"),
+            item("EXP-103", "carol"),
+        ])
+        return QueryEngine(unified_graph=ug, embedding_index=None)
+
+    @staticmethod
+    def _run(engine: QueryEngine, parsed: ParsedQuery) -> set[str]:
+        """Run the structured query; a SPARQL parse/eval error fails as an assertion."""
+        try:
+            items = engine.structured_query(parsed)
+        except Exception as exc:  # noqa: BLE001 — any raise here means bad SPARQL
+            pytest.fail(f"generated SPARQL did not run for {parsed!r}: {exc!r}")
+        return {i.id for i in items}
+
+    @pytest.mark.parametrize("value", _SPARQL_SPECIAL_VALUES)
+    def test_assignee_special_value_matches_only_its_item(self, value):
+        engine = self._engine("assignee", value)
+        ids = self._run(engine, ParsedQuery(assignee=value))
+        assert ids == {"EXP-101"}, f"assignee {value!r} matched {ids}"
+
+    @pytest.mark.parametrize("value", _SPARQL_SPECIAL_VALUES)
+    def test_tag_special_value_matches_only_its_item(self, value):
+        engine = self._engine("tag", value)
+        ids = self._run(engine, ParsedQuery(tag=value))
+        assert ids == {"EXP-101"}, f"tag {value!r} matched {ids}"
+
+    # -- negative controls (must stay green) --------------------------------
+
+    def test_control_plain_assignee_query(self, unified_graph):
+        engine = QueryEngine(unified_graph=unified_graph, embedding_index=None)
+        assert self._run(engine, ParsedQuery(assignee="Mini")) == {"EXP-850"}
+        assert self._run(engine, ParsedQuery(assignee="dgx")) == {"EXP-800"}
+
+    def test_control_plain_tag_query(self, unified_graph):
+        engine = QueryEngine(unified_graph=unified_graph, embedding_index=None)
+        assert self._run(engine, ParsedQuery(tag="carplay")) == {"EXP-950"}
+        assert self._run(engine, ParsedQuery(tag="brain")) == {
+            "EXP-700", "EXP-800", "EXP-850", "EXP-900",
+        }
+
+    def test_control_nl_assigned_and_tagged(self, unified_graph):
+        engine = QueryEngine(unified_graph=unified_graph, embedding_index=None)
+        ids = {r.item.id for r in engine.query("assigned to Mini")}
+        assert ids == {"EXP-850"}
+        ids = {r.item.id for r in engine.query("tagged lora")}
+        assert ids == {"EXP-1000"}

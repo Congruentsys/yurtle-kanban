@@ -5138,3 +5138,61 @@ class TestLineEndingsEditScalesIssue151:
                 assert new == old, f"untouched line {i} changed: {old!r} -> {new!r}"
         fm = yaml.safe_load(path.read_text().split("---\n")[1])
         assert fm["status"] == "ready" and fm["assignee"] == "carol"
+
+
+# ---------------------------------------------------------------------------
+# Issue #162 — `rank --summary` escapes backslashes and newlines, not only quotes
+# ---------------------------------------------------------------------------
+
+
+class TestRankSummaryEscaping:
+    """`rank --summary <v>` writes frontmatter that reads back exactly <v> (#162)."""
+
+    _run = staticmethod(TestFrontmatterValuesRoundTrip._run)
+    _item_file = staticmethod(TestFrontmatterValuesRoundTrip._item_file)
+    _frontmatter_text = staticmethod(TestFrontmatterValuesRoundTrip._frontmatter_text)
+
+    def _rank_and_read(self, repo: Path, value: str) -> dict:
+        runner = CliRunner()
+        self._run(runner, ["create", "feature", "probe"])
+        self._run(runner, ["rank", "FEAT-001", "1", "--summary", value, "--no-commit"])
+
+        listed = self._run(runner, ["list"])
+        assert "No work items found" not in listed.output
+        assert "FEAT-001" in listed.output, listed.output
+
+        path = self._item_file(repo, "FEAT-001")
+        try:
+            fm = yaml.safe_load(self._frontmatter_text(path))
+        except yaml.YAMLError as exc:
+            pytest.fail(f"frontmatter is not valid YAML: {exc}\n{path.read_text()}")
+        assert isinstance(fm, dict), path.read_text()
+
+        shown = self._run(runner, ["show", "FEAT-001", "--json"])
+        data = json.loads(shown.output)
+        assert data["id"] == "FEAT-001"
+        assert data["value_summary"] == value, data.get("value_summary")
+        return fm
+
+    @pytest.mark.parametrize(
+        "value",
+        ["a\\", "a\\b", "line1\nline2", 'say "hi"', "team: core"],
+    )
+    def test_rank_summary_special_value_round_trips(
+        self, temp_repo, software_config, monkeypatch, value,
+    ):
+        monkeypatch.chdir(temp_repo)
+        fm = self._rank_and_read(temp_repo, value)
+        assert fm.get("value_summary") == value, fm
+        assert fm.get("priority_rank") == 1, fm
+
+    # -- negative control (must stay green) ---------------------------------
+
+    def test_control_plain_summary_written_as_today(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        monkeypatch.chdir(temp_repo)
+        fm = self._rank_and_read(temp_repo, "Ship it")
+        assert fm["value_summary"] == "Ship it"
+        front = self._frontmatter_text(self._item_file(temp_repo, "FEAT-001"))
+        assert '\nvalue_summary: "Ship it"\n' in f"\n{front}\n", front
