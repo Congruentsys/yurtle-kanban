@@ -664,3 +664,187 @@ class TestInitWritesThemeRoot:
         assert scan_paths, "non-vacuity: init wrote no scan_paths"
         bad = [p for p in scan_paths if self._norm(p) in ("", ".", "./")]
         assert not bad, f"init --theme flat scans the repo root: {scan_paths!r}"
+
+
+class TestInitExplicitPathScaffolding:
+    """`init --path <dir>` scaffolds the theme's type folders under that root (#134).
+
+    Follow-up from the PR #131 (#112) review. Before: with an explicit
+    `--path custom/`, `init` wrote `root: custom/` and scanned it, but still
+    scaffolded `kanban-work/*/_TEMPLATE.md` from the theme's per-type paths,
+    while `create` writes to `custom/<type folder>/` (#102/#113) -- leaving a
+    `kanban-work/` tree nothing uses. Decided: scaffold each type folder (the
+    last component of the theme's per-type path) and its `_TEMPLATE.md` under
+    the explicit root, and create no `kanban-work/` (or `research/`) tree.
+    Also pinned (round-2 follow-up A): `init` creates no unscanned root, e.g.
+    no `work/` for a flat custom theme. Default `init` (no `--path`) is
+    unchanged. (#134)
+    """
+
+    H = TestInitWritesThemeRoot
+    THEMES = ["software", "nautical", "hdd"]
+
+    # Pinned digest of the whole tree default `init --theme <t>` creates
+    # (every path except .git/, plus every file's bytes), taken on main before
+    # #134. A change here means default init's output changed.
+    DEFAULT_TREE_DIGESTS = {
+        "software": "941afbdb56f1e98afe993700aa2cd68ff17f204f4cae4bf1730295bbb2eeea8e",
+        "nautical": "9d8f1219781c8e98d349dc41867101c20abc2e312c8004236728088406ce11ea",
+        "hdd": "d151829138cf36a587e9c929cd4f9cc673349ff3b10e9fdd8d0b9ce33409f74b",
+    }
+
+    @pytest.fixture(autouse=True)
+    def _clear_theme_cache(self):
+        import yurtle_kanban.config as config_mod
+
+        config_mod._theme_cache.clear()
+        yield
+        config_mod._theme_cache.clear()
+
+    # ---- helpers -------------------------------------------------------
+
+    @classmethod
+    def _type_folders(cls, theme: str) -> dict[str, str]:
+        """type id -> last component of the theme's per-type path (e.g. 'features')."""
+        folders = {
+            type_id: Path(p.rstrip("/")).name
+            for type_id, p in cls.H._theme_type_paths(theme).items()
+        }
+        assert folders, f"non-vacuity: theme {theme!r} declares no per-type paths"
+        return folders
+
+    @classmethod
+    def _init_custom(cls, tmp_path, monkeypatch, theme: str):
+        return cls.H._run(tmp_path, monkeypatch, "init", "--theme", theme, "--path", "custom/")
+
+    @staticmethod
+    def _tree_digest(root: Path) -> str:
+        import hashlib
+
+        h = hashlib.sha256()
+        for f in sorted(x for x in root.rglob("*") if x.relative_to(root).parts[0] != ".git"):
+            rel = f.relative_to(root).as_posix()
+            h.update(rel.encode() + b"\0")
+            if f.is_file():
+                h.update(f.read_bytes())
+            h.update(b"\1")
+        return h.hexdigest()
+
+    # ---- the change ----------------------------------------------------
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_explicit_path_scaffolds_type_folders_under_root(self, tmp_path, monkeypatch, theme):
+        self._init_custom(tmp_path, monkeypatch, theme)
+        missing = [
+            f"custom/{folder}/_TEMPLATE.md"
+            for folder in self._type_folders(theme).values()
+            if not (tmp_path / "custom" / folder / "_TEMPLATE.md").is_file()
+        ]
+        assert not missing, (
+            f"init --theme {theme} --path custom/ did not scaffold {missing}; found "
+            f"{sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob('_TEMPLATE.md'))}"
+        )
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_explicit_path_creates_no_theme_root_tree(self, tmp_path, monkeypatch, theme):
+        self._init_custom(tmp_path, monkeypatch, theme)
+        theme_root = self.H._norm(self.H._theme_root(theme))
+        assert theme_root != "custom", "non-vacuity"
+        assert not (tmp_path / theme_root).exists(), (
+            f"init --theme {theme} --path custom/ still created an unscanned "
+            f"{theme_root}/ tree: "
+            f"{sorted(str(p.relative_to(tmp_path)) for p in (tmp_path / theme_root).rglob('*'))}"
+        )
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_explicit_path_templates_match_default_templates(self, tmp_path, monkeypatch, theme):
+        """The templates under custom/ are the same bytes default init writes."""
+        default_dir = tmp_path / "default"
+        custom_dir = tmp_path / "explicit"
+        default_dir.mkdir()
+        custom_dir.mkdir()
+        self.H._run(default_dir, monkeypatch, "init", "--theme", theme)
+        import yurtle_kanban.config as config_mod
+
+        config_mod._theme_cache.clear()
+        self._init_custom(custom_dir, monkeypatch, theme)
+        for type_id, type_path in self.H._theme_type_paths(theme).items():
+            folder = Path(type_path.rstrip("/")).name
+            got = custom_dir / "custom" / folder / "_TEMPLATE.md"
+            assert got.is_file(), f"missing custom/{folder}/_TEMPLATE.md ({type_id})"
+            assert got.read_bytes() == (default_dir / type_path / "_TEMPLATE.md").read_bytes(), (
+                f"custom/{folder}/_TEMPLATE.md differs from default {type_path}_TEMPLATE.md"
+            )
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_explicit_path_config_root_and_scan_paths(self, tmp_path, monkeypatch, theme):
+        self._init_custom(tmp_path, monkeypatch, theme)
+        paths = self.H._config_paths(tmp_path)
+        assert self.H._norm(paths.get("root")) == "custom", paths
+        assert [self.H._norm(p) for p in paths.get("scan_paths") or []] == ["custom"], paths
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_explicit_path_create_lands_in_scaffolded_folder_and_lists(
+        self, tmp_path, monkeypatch, theme
+    ):
+        item_type, prefix = self.H.PROBES[theme]
+        folder = self._type_folders(theme)[item_type]
+        self._init_custom(tmp_path, monkeypatch, theme)
+        self.H._run(tmp_path, monkeypatch, "create", item_type, "probe")
+
+        found = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob(f"{prefix}-001*"))
+        assert found == [f"custom/{folder}/{prefix}-001-probe.md"], found
+        # The folder create wrote into is the one init scaffolded.
+        assert (tmp_path / "custom" / folder / "_TEMPLATE.md").is_file(), (
+            f"create landed in custom/{folder}/ but init scaffolded no template there"
+        )
+        assert self.H._listed_ids(tmp_path, monkeypatch) == [f"{prefix}-001"]
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_explicit_path_templates_not_listed(self, tmp_path, monkeypatch, theme):
+        self._init_custom(tmp_path, monkeypatch, theme)
+        assert list((tmp_path / "custom").rglob("_TEMPLATE.md")), (
+            "non-vacuity: no templates scaffolded under custom/"
+        )
+        listed = self.H._listed_ids(tmp_path, monkeypatch)
+        assert listed == [], f"fresh --path board lists {listed}"
+
+    def test_flat_custom_theme_creates_no_work_dir(self, tmp_path, monkeypatch):
+        """Round-2 follow-up A: init creates no unscanned root (no work/)."""
+        self.H._write_flat_theme(tmp_path)
+        self.H._run(tmp_path, monkeypatch, "init", "--theme", "flat")
+        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), "non-vacuity: flat not scaffolded"
+        assert not (tmp_path / "work").exists(), (
+            "init --theme flat created a work/ directory nothing scans"
+        )
+
+    # ---- must stay true ------------------------------------------------
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_default_init_tree_unchanged(self, tmp_path, monkeypatch, theme):
+        """Default init (no --path) writes byte-for-byte the tree it wrote before #134."""
+        self.H._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        theme_root = self.H._norm(self.H._theme_root(theme))
+        top = sorted(p.name for p in tmp_path.iterdir() if p.name != ".git")
+        assert top == sorted([".claude", ".kanban", theme_root]), top
+        assert self._tree_digest(tmp_path) == self.DEFAULT_TREE_DIGESTS[theme], (
+            f"default init --theme {theme} output changed"
+        )
+
+    @pytest.mark.parametrize("theme", THEMES)
+    def test_default_init_scaffolds_under_theme_root(self, tmp_path, monkeypatch, theme):
+        self.H._run(tmp_path, monkeypatch, "init", "--theme", theme)
+        for type_id, type_path in self.H._theme_type_paths(theme).items():
+            assert (tmp_path / type_path / "_TEMPLATE.md").is_file(), (type_id, type_path)
+        assert not (tmp_path / "custom").exists()
+        paths = self.H._config_paths(tmp_path)
+        assert self.H._norm(paths.get("root")) == self.H._norm(self.H._theme_root(theme))
+
+    def test_spec_theme_explicit_path_create_and_list(self, tmp_path, monkeypatch):
+        """spec declares no per-type paths; --path custom/ + create + list still works."""
+        assert self.H._theme_type_paths("spec") == {}, "non-vacuity: spec gained paths"
+        self.H._run(tmp_path, monkeypatch, "init", "--theme", "spec", "--path", "custom/")
+        self.H._run(tmp_path, monkeypatch, "create", "task", "probe")
+        found = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob("TASK-001*")]
+        assert len(found) == 1 and found[0].startswith("custom/"), found
+        assert self.H._listed_ids(tmp_path, monkeypatch) == ["TASK-001"]
