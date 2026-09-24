@@ -907,7 +907,10 @@ class KanbanService:
         )
 
         # Write file — use pre-rendered content if provided
-        file_content = content if content is not None else item.to_markdown()
+        if content is not None:
+            file_content = self._apply_priority(content, priority)
+        else:
+            file_content = item.to_markdown()
         path.write_text(file_content)
 
         # Parse RDF graph from written content
@@ -1018,7 +1021,7 @@ class KanbanService:
                 tags=tags or [],
             )
             if content is not None:
-                file_path.write_text(content)
+                file_path.write_text(self._apply_priority(content, priority))
             else:
                 file_path.write_text(item.to_markdown())
 
@@ -2433,6 +2436,21 @@ class KanbanService:
 
         parts[1] = frontmatter
         return "---".join(parts)
+
+    def _apply_priority(self, content: str, priority: str | None) -> str:
+        """Write the requested priority into pre-rendered template content.
+
+        Templates hardcode a priority (or omit it), so without this a
+        caller's --priority is silently dropped (issue #99). Sets the
+        frontmatter field, adding it if absent, and rewrites any
+        ``kb:priority`` triple the template carries so the two agree.
+        """
+        if not priority:
+            return content
+        content = self._add_or_update_frontmatter_field(content, "priority", priority)
+        return re.sub(
+            r"(kb:priority\s+kb:)[\w-]+", lambda m: m.group(1) + priority, content,
+        )
 
     def _git_commit(self, file_path: Path, message: str) -> None:
         """Commit changes to git."""
