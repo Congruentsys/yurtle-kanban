@@ -1807,6 +1807,9 @@ class TestCreateHonoursDefaultBoard:
         import json
 
         out = cls._run(runner, ["list", "--json", "--board", board]).output
+        # An empty board prints plain text, not JSON.
+        if "No work items found" in out:
+            return set()
         data = json.loads(out)
         items = data["items"] if isinstance(data, dict) else data
         return {i["id"] for i in items}
