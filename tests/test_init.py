@@ -123,17 +123,23 @@ class TestInitScaffolding:
         assert "SIG-XXX" in template
 
     def test_config_yaml_has_scan_paths(self, tmp_path, monkeypatch):
-        """Generated config should include scan_paths for all type dirs."""
+        """Generated config scans the theme root, not one entry per type (#112).
+
+        The per-type folders are still scaffolded on disk; the root scan covers them.
+        """
         monkeypatch.chdir(tmp_path)
         import subprocess
         subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
 
         runner = CliRunner()
-        runner.invoke(main, ["init", "--theme", "software"])
+        result = runner.invoke(main, ["init", "--theme", "software"])
+        assert result.exit_code == 0, result.output
 
-        config_text = (tmp_path / ".kanban" / "config.yaml").read_text()
-        assert "kanban-work/features/" in config_text
-        assert "kanban-work/bugs/" in config_text
+        raw = yaml.safe_load((tmp_path / ".kanban" / "config.yaml").read_text())
+        scan_paths = [p.rstrip("/") for p in raw["kanban"]["paths"]["scan_paths"]]
+        assert "kanban-work" in scan_paths, f"theme root not scanned: {scan_paths!r}"
+        assert (tmp_path / "kanban-work" / "features").is_dir()
+        assert (tmp_path / "kanban-work" / "bugs").is_dir()
 
     def test_config_yaml_has_ignore_templates(self, tmp_path, monkeypatch):
         """Config should ignore _TEMPLATE* files."""
