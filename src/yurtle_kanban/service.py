@@ -907,7 +907,10 @@ class KanbanService:
         )
 
         # Write file — use pre-rendered content if provided
-        file_content = content if content is not None else item.to_markdown()
+        if content is not None:
+            file_content = self._apply_priority(content, priority)
+        else:
+            file_content = item.to_markdown()
         path.write_text(file_content)
 
         # Parse RDF graph from written content
@@ -1018,7 +1021,7 @@ class KanbanService:
                 tags=tags or [],
             )
             if content is not None:
-                file_path.write_text(content)
+                file_path.write_text(self._apply_priority(content, priority))
             else:
                 file_path.write_text(item.to_markdown())
 
@@ -2398,41 +2401,48 @@ class KanbanService:
 
         item.file_path.write_text(content)
 
-    def _update_frontmatter_field(self, content: str, field: str, value: str) -> str:
-        """Update a single field in the frontmatter."""
-        import re
-
-        pattern = rf"^{field}:.*$"
-        replacement = f"{field}: {value}"
-        # Only replace in frontmatter (between first two ---)
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            parts[1] = re.sub(pattern, replacement, parts[1], flags=re.MULTILINE)
-            return "---".join(parts)
-        return content
+    # Frontmatter is closed by the first line that STARTS with `---` (the same
+    # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
+    # instead would cut inside a value such as `title: "A --- B"`.
+    _FRONTMATTER_RE = re.compile(r"\A---[ \t\r]*\n(.*?)^---", re.DOTALL | re.MULTILINE)
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
 
         If the field exists, update it. If not, insert it before the closing ---.
         """
-        import re
-
-        parts = content.split("---", 2)
-        if len(parts) < 3:
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
             return content
 
-        frontmatter = parts[1]
+        frontmatter = match.group(1)
         pattern = rf"^{field}:.*$"
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
-            frontmatter = re.sub(pattern, f"{field}: {value}", frontmatter, flags=re.MULTILINE)
+            frontmatter = re.sub(
+                pattern, lambda _: f"{field}: {value}", frontmatter, flags=re.MULTILINE,
+            )
         else:
             # Field doesn't exist — append before end
-            frontmatter = frontmatter.rstrip() + f"\n{field}: {value}\n"
+            body = frontmatter.rstrip()
+            frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n"
 
-        parts[1] = frontmatter
-        return "---".join(parts)
+        return content[: match.start(1)] + frontmatter + content[match.end(1) :]
+
+    def _apply_priority(self, content: str, priority: str | None) -> str:
+        """Write the requested priority into pre-rendered template content.
+
+        Templates hardcode a priority (or omit it), so without this a
+        caller's --priority is silently dropped (issue #99). Sets the
+        frontmatter field, adding it if absent, and rewrites any
+        ``kb:priority`` triple the template carries so the two agree.
+        """
+        if not priority:
+            return content
+        content = self._add_or_update_frontmatter_field(content, "priority", priority)
+        return re.sub(
+            r"(kb:priority\s+kb:)[\w-]+", lambda m: m.group(1) + priority, content,
+        )
 
     def _git_commit(self, file_path: Path, message: str) -> None:
         """Commit changes to git."""

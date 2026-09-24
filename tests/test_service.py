@@ -1516,3 +1516,29 @@ class TestMoveAssignMissingKey:
         )
         assert result.exit_code == 0, result.output
         assert [i["id"] for i in json.loads(result.output)] == ["EXP-001"]
+
+
+class TestFrontmatterCloser:
+    """A closing line that merely starts with `---` still ends the frontmatter (#101)."""
+
+    @pytest.mark.parametrize("closer", ["--- # end", "----"])
+    def test_move_assign_with_decorated_closer(
+        self, temp_repo, nautical_config, closer,
+    ):
+        svc = KanbanService(nautical_config, temp_repo)
+        path = temp_repo / "kanban-work" / "expeditions" / "EXP-001-probe.md"
+        path.write_text(
+            f"---\nid: EXP-001\ntitle: \"probe\"\ntype: expedition\n"
+            f"status: backlog\n{closer}\n\n# probe\n\n---\n\nnotes\n"
+        )
+        svc.scan()
+
+        svc.move_item(
+            "EXP-001", WorkItemStatus.READY, commit=False,
+            assignee="agent-x", validate_workflow=False,
+        )
+
+        head, body = path.read_text().split(f"\n{closer}\n", 1)
+        assert "\nassignee: agent-x" in head
+        assert "\nstatus: ready" in head
+        assert "assignee" not in body

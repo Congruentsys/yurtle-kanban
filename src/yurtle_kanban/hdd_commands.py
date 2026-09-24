@@ -15,7 +15,7 @@ from __future__ import annotations
 import click
 from rich.console import Console
 
-from .models import WorkItemType
+from .models import PRIORITIES, WorkItemType
 from .template_engine import TemplateEngine
 
 console = Console()
@@ -526,7 +526,11 @@ def idea():
     type=click.Choice(["research", "feature"]),
     help="Idea type: research (IDEA-R) or feature (IDEA-F)",
 )
-@click.option("--priority", "-p", default="medium", help="Priority: critical, high, medium, low")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def idea_create(title: str, idea_type: str, priority: str, push: bool):
     """Create a new research or feature idea.
@@ -591,7 +595,11 @@ def literature():
 @literature.command("create")
 @click.argument("title")
 @click.option("--idea", "source_idea", default=None, help="Source idea ID (e.g., IDEA-R-001)")
-@click.option("--priority", "-p", default="medium", help="Priority")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def literature_create(title: str, source_idea: str | None, priority: str, push: bool):
     """Create a new literature review.
@@ -661,7 +669,11 @@ def paper():
 @click.argument("number", type=int)
 @click.argument("title")
 @click.option("--authors", default=None, help="Comma-separated author list")
-@click.option("--priority", "-p", default="medium", help="Priority")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def paper_create(number: int, title: str, authors: str | None, priority: str, push: bool):
     """Create a new research paper.
@@ -757,7 +769,11 @@ def hypothesis():
     "--literature", default=None,
     help="Comma-separated literature IDs (e.g., 'LIT-001,LIT-003')",
 )
-@click.option("--priority", "-p", default="medium", help="Priority")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def hypothesis_create(
     statement: str,
@@ -907,7 +923,11 @@ def experiment():
 )
 @click.option("--title", required=True, help="Experiment title")
 @click.option("--measures", default=None, help="Comma-separated measure IDs (e.g., 'M-007,M-025')")
-@click.option("--priority", "-p", default="medium", help="Priority")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def experiment_create(
     expr_id: str | None, hyp_id: str | None, title: str,
@@ -1173,7 +1193,11 @@ def measure():
     "--id", "measure_id", default=None,
     help="Explicit ID (e.g., M-042). Auto-allocates if omitted.",
 )
-@click.option("--priority", "-p", default="medium", help="Priority")
+@click.option(
+    "--priority", "-p", default="medium",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--push", is_flag=True, help="Atomic: create, commit, and push")
 def measure_create(
     title: str,

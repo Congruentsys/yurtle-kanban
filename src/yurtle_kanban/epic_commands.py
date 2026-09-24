@@ -19,7 +19,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from .models import WorkItemStatus, WorkItemType
+from .models import PRIORITIES, WorkItemStatus, WorkItemType
 from .template_engine import TemplateEngine
 
 console = Console()
@@ -337,7 +337,11 @@ def epic():
 
 @epic.command("create")
 @click.argument("title")
-@click.option("--priority", "-p", default="high", help="Priority level")
+@click.option(
+    "--priority", "-p", default="high",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--items", help="Comma-separated item IDs to link")
 @click.option("--push", is_flag=True, help="Commit and push (atomic)")
 def epic_create(title: str, priority: str, items: str | None, push: bool):
@@ -373,7 +377,11 @@ def voyage():
 
 @voyage.command("create")
 @click.argument("title")
-@click.option("--priority", "-p", default="high", help="Priority level")
+@click.option(
+    "--priority", "-p", default="high",
+    type=click.Choice(PRIORITIES, case_sensitive=False),
+    help="Priority",
+)
 @click.option("--items", help="Comma-separated item IDs to link")
 @click.option("--push", is_flag=True, help="Commit and push (atomic)")
 def voyage_create(title: str, priority: str, items: str | None, push: bool):

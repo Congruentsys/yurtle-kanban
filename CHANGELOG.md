@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#97). `move` now adds `status:`/`assignee:` when absent instead of only
   updating an existing line, and `create` always writes `assignee: null`,
   matching the scaffolded templates.
+- **`-p/--priority` was ignored by every template-rendered `create`** —
+  `idea`, `literature`, `paper`, `hypothesis`, `experiment`, `measure` and
+  `epic` (#99). The rendered template was written verbatim, so the priority
+  was whatever the template hardcoded (`medium`) or absent. It is now written
+  into the frontmatter, and into any `kb:priority` triple the template carries.
+  Note: `epic create` without `-p` now gets its documented default, `high`.
+  `-p` on these commands now only accepts critical/high/medium/low (any
+  case), since the value is written into Turtle. Frontmatter edits now find the
+  closing `---` by line, so writing a field no longer cuts a title like
+  `"A --- B"` in two (reading such an item back is still #103).
 
 ## [2.2.0] - 2026-08-30
 

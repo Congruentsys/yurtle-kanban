@@ -1,6 +1,7 @@
 """Tests for epic/voyage CLI commands."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -479,3 +480,33 @@ class TestCreateItemsPushWarning:
         )
         # --push without a remote will fail, but the warning should appear first
         assert "Warning" in result.output or "local-only" in result.output
+
+
+class TestEpicCreatePriority:
+    """epic create -p must reach both frontmatter and the kb:priority triple (#99)."""
+
+    def _epic_text(self, software_repo: Path) -> str:
+        return next(software_repo.rglob("EPIC-*.md")).read_text()
+
+    def test_explicit_priority_written(self, software_runner, software_repo):
+        result = software_runner.invoke(
+            main, ["epic", "create", "Auth", "-p", "critical"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        text = self._epic_text(software_repo)
+        assert "\npriority: critical\n" in text
+        assert "kb:priority kb:critical" in text
+        assert "kb:medium" not in text
+
+    def test_default_priority_is_documented_high(self, software_runner, software_repo):
+        """--priority defaults to high; the template's medium used to win."""
+        software_runner.invoke(main, ["epic", "create", "Auth"], catch_exceptions=False)
+        text = self._epic_text(software_repo)
+        assert "\npriority: high\n" in text
+        assert "kb:priority kb:high" in text
+
+    def test_invalid_priority_rejected(self, software_runner, software_repo):
+        """`-p "very high"` would write the invalid Turtle `kb:very high`."""
+        result = software_runner.invoke(main, ["epic", "create", "Auth", "-p", "very high"])
+        assert result.exit_code == 2
+        assert not list(software_repo.rglob("EPIC-*.md"))

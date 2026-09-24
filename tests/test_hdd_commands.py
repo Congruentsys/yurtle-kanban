@@ -2559,3 +2559,83 @@ class TestCriticalPathCLI:
             main, ["hdd", "critical-path"], catch_exceptions=False,
         )
         assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# --priority is honoured by every HDD create (issue #99)
+# ---------------------------------------------------------------------------
+
+
+class TestHDDCreatePriority:
+    """Templates hardcode (idea) or omit (the rest) priority; -p must win."""
+
+    CASES = [
+        (["idea", "create", "probe idea", "--type", "research"], "IDEA-R-001"),
+        (["literature", "create", "Survey"], "LIT-001"),
+        (["paper", "create", "130", "Brain Architecture"], "PAPER-130"),
+        (["hypothesis", "create", "V12 improves accuracy", "--paper", "130"], "H130.1"),
+        (
+            ["experiment", "create", "EXPR-130", "--hypothesis", "H130.1",
+             "--title", "V12 accuracy test"],
+            "EXPR-130",
+        ),
+        (
+            ["measure", "create", "Accuracy", "--unit", "percent",
+             "--category", "accuracy"],
+            "M-001",
+        ),
+    ]
+
+    @staticmethod
+    def _written(temp_repo: Path, hdd_config: KanbanConfig, item_id: str) -> dict:
+        svc = KanbanService(hdd_config, temp_repo)
+        svc.scan()
+        item = svc.get_item(item_id)
+        assert item is not None, f"{item_id} not found after create"
+        assert item.priority == "high"
+        return yaml.safe_load(item.file_path.read_text().split("---", 2)[1])
+
+    @pytest.mark.parametrize(("args", "item_id"), CASES, ids=[c[0][0] for c in CASES])
+    def test_create_honours_priority(self, runner, temp_repo, hdd_config, args, item_id):
+        result = runner.invoke(main, [*args, "-p", "high"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert self._written(temp_repo, hdd_config, item_id)["priority"] == "high"
+
+    def test_idea_create_push_honours_priority(self, runner, temp_repo, hdd_config):
+        """The --push path (local commit, no remote) writes it too."""
+        result = runner.invoke(
+            main, ["idea", "create", "probe idea", "-p", "high", "--push"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        assert self._written(temp_repo, hdd_config, "IDEA-R-001")["priority"] == "high"
+
+    def test_idea_create_default_priority_unchanged(self, runner, temp_repo, hdd_config):
+        result = runner.invoke(main, ["idea", "create", "plain idea"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        idea_file = next((temp_repo / "research" / "ideas").glob("IDEA-R-001*.md"))
+        assert "\npriority: medium\n" in idea_file.read_text()
+
+    def test_priority_is_validated(self, runner, temp_repo, hdd_config):
+        """Free text would be written into kb:priority terms, so it is rejected."""
+        result = runner.invoke(main, ["idea", "create", "x", "-p", "urgent"])
+        assert result.exit_code == 2
+        assert "urgent" in result.output
+        assert not list((temp_repo / "research" / "ideas").glob("IDEA-*.md"))
+
+    def test_priority_is_case_insensitive(self, runner, temp_repo, hdd_config):
+        result = runner.invoke(main, ["idea", "create", "x", "-p", "HIGH"], catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        idea_file = next((temp_repo / "research" / "ideas").glob("IDEA-R-001*.md"))
+        assert "\npriority: high\n" in idea_file.read_text()
+
+    def test_title_containing_dashes_is_not_split(self, runner, temp_repo, hdd_config):
+        """Writing priority must not cut the frontmatter at a `---` inside the title."""
+        result = runner.invoke(
+            main, ["literature", "create", "A --- B", "-p", "high"], catch_exceptions=False,
+        )
+        assert result.exit_code == 0, result.output
+        text = next((temp_repo / "research" / "literature").glob("LIT-001*.md")).read_text()
+        frontmatter = text.split("\n---\n", 1)[0]
+        assert 'title: "A --- B"' in frontmatter
+        assert "\npriority: high" in frontmatter
