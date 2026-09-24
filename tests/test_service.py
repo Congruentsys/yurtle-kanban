@@ -2854,3 +2854,244 @@ class TestTypeNamedFolders:
         assert listed.exception is None, repr(listed.exception)
         assert listed.exit_code == 0, listed.output
         assert "FEAT-001" in listed.output, listed.output
+
+
+class TestFrontmatterOpeningLineComment:
+    """An opening `---` line carrying a YAML comment still opens the frontmatter (#116)."""
+
+    # Only openers that YAML itself reads as a document marker + comment.
+    # (`---#c` is not one: yaml.safe_load rejects it, so it is not pinned here.)
+    OPENERS = ["--- # generated", "---   # generated  ", "--- #"]
+
+    _BODY = "\n# probe\n\nIntro text.\n\n---\n\nnotes after a rule\n"
+
+    @staticmethod
+    def _run(runner: CliRunner, args: list[str]):
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, (
+            f"{args} exited {result.exit_code}: {result.exception!r}\n{result.output}"
+        )
+        return result
+
+    @staticmethod
+    def _path(repo: Path) -> Path:
+        return repo / "kanban-work" / "features" / "FEAT-001-probe.md"
+
+    def _write(self, repo: Path, opener: str, closer: str = "---") -> Path:
+        path = self._path(repo)
+        path.write_text(
+            f"{opener}\n"
+            "id: FEAT-001\n"
+            'title: "probe"\n'
+            "type: feature\n"
+            "status: backlog\n"
+            f"{closer}\n" + self._BODY
+        )
+        return path
+
+    @staticmethod
+    def _split(path: Path, closer: str = "---") -> tuple[str, str, str]:
+        """(opening line, frontmatter text, body) split on the first `closer` line."""
+        lines = path.read_text().split("\n")
+        close = lines.index(closer, 1)
+        return lines[0], "\n".join(lines[1:close]), "\n".join(lines[close + 1:])
+
+    def _list(self, runner: CliRunner) -> list[dict]:
+        out = self._run(runner, ["list", "--json"]).output
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            # An empty board prints a plain message ("No work items found.").
+            return []
+
+    @pytest.mark.parametrize("opener", OPENERS)
+    def test_opener_is_valid_yaml_document_marker(self, opener):
+        """Sanity: YAML accepts each opener as `---` + comment."""
+        assert yaml.safe_load(f"{opener}\nid: FEAT-001\n") == {"id": "FEAT-001"}
+
+    @pytest.mark.parametrize("opener", OPENERS)
+    def test_list_shows_item(self, temp_repo, software_config, monkeypatch, opener):
+        """The issue's repro: the item is listed with its id, title and status."""
+        monkeypatch.chdir(temp_repo)
+        self._write(temp_repo, opener)
+        items = self._list(CliRunner())
+        assert [(i["id"], i["title"], i["status"]) for i in items] == [
+            ("FEAT-001", "probe", "backlog")
+        ], items
+
+    @pytest.mark.parametrize("opener", OPENERS)
+    def test_service_scan_finds_item(self, temp_repo, software_config, opener):
+        self._write(temp_repo, opener)
+        svc = KanbanService(software_config, temp_repo)
+        svc.scan()
+        item = svc.get_item("FEAT-001")
+        assert item is not None
+        assert item.title == "probe"
+        assert item.status == WorkItemStatus.BACKLOG
+
+    @pytest.mark.parametrize("opener", OPENERS)
+    def test_show_works(self, temp_repo, software_config, monkeypatch, opener):
+        monkeypatch.chdir(temp_repo)
+        self._write(temp_repo, opener)
+        data = json.loads(self._run(CliRunner(), ["show", "FEAT-001", "--json"]).output)
+        assert data["id"] == "FEAT-001"
+        assert data["title"] == "probe"
+        assert data["status"] == "backlog"
+
+    @pytest.mark.parametrize("opener", OPENERS)
+    def test_move_assign_updates_frontmatter_and_keeps_comment(
+        self, temp_repo, software_config, monkeypatch, opener,
+    ):
+        """The writer accepts the same file: status + assignee land in the frontmatter."""
+        monkeypatch.chdir(temp_repo)
+        path = self._write(temp_repo, opener)
+        runner = CliRunner()
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+
+        first, front, body = self._split(path)
+        assert first == opener, path.read_text()
+        fm = yaml.safe_load(front)
+        assert fm["status"] == "ready", path.read_text()
+        assert fm["assignee"] == "carol", path.read_text()
+        assert fm["id"] == "FEAT-001"
+        assert body.startswith(self._BODY), body
+        # And the whole file still reads as that YAML document.
+        assert yaml.safe_load(f"{first}\n{front}\n")["assignee"] == "carol"
+
+        items = self._list(runner)
+        assert [(i["id"], i["status"], i["assignee"]) for i in items] == [
+            ("FEAT-001", "ready", "carol")
+        ], items
+
+    def test_commented_opener_and_commented_closer(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """Both lines decorated: `--- # generated` … `--- # end`."""
+        monkeypatch.chdir(temp_repo)
+        path = self._write(temp_repo, "--- # generated", closer="--- # end")
+        runner = CliRunner()
+        assert [i["id"] for i in self._list(runner)] == ["FEAT-001"]
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        first, front, body = self._split(path, closer="--- # end")
+        assert first == "--- # generated"
+        fm = yaml.safe_load(front)
+        assert (fm["status"], fm["assignee"]) == ("ready", "carol"), path.read_text()
+        assert "assignee" not in body
+        assert body.startswith(self._BODY), body
+
+    # --- Round 2: YAML-strict openers and a performance bound -----------
+
+    @pytest.mark.parametrize("opener", ["---\t# x", "---#x"])
+    def test_opener_yaml_rejects_is_not_frontmatter(
+        self, temp_repo, software_config, monkeypatch, opener,
+    ):
+        """Openers YAML itself rejects (tab before `#`, no space) are not frontmatter."""
+        with pytest.raises(yaml.YAMLError):
+            list(yaml.safe_load_all(f"{opener}\nid: FEAT-001\n"))
+        monkeypatch.chdir(temp_repo)
+        self._write(temp_repo, opener)
+        assert self._list(CliRunner()) == []
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "--- #" + " " * 64_000 + "x",
+            "--- # c" + " " * 1000 + "\n" + "line\n" * 10_000,
+        ],
+        ids=["one-long-line", "long-line-then-10k-lines-no-closer"],
+    )
+    def test_unclosed_commented_opener_is_fast(
+        self, temp_repo, software_config, content,
+    ):
+        """A pathological unclosed opener must not trigger regex backtracking."""
+        import time
+
+        svc = KanbanService(software_config, temp_repo)
+        start = time.perf_counter()
+        split = svc._split_frontmatter(content)
+        parsed = svc._parse_frontmatter(content)
+        elapsed = time.perf_counter() - start
+        assert split is None and parsed is None
+        assert elapsed < 0.5, f"frontmatter split took {elapsed:.2f}s"
+
+    def test_unclosed_commented_opener_list_is_fast(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """Same bound end to end: the file sits under a scan path and `list` runs."""
+        import time
+
+        monkeypatch.chdir(temp_repo)
+        (temp_repo / "kanban-work" / "features" / "FEAT-001-probe.md").write_text(
+            "--- #" + " " * 64_000 + "x"
+        )
+        runner = CliRunner()
+        start = time.perf_counter()
+        items = self._list(runner)
+        elapsed = time.perf_counter() - start
+        assert items == []
+        assert elapsed < 0.5 + self._baseline_list(runner), (
+            f"list took {elapsed:.2f}s"
+        )
+
+    def _baseline_list(self, runner: CliRunner) -> float:
+        """Time of `list` on the same board with the probe file emptied."""
+        import time
+
+        path = self._path(Path.cwd())
+        saved = path.read_text()
+        path.write_text("")
+        try:
+            start = time.perf_counter()
+            self._list(runner)
+            return time.perf_counter() - start
+        finally:
+            path.write_text(saved)
+
+    # --- Negative controls (already green) --------------------------------
+
+    def test_control_plain_opener_list_show_move(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A normal `---` file behaves exactly as before."""
+        monkeypatch.chdir(temp_repo)
+        path = self._write(temp_repo, "---")
+        runner = CliRunner()
+        assert [(i["id"], i["title"], i["status"]) for i in self._list(runner)] == [
+            ("FEAT-001", "probe", "backlog")
+        ]
+        data = json.loads(self._run(runner, ["show", "FEAT-001", "--json"]).output)
+        assert data["id"] == "FEAT-001"
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        first, front, body = self._split(path)
+        assert first == "---"
+        fm = yaml.safe_load(front)
+        assert (fm["status"], fm["assignee"]) == ("ready", "carol")
+        assert body.startswith(self._BODY), body
+
+    def test_control_body_rule_does_not_close_early(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """A `---` rule in the body is body text, not a frontmatter boundary."""
+        monkeypatch.chdir(temp_repo)
+        path = self._write(temp_repo, "---")
+        self._run(CliRunner(), ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        _, front, body = self._split(path)
+        assert "assignee: carol" in front
+        assert "assignee" not in body
+        assert body.startswith(self._BODY), body
+        assert "\n---\n\nnotes after a rule\n" in body
+
+    def test_control_commented_closer_still_closes(
+        self, temp_repo, software_config, monkeypatch,
+    ):
+        """`--- # end` as the closing line still closes (#101)."""
+        monkeypatch.chdir(temp_repo)
+        path = self._write(temp_repo, "---", closer="--- # end")
+        runner = CliRunner()
+        assert [i["id"] for i in self._list(runner)] == ["FEAT-001"]
+        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        _, front, body = self._split(path, closer="--- # end")
+        fm = yaml.safe_load(front)
+        assert (fm["status"], fm["assignee"]) == ("ready", "carol")
+        assert "assignee" not in body
+        assert body.startswith(self._BODY), body

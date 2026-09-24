@@ -74,6 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and those folders are always scanned. Boards that already worked list exactly
   the same items.
 
+
+- **An item whose opening frontmatter line carries a YAML comment
+  (`--- # generated`) was silently dropped** (#116). The opening `---` may now
+  be followed by a space and a comment, as YAML allows, for both reading and
+  writing.
+
 ## [2.2.0] - 2026-08-30
 
 ### Fixed
