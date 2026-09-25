@@ -136,15 +136,15 @@ class HookEngine:
     _MAX_HOOK_DEPTH = 3
 
     def __init__(
-        self, config_path: Path | str | None = None, repo_root: Path | None = None
+        self, config_path: Path | str | None = None, repo_root: Path | str | None = None
     ):
-        # actions resolve relative paths and run subprocesses here, not in the cwd (#347)
-        self._repo_root = repo_root
+        # actions resolve relative paths and run subprocesses here, not in the cwd
+        # (#347); a str root or config path works like a Path (#348, #359)
+        self._repo_root = Path(repo_root) if repo_root is not None else None
         self._hooks_config: dict[str, list[dict]] = {}
         self._callbacks: dict[str, Callable] = {}
         self._depth: int = 0
-        if config_path:
-            config_path = Path(config_path)  # a str path works like a Path (#348)
+        config_path = Path(config_path) if config_path else None
         if config_path and config_path.exists():
             self._load_config(config_path)
 
