@@ -2605,7 +2605,8 @@ class KanbanService:
                                 )
                             )
                             limit = col.get_wip_limit(item_type_str)
-                            if limit is not None and type_count >= limit:
+                            # 0 is "no limit", as on the board (#402, #411)
+                            if limit and type_count >= limit:
                                 raise ValueError(
                                     f"WIP limit reached for {item_type_str}s "
                                     f"in {col.name} on {board.name} "

@@ -7,6 +7,7 @@ Multi-board is opt-in: detected when config has 'version: 2.0' and 'boards' key.
 
 import os
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -305,8 +306,11 @@ class BoardConfig:
         - dict with dict values: per-type limits
         """
         raw_wip = data.get("wip_limits", {})
-        # Preserve None (explicitly unlimited board)
-        wip_limits = raw_wip if raw_wip is not None else None
+        # Preserve None (explicitly unlimited board); a bad limit is dropped (#411)
+        wip_limits = (
+            _clean_wip_limits(raw_wip, f"config.yaml board {data.get('name')!r}")
+            if raw_wip is not None else None
+        )
         return cls(
             # a bare (null) key means its default, like an absent one (#220); an
             # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
@@ -639,6 +643,46 @@ class KanbanConfig:
 WIP_NS = "https://yurtle.dev/kanban/wip/"
 
 
+def _wip_limit_value(value: Any, where: str) -> tuple[bool, int | None]:
+    """(keep, limit) for one board WIP limit: null is "unlimited", a whole number
+    0 or more is kept (`3.0` read as 3, 0 is "no limit"); anything else (negative,
+    fractional, text, a list, a bool) is dropped with one warning (#402, #411)."""
+    if value is None:
+        return True, None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    elif isinstance(value, Decimal) and value.is_finite() and value == value.to_integral_value():
+        value = int(value)  # an RDF xsd:decimal `4.0` (wip-policy.md)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return True, value
+    logger.warning(
+        f"{where}: WIP limit {value!r} is not a whole number, 0 or more; ignored"
+    )
+    return False, None
+
+
+def _clean_wip_limits(raw: Any, where: str) -> dict[str, Any]:
+    """A board's `wip_limits` with every bad limit dropped (#411)."""
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, Any] = {}
+    for column, limit in raw.items():
+        if isinstance(limit, dict):
+            per_type = {}
+            for item_type, type_limit in limit.items():
+                keep, value = _wip_limit_value(
+                    type_limit, f"{where} wip_limits.{column}.{item_type}"
+                )
+                if keep:
+                    per_type[item_type] = value
+            cleaned[column] = per_type
+        else:
+            keep, value = _wip_limit_value(limit, f"{where} wip_limits.{column}")
+            if keep:
+                cleaned[column] = value
+    return cleaned
+
+
 def load_wip_policy(
     config_dir: Path,
 ) -> dict[str, dict[str, int | dict[str, int | None] | None]] | None:
@@ -742,7 +786,11 @@ def load_wip_policy(
             if unlimited and str(unlimited).lower() == "true":
                 col_entry[item_type] = None  # type: ignore[index]
             elif limit_val is not None:
-                col_entry[item_type] = int(limit_val)  # type: ignore[index]
+                keep, value = _wip_limit_value(
+                    limit_val.toPython(), f"{policy_path}: {column}.{item_type}"
+                )
+                if keep:  # a bad limit is dropped, not a crash (#411)
+                    col_entry[item_type] = value  # type: ignore[index]
 
         # Find aggregate wip:ColumnLimit subjects (legacy-style per-column limits)
         for limit_node in g.subjects(predicate=None, object=wip.ColumnLimit):
@@ -764,7 +812,11 @@ def load_wip_policy(
                 if not isinstance(board_wip, dict):
                     continue
                 if column not in board_wip:
-                    board_wip[column] = int(limit_val)
+                    keep, value = _wip_limit_value(
+                        limit_val.toPython(), f"{policy_path}: {column}"
+                    )
+                    if keep:  # (#411)
+                        board_wip[column] = value
 
         return result if result else None
 
