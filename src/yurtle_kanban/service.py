@@ -2899,12 +2899,12 @@ class KanbanService:
             return None
         if not isinstance(priority, str):  # e.g. `priority: 1` in a hooks config (#153)
             raise ValueError(
-                unknown_priority_message(repr(priority))
+                unknown_priority_message(priority)
             )
         normalized = priority.strip().lower()
         if normalized not in PRIORITIES:
             raise ValueError(
-                unknown_priority_message(repr(priority))
+                unknown_priority_message(priority)
             )
         return normalized
 
