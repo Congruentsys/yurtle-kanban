@@ -16,7 +16,7 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
-from ._click import Group
+from ._click import Group, safe
 from .models import PRIORITIES, WorkItemType
 from .template_engine import TemplateEngine
 from .turtle_builder import InvalidTurtleName
@@ -68,7 +68,7 @@ def _update_parent(
     except Exception as e:
         console.print(
             f"  [yellow]Warning: could not update {escape(str(parent_id))}: "
-            f"{escape(str(e))}[/yellow]"
+            f"{safe(e)}[/yellow]"
         )
 
 
@@ -264,7 +264,7 @@ def hdd_registry(output_path: str | None, push: bool):
             )
             console.print("  [dim]Committed and pushed[/dim]")
         except subprocess.CalledProcessError as e:
-            console.print(f"  [yellow]Warning: git push failed: {escape(str(e))}[/yellow]")
+            console.print(f"  [yellow]Warning: git push failed: {safe(e)}[/yellow]")
 
 
 @hdd.command("validate")
@@ -1153,7 +1153,7 @@ def experiment_run(
             )
             console.print("  [dim]Committed and pushed[/dim]")
         except subprocess.CalledProcessError as e:
-            console.print(f"  [yellow]Warning: git push failed: {escape(str(e))}[/yellow]")
+            console.print(f"  [yellow]Warning: git push failed: {safe(e)}[/yellow]")
 
 
 @experiment.command("status")

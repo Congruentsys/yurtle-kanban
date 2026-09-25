@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 import click
+from rich.markup import escape
 
+from ._logging import escape_nonprintable
 from .models import InvalidText
 
 
@@ -19,3 +21,10 @@ class Group(click.Group):
             return super().invoke(ctx)
         except InvalidText as e:
             raise click.ClickException(str(e)) from None
+
+
+def safe(value: object) -> str:
+    """Text for a Rich markup string in an error or warning line: markup escaped,
+    and control characters (ESC, newlines) shown as `\\x1b` / `\\n`, so text from a
+    repo file or argv can't clear the screen or forge output lines (#251)."""
+    return escape(escape_nonprintable(str(value)))

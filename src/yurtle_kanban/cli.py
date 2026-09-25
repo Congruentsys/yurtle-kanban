@@ -28,7 +28,7 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
-from ._click import Group
+from ._click import Group, safe
 from .board import (
     render_board,
     render_history,
@@ -122,7 +122,7 @@ def get_service() -> KanbanService:
         try:
             config = KanbanConfig.load(config_path)
         except ValueError as e:  # a config value of the wrong kind (#220)
-            console.print(f"[red]Invalid {escape(str(config_path))}: {escape(str(e))}[/red]")
+            console.print(f"[red]Invalid {escape(str(config_path))}: {safe(e)}[/red]")
             sys.exit(1)
     else:
         config = KanbanConfig()  # Use defaults
@@ -146,7 +146,7 @@ class _Main(Group):
             try:
                 check_encodable(f"argument {n}", arg)
             except ValueError as e:
-                console.print(f"[red]{escape(str(e))}[/red]", soft_wrap=True)
+                console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
                 ctx.exit(1)
         return super().parse_args(ctx, args)
 
@@ -514,7 +514,7 @@ def create(
         check_encodable("assignee", assignee)
         check_encodable("tags", tag_list)
     except ValueError as e:
-        console.print(f"[red]{escape(str(e))}[/red]", soft_wrap=True)
+        console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
         sys.exit(1)
 
     if push:
@@ -640,7 +640,7 @@ def move(
         if assign:
             console.print(f"  Assigned to: {escape(assign)}")
     except ValueError as e:
-        console.print(f"[red]Error: {escape(str(e))}[/red]")
+        console.print(f"[red]Error: {safe(e)}[/red]")
         sys.exit(1)
 
     # Export board if requested
@@ -674,7 +674,7 @@ def show(item_id: str, as_json: bool):
                 ]
             click.echo(json.dumps(payload))
         else:
-            console.print(f"[red]Item not found: {escape(item_id)}[/red]")
+            console.print(f"[red]Item not found: {safe(item_id)}[/red]")
             for path, reason in broken:
                 try:
                     shown = path.relative_to(service.repo_root)
@@ -1018,7 +1018,7 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
             console.print(f"  Priority: {escape(str(item.priority))}")
         console.print(f"  Status: {item.status.value}")
     except ValueError as e:
-        console.print(f"[red]{escape(str(e))}[/red]")
+        console.print(f"[red]{safe(e)}[/red]")
         sys.exit(1)
 
 
@@ -1115,7 +1115,7 @@ def comment(item_id: str, comment: str, author: str):
         item = service.add_comment(item_id.upper(), comment, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:
-        console.print(f"[red]Error: {escape(str(e))}[/red]")
+        console.print(f"[red]Error: {safe(e)}[/red]")
         sys.exit(1)
 
 
@@ -1473,7 +1473,7 @@ def query(
         try:
             results = ug.sparql(sparql_query)
         except Exception as e:
-            console.print(f"[red]SPARQL error:[/red] {escape(str(e))}")
+            console.print(f"[red]SPARQL error:[/red] {safe(e)}")
             sys.exit(1)
 
         if as_json:
@@ -1498,7 +1498,7 @@ def query(
         try:
             emb = EmbeddingIndex.from_service(service)
         except ImportError as e:
-            console.print(f"[red]{escape(str(e))}[/red]")
+            console.print(f"[red]{safe(e)}[/red]")
             sys.exit(1)
 
         hits = emb.search(semantic_query, top_k=top_k)
