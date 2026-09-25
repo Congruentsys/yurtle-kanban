@@ -196,7 +196,10 @@ class HookEngine:
             if context.repo_root is None:
                 # a copy: the caller's context is never changed, so one reused
                 # across engines runs in each engine's own repo (#357)
+                timestamp = context.timestamp
                 context = replace(context, repo_root=self._repo_root)
+                # replace() re-runs __post_init__: keep the event's own time (#357)
+                context.timestamp = timestamp
             matched = self._matching_hooks(event, context)
             for hook_def in matched:
                 actions = hook_def.get("actions", [])
