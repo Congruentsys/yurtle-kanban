@@ -471,7 +471,7 @@ class KanbanService:
             if not item_id:
                 # Generate from filename
                 item_id = file_path.stem.upper().replace("-", "_")
-            item_id = str(item_id)  # `id: 42` is an int in YAML; IDs are text (#179)
+            item_id = str(_scalar_text(item_id))  # `id: 42` / `id: true` are text (#179, #245)
 
             item_type_str = frontmatter.get("type", "task")
             if item_type_str in (None, "") or isinstance(item_type_str, (int, float)):
@@ -500,7 +500,7 @@ class KanbanService:
             # Get title
             title = frontmatter.get("title", file_path.stem.replace("-", " ").title())
             if title is not None and not isinstance(title, str):
-                title = str(title)  # `title: 2024` (#179)
+                title = str(_scalar_text(title))  # `title: 2024` / `true` (#179, #245)
 
             # Parse optional fields
             # YAML reads `assignee: 5` / `priority: 1` as numbers; these are text
