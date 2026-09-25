@@ -45,14 +45,15 @@ def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
 
 
 def _available_themes(repo_root: Path | None = None) -> list[str]:
-    """Every theme name a config could use (#272)."""
+    """Every theme name a config could use (#272): only names that load as a theme
+    from some dir, not a broken file's (#352)."""
     names = set()
     for d in _theme_dirs(repo_root):
         try:
             names.update(p.stem for p in d.glob("*.yaml"))
         except OSError:
             continue
-    return sorted(names)
+    return sorted(n for n in names if _load_builtin_theme(n, repo_root) is not None)
 
 
 # theme sections every consumer walks as a mapping (`.items()`, `.get()`) (#351)
@@ -82,30 +83,36 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
 
     The cache is keyed by the theme FILE that wins the lookup, not by the name:
     two repos with different `.kanban/themes/nautical.yaml` never share an entry,
-    and a repo without an override still shares the built-in (#287)."""
+    and a repo without an override still shares the built-in (#287).
+
+    A file that doesn't parse, or isn't a mapping, is skipped with one warning and
+    the lookup falls through to the next dir (a broken override yields the built-in,
+    not no theme); it is cached as None so it is said once (#338, #352)."""
     for theme_dir in _theme_dirs(repo_root):
         theme_path = theme_dir / f"{theme_name}.yaml"
         try:
             if not theme_path.exists():
                 continue
             key = str(theme_path.resolve())
-            if key not in _theme_cache:
+        except OSError:
+            continue
+        if key not in _theme_cache:
+            try:
                 with open(theme_path) as f:
                     data = yaml.safe_load(f)
-                if not isinstance(data, dict):
-                    # a YAML list or scalar is no theme: treat it as missing, and
-                    # cache that so it is said once, not on every lookup (#338)
-                    logger.warning(
-                        f"theme file {theme_path} is not a mapping "
-                        f"({type(data).__name__}); ignored"
-                    )
-                    data = None
-                else:
-                    data = _drop_bad_sections(data, theme_path)
-                _theme_cache[key] = data
+            except Exception as e:
+                problem = f"could not be read or parsed ({type(e).__name__})"
+                data = None
+            else:
+                problem = f"is not a mapping ({type(data).__name__})"
+            if not isinstance(data, dict):
+                logger.warning(f"theme file {theme_path} {problem}; ignored")
+                data = None
+            else:
+                data = _drop_bad_sections(data, theme_path)  # (#351)
+            _theme_cache[key] = data
+        if _theme_cache[key] is not None:
             return _theme_cache[key]
-        except Exception:
-            continue
 
     return None
 
