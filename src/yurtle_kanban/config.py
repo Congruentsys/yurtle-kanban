@@ -88,6 +88,7 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
                     f"theme file {theme_path}: `{section}` is not a mapping "
                     f"({type(value).__name__}); ignored"
                 )
+    had_columns = bool(data.get("columns"))
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
         entries = data.get(section, {})
@@ -113,12 +114,24 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
         ("item_types", "id_prefix", _is_str, "text"),
     ):
         for entry, definition in data.get(section, {}).items():
+            value = definition.get(key)
+            if key in ("wip_limit", "order") and isinstance(value, float) and value.is_integer():
+                definition[key] = int(value)  # `3.0` is the number 3 (#391)
             if key in definition and not ok(definition[key]):
                 value = definition.pop(key)
                 logger.warning(
                     f"theme file {theme_path}: `{section}.{entry}.{key}` is not "
                     f"{want} ({type(value).__name__}); ignored"
                 )
+    # no columns is no column section: the board falls back to the defaults
+    # instead of drawing zero columns and hiding every item (#391)
+    if "columns" in data and not data["columns"]:
+        data.pop("columns")
+        if had_columns:
+            logger.warning(
+                f"theme file {theme_path}: `columns` has no usable column left; "
+                "using the default columns"
+            )
     # the theme's name is matched as text (epics look it up in a set) (#363)
     meta = data.get("theme", {})
     if "name" in meta and not isinstance(meta["name"], str):
