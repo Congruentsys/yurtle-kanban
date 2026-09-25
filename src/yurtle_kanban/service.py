@@ -2875,9 +2875,26 @@ class KanbanService:
             out = eol.apply(text)
         path.write_bytes(out.encode("utf-8"))
 
-    # a keep-chomping block scalar header: `|+`, `>+`, `|2+`, `|+2`, then an
-    # optional comment
-    _KEEP_BLOCK = re.compile(r"[|>](?:\d?\+|\+\d)[ \t]*(?:#.*)?$")
+    @staticmethod
+    def _value_preserving(original: str, *layouts: str) -> str:
+        """The first layout whose YAML keeps every value `original` had. A blank
+        run before `---` belongs to a `|+`/`>+` last value (any key form, any
+        nesting), so the key must go after it there and before it elsewhere
+        (#188, #211, #232); parsing decides, not a guess at the syntax."""
+        try:
+            old = yaml.safe_load(original)
+        except yaml.YAMLError:
+            return layouts[0]
+        if not isinstance(old, dict):
+            return layouts[0]
+        for layout in layouts:
+            try:
+                new = yaml.safe_load(layout)
+            except yaml.YAMLError:
+                continue
+            if isinstance(new, dict) and all(k in new and new[k] == v for k, v in old.items()):
+                return layout
+        return layouts[0]
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
@@ -2906,17 +2923,21 @@ class KanbanService:
                 pattern, lambda _: f"{field}: {value}", frontmatter, flags=re.MULTILINE,
             )
         else:
-            # Field doesn't exist — append after the last key; blank lines before
-            # the closing `---` stay where they are (#188)
-            body = frontmatter.rstrip()
-            gap = frontmatter[len(body) :].split("\n", 1)[1] if body else ""
-            last_key = re.findall(r"^[^\s#-][^:\n]*:[ \t]*(.*)$", body, flags=re.MULTILINE)
-            if last_key and self._KEEP_BLOCK.match(last_key[-1]):
-                # a `|+` / `>+` last value owns its trailing blank lines: the key
-                # goes after them, or the value would lose them (#211)
-                frontmatter = body + "\n" + gap + f"{field}: {value}\n"
-            else:
-                frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n" + gap
+            # Field doesn't exist — append after the last key, keeping the blank
+            # lines before the closing `---` where they are (#188). Only whole blank
+            # lines are split off: trailing spaces on the last line can be part of
+            # a block scalar's value (#232).
+            lines = frontmatter.splitlines(keepends=True)
+            k = len(lines)
+            while k and not lines[k - 1].strip():
+                k -= 1
+            body, gap = "".join(lines[:k]), "".join(lines[k:])
+            if body and not body.endswith("\n"):
+                body += "\n"
+            line = f"{field}: {value}\n"
+            frontmatter = self._value_preserving(
+                frontmatter, body + line + gap, body + gap + line
+            )
 
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
