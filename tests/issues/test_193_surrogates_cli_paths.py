@@ -271,3 +271,44 @@ class TestExperimentRun:
         code, out = _run(hdd, "experiment", "status", "EXPR-001")
         assert code == 0, out
         assert "Traceback" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# Round 2 — shell completion must stay silent; `move -m` is refused (pin)
+# ---------------------------------------------------------------------------
+
+
+class TestShellCompletion:
+    def test_bad_word_before_cursor_completes_quietly(self, sw: Path) -> None:
+        """Completion parses with resilient_parsing: no refusal on stdout (the shell
+        reads it as candidates), no click.exceptions.Exit traceback, rc 0."""
+        env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONDONTWRITEBYTECODE": "1"}
+        env.pop("PYTHONIOENCODING", None)
+        env["_YURTLE_KANBAN_COMPLETE"] = "bash_complete"
+        # surrogateescape str -> the raw bytes b"a\xffb" in the child's environment
+        env["COMP_WORDS"] = "yurtle-kanban create " + os.fsdecode(BAD) + " fea"
+        env["COMP_CWORD"] = "3"
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from yurtle_kanban.cli import main; main(prog_name='yurtle-kanban')",
+            ],
+            cwd=sw,
+            env=env,
+            capture_output=True,
+            timeout=120,
+        )
+        stdout = proc.stdout.decode("utf-8", "replace")
+        stderr = proc.stderr.decode("utf-8", "replace")
+        assert proc.returncode == 0, stdout + stderr
+        for name, text in (("stdout", stdout), ("stderr", stderr)):
+            assert "Traceback" not in text, f"{name}:\n{text}"
+            assert MSG not in text, f"{name}:\n{text}"
+
+
+class TestMoveMessage:
+    def test_bad_message_refused(self, sw: Path) -> None:
+        before = _snapshot(sw)
+        code, out = _run(sw, "move", "FEAT-001", "ready", "-m", BAD)
+        _assert_refused(sw, before, code, out)
