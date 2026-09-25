@@ -123,6 +123,50 @@ def _path_safe(value: str) -> str:
     return "_" if value in ("", ".", "..") else value
 
 
+def _clean_hooks(raw: Any, path: Path) -> dict[str, list[dict]]:
+    """The `hooks:` mapping with every part of the wrong shape dropped, one warning
+    each, naming the file, the event and the field (#425)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning(f"{path}: `hooks` is not a mapping ({type(raw).__name__}); ignored")
+        return {}
+    cleaned: dict[str, list[dict]] = {}
+    for event, hook_list in raw.items():
+        if hook_list is None:
+            continue
+        if not isinstance(hook_list, list):
+            logger.warning(
+                f"{path}: hooks for `{_text(event)}` are not a list "
+                f"({type(hook_list).__name__}); ignored"
+            )
+            continue
+        kept = []
+        for n, hook_def in enumerate(hook_list, 1):
+            problem = _hook_problem(hook_def)
+            if problem:
+                logger.warning(f"{path}: `{_text(event)}` hook {n}: {problem}; ignored")
+                continue
+            kept.append(hook_def)
+        cleaned[event] = kept
+    return cleaned
+
+
+def _hook_problem(hook_def: Any) -> str | None:
+    """Why one hook definition can't be used, or None."""
+    if not isinstance(hook_def, dict):
+        return f"is not a mapping ({type(hook_def).__name__})"
+    for key in ("actions", "item_types"):
+        value = hook_def.get(key)
+        if value is not None and not isinstance(value, list):
+            return f"`{key}` is not a list ({type(value).__name__})"
+    for key in ("from", "to"):
+        value = hook_def.get(key)
+        if value is not None and not isinstance(value, str):
+            return f"`{key}` is not a status name ({type(value).__name__})"
+    return None
+
+
 def _text(value: object) -> str:
     """`str(value)`, or its type name when even that raises (#417)."""
     try:
@@ -185,7 +229,9 @@ class HookEngine:
         try:
             content = path.read_text(encoding="utf-8")
             frontmatter = _extract_frontmatter(content)
-            self._hooks_config = frontmatter.get("hooks", {})
+            # a bad shape is dropped here with a warning, so trigger() and
+            # _matching_hooks only ever see lists of mappings (#425)
+            self._hooks_config = _clean_hooks(frontmatter.get("hooks"), path)
             if self._hooks_config:
                 hook_count = sum(len(v) for v in self._hooks_config.values())
                 logger.info(f"Loaded {hook_count} hook(s) from {path}")
@@ -235,7 +281,7 @@ class HookEngine:
                 context.timestamp = timestamp
             matched = self._matching_hooks(event, context)
             for hook_def in matched:
-                actions = hook_def.get("actions", [])
+                actions = hook_def.get("actions") or []
                 for action in actions:
                     if not isinstance(action, dict):
                         # a bare string or number in `actions:` isn't an action (#417)
