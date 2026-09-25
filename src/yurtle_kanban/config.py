@@ -61,6 +61,14 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
     return None
 
 
+def _ignore_list(data: dict[str, Any]) -> list[str]:
+    """`ignore` patterns from a config mapping: absent → the defaults; a bare
+    `ignore:` (YAML null) → none, not a crash in the scan (#194)."""
+    if "ignore" not in data:
+        return ["**/archive/**", "**/templates/**"]
+    return list(data["ignore"] or [])
+
+
 @dataclass
 class PathConfig:
     """Configuration for work item paths."""
@@ -128,7 +136,7 @@ class BoardConfig:
             wip_limits=wip_limits,
             wip_exempt_types=data.get("wip_exempt_types", []),
             gates=data.get("gates", {}),
-            ignore=data.get("ignore", ["**/archive/**", "**/templates/**"]),
+            ignore=_ignore_list(data),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -249,7 +257,7 @@ class KanbanConfig:
         paths = PathConfig(
             root=paths_data.get("root", "work/"),
             scan_paths=paths_data.get("scan_paths", []),
-            ignore=paths_data.get("ignore", ["**/archive/**", "**/templates/**"]),
+            ignore=_ignore_list(paths_data),
             features=paths_data.get("features"),
             bugs=paths_data.get("bugs"),
             epics=paths_data.get("epics"),
@@ -315,8 +323,8 @@ class KanbanConfig:
         if self.paths.scan_paths:
             data["kanban"]["paths"]["scan_paths"] = self.paths.scan_paths
 
-        if self.paths.ignore:
-            data["kanban"]["paths"]["ignore"] = self.paths.ignore
+        # `[]` is written too: left out, it would reload as the defaults (#194)
+        data["kanban"]["paths"]["ignore"] = list(self.paths.ignore)
 
         if self.gates:
             data["kanban"]["gates"] = self.gates
