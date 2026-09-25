@@ -18,7 +18,6 @@ import pytest
 from yurtle_kanban.config import BoardConfig, KanbanConfig, load_wip_policy
 from yurtle_kanban.models import Board, Column, WorkItem, WorkItemStatus, WorkItemType
 
-
 # ---------------------------------------------------------------------------
 # Column model tests
 # ---------------------------------------------------------------------------

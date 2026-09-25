@@ -20,7 +20,6 @@ from yurtle_kanban.hooks import (
     _extract_frontmatter,
 )
 
-
 # ─── Fixtures ──────────────────────────────────────────────────────────────
 
 
@@ -706,8 +705,6 @@ class TestRecursionGuard:
             "on_create": [{"actions": [{"type": "log"}]}],
         }
         depths_seen = []
-
-        original_exec = _execute_action
 
         def tracking_exec(action, context, callbacks=None):
             depths_seen.append(engine._depth)

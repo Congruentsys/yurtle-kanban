@@ -40,7 +40,6 @@ import logging.handlers
 def _no_uri_warnings():
     """Context manager that fails if rdflib emits URI warnings."""
     rdflib_logger = logging.getLogger("rdflib.term")
-    handler = logging.handlers.MemoryHandler(capacity=100)
 
     class _WarningCatcher(logging.Handler):
         def __init__(self):
@@ -58,7 +57,7 @@ def _no_uri_warnings():
     finally:
         rdflib_logger.removeHandler(catcher)
         assert not catcher.warnings, (
-            f"Unexpected URI warnings:\n" + "\n".join(catcher.warnings)
+            "Unexpected URI warnings:\n" + "\n".join(catcher.warnings)
         )
 
 
@@ -361,7 +360,6 @@ class TestUnifiedGraph:
 
     def test_related_with_spaces_no_uri_warning(self):
         """Related values with spaces should become Literals, not broken URIs (#59)."""
-        import logging
 
         item = _make_item(
             "EXP-100", "Test item",

@@ -21,7 +21,7 @@ repeat:
 ```
 
 **Before the first pick:** `git checkout -q main && git pull -q`, and make sure the check passes on `main`
-(`.venv/bin/python -m pytest -q && .venv/bin/ruff check src/`). A red `main` is the first item: fix it on a
+(`.venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/`). A red `main` is the first item: fix it on a
 branch through pairit before anything else. If `.venv` is missing, run
 `python3.11 -m venv .venv && .venv/bin/pip install -q -e ".[dev]"`.
 

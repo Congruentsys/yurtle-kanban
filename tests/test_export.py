@@ -1,11 +1,11 @@
 """Tests for export functionality."""
 
 import json
-from datetime import date
 from pathlib import Path
 
 import pytest
 
+from yurtle_kanban.export import export_html, export_json, export_markdown
 from yurtle_kanban.models import (
     Board,
     Column,
@@ -13,7 +13,6 @@ from yurtle_kanban.models import (
     WorkItemStatus,
     WorkItemType,
 )
-from yurtle_kanban.export import export_html, export_markdown, export_json
 
 
 @pytest.fixture
