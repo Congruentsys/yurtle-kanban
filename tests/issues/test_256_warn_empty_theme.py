@@ -65,9 +65,9 @@ def warnings_log(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCapture
 
 
 def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
-    return [
-        r.getMessage() for r in caplog.records if r.name == LOGGER and r.levelno >= logging.WARNING
-    ]
+    # the handler sits on both root (caplog) and our logger: one record, seen twice
+    records = {id(r): r for r in caplog.records}.values()
+    return [r.getMessage() for r in records if r.name == LOGGER and r.levelno >= logging.WARNING]
 
 
 def _empty_warnings(caplog: pytest.LogCaptureFixture, key: str) -> list[str]:
