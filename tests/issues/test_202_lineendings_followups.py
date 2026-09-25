@@ -109,11 +109,11 @@ def _timed_case(n_str: str) -> None:
     print(f"ELAPSED {elapsed:.3f}")
 
 
-def run_timed(n: int) -> float:
+def run_timed(n: int, case: str = "_timed_case") -> float:
     env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(SRC), str(HERE)])}
     code = (
-        "import sys; from test_202_lineendings_followups import _timed_case; "
-        "_timed_case(sys.argv[1])"
+        f"import sys; from test_202_lineendings_followups import {case}; "
+        f"{case}(sys.argv[1])"
     )
     try:
         proc = subprocess.run(
@@ -121,7 +121,7 @@ def run_timed(n: int) -> float:
             env=env, capture_output=True, text=True, timeout=TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        pytest.fail(f"{n}-line identical mixed file took over {TIMEOUT}s (bound {BOUND}s)")
+        pytest.fail(f"{case}: {n}-line mixed file took over {TIMEOUT}s (bound {BOUND}s)")
     assert proc.returncode == 0, proc.stderr
     return float(proc.stdout.split("ELAPSED")[-1])
 
@@ -188,3 +188,93 @@ def test_random_edits_roundtrip_the_lf_text() -> None:
         assert set(endings_of(out)) <= {"\n", "\r\n", "\r"}
         assert set(endings_of(out)) <= set(endings_of(raw)) | {eol.majority}, (raw, out)
     assert not failures, f"{len(failures)} lost lines, e.g. {failures[:3]!r}"
+
+
+# ---------------------------------------------------------------------------
+# 4. Round 2 (PR #205 review): the anchor split must not recurse per level
+# ---------------------------------------------------------------------------
+
+
+def staircase(n: int) -> tuple[str, str]:
+    """(raw, edited) for the review's staircase, about `n` old lines.
+
+    old = x1 j x2 j x3 j ...;  new = x2 x1 x3 x2 x4 x3 ...  Every anchor split
+    exposes exactly one new anchor in the gap, so recursing per anchor level
+    goes as deep as the file is long. Every 3rd old line ends CRLF (mixed).
+    """
+    m = n // 2
+    old = [line for k in range(1, m + 1) for line in (f"x{k}", "j")]
+    pairs = [(line, "\r\n" if i % 3 == 0 else "\n") for i, line in enumerate(old)]
+    new = [line for k in range(1, m + 1) for line in (f"x{k + 1}", f"x{k}")]
+    return raw_of(pairs), "\n".join(new) + "\n"
+
+
+def _staircase_case(n_str: str) -> None:
+    """Subprocess entry: apply the staircase edit, check it round-trips."""
+    raw, edited = staircase(int(n_str))
+    start = time.perf_counter()
+    out = roundtrip(raw, edited)  # RecursionError here is a failure
+    elapsed = time.perf_counter() - start
+    assert LineEndings.read(out)[0] == edited, "lost or merged lines"
+    print(f"ELAPSED {elapsed:.3f}")
+
+
+def test_staircase_small_roundtrips() -> None:
+    raw, edited = staircase(200)
+    assert LineEndings.read(roundtrip(raw, edited))[0] == edited
+
+
+def test_staircase_20k_is_fast_and_does_not_recurse() -> None:
+    elapsed = run_timed(20_000, "_staircase_case")
+    assert elapsed < BOUND, f"staircase 20k: {elapsed:.2f}s >= {BOUND}s"
+
+
+# ---------------------------------------------------------------------------
+# 5. Round 2: pin the anchor (patience) split — green now, red if it is dropped
+# ---------------------------------------------------------------------------
+
+N_UNIQUE = 1000
+
+
+def _unique_case() -> tuple[str, str, str]:
+    """(raw, edited, expected): 1000 unique lines, every 3rd CRLF (334 CRLF).
+
+    One line is inserted at index 5 and line n-5 is changed. Lines the edit left
+    unchanged keep their ending; the inserted and changed lines take the majority
+    (LF, 666 vs 334).
+    """
+    n = N_UNIQUE
+    pairs = [(f"line {i}", "\r\n" if i % 3 == 0 else "\n") for i in range(n)]
+    lines = [line for line, _ in pairs] + [""]
+    lines[n - 5] = "changed"
+    lines.insert(5, "inserted")
+    edited = "\n".join(lines)
+    exp = list(pairs)
+    exp[n - 5] = ("changed", "\n")
+    exp.insert(5, ("inserted", "\n"))
+    return raw_of(pairs), edited, raw_of(exp)
+
+
+def test_unique_lines_insert_and_change_keep_every_crlf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A tiny difflib budget so the 1000-line middle goes down the anchor path
+    monkeypatch.setattr(LineEndings, "_DIFFLIB_MAX_PAIRS", 4)
+    raw, edited, expected = _unique_case()
+    out = roundtrip(raw, edited)
+    changed_was_crlf = (N_UNIQUE - 5) % 3 == 0
+    assert out.count("\r\n") == 334 - changed_was_crlf
+    assert out == expected
+
+
+def test_unique_lines_without_anchors_would_lose_crlf(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Mutant guard: with no anchors (position-for-position), the shifted lines
+    # lose their CRLF — so the test above really exercises the anchor split
+    monkeypatch.setattr(LineEndings, "_DIFFLIB_MAX_PAIRS", 4)
+    monkeypatch.setattr(LineEndings, "_anchors", staticmethod(lambda *a: []))
+    raw, edited, expected = _unique_case()
+    out = roundtrip(raw, edited)
+    assert out != expected
+    assert out.count("\r\n") < 334 - 5
