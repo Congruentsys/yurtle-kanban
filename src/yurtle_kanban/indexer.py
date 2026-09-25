@@ -10,13 +10,16 @@ board's own ``BoardConfig.ignore`` (#124, #129, #153).
 from collections.abc import Iterator
 from pathlib import Path
 
-from rdflib import RDF, BNode, Graph, Namespace, URIRef
+from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 
 from yurtle_kanban._graph_iri import set_self_iri
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 
 KB = Namespace("https://yurtle.dev/kanban/")
+# where yurtle_rdflib maps YAML frontmatter keys (`id:`, `status:`) (#426)
+SCHEMA = Namespace("https://yurtle.dev/schema/")
+PM = Namespace("https://yurtle.dev/pm/")
 
 
 class WorkItemIndexer:
@@ -87,20 +90,37 @@ class WorkItemIndexer:
                     break
 
             if not item_type:
+                # YAML frontmatter gives `rdf:type "expedition"` (a literal) on the
+                # document subject; an IRI type above always wins (#426)
+                by_value = {t.value: t for t in WorkItemType}
+                found = sorted(
+                    (list(WorkItemType).index(by_value[str(o).lower()]), str(s))
+                    for s, o in g.subject_objects(RDF.type)
+                    if isinstance(o, Literal) and not isinstance(s, BNode)
+                    and str(o).lower() in by_value
+                )
+                if found:
+                    index, iri = found[0]
+                    item_type, subject = list(WorkItemType)[index], URIRef(iri)
+
+            if not item_type:
                 return None
 
-            # Get ID (from the filename when the item has none)
-            own_id = g.value(subject, KB.id)
+            # Get ID (from the filename when the item has none); frontmatter maps
+            # `id:` to schema:id, a turtle block writes kb:id (#426)
+            own_id = g.value(subject, KB.id) or g.value(subject, SCHEMA.id)
             item_id = str(own_id) if own_id is not None else file_path.stem.upper()
 
-            # Get status
-            status = WorkItemStatus.BACKLOG
-            own_status = g.value(subject, KB.status)
-            if own_status is not None:
+            # Get status: the first by WorkItemStatus order when there are several,
+            # so the pick is stable (#426); frontmatter maps `status:` to pm:status
+            known = []
+            for value in [*g.objects(subject, KB.status), *g.objects(subject, PM.status)]:
                 try:
-                    status = WorkItemStatus(str(own_status).split("/")[-1])
+                    known.append(WorkItemStatus(str(value).split("/")[-1]))
                 except ValueError:
                     pass
+            order = list(WorkItemStatus)
+            status = min(known, key=order.index) if known else WorkItemStatus.BACKLOG
 
             # Get title from frontmatter or first heading
             title = file_path.stem.replace("-", " ").replace("_", " ").title()
