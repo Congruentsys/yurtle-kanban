@@ -120,3 +120,5 @@ columns:
 `wip_limit` is a whole number: `0` (or leaving it out) means no limit, and a negative
 value is ignored with a warning. A theme with no `columns` gets the default columns
 (Backlog, Ready 5, In Progress 3, Review 2, Done) on single and multi-board setups alike.
+YAML 1.1 reads a bare `1e20` (no dot) as text, so a limit written that way is ignored
+with the same warning; write limits as plain whole numbers.

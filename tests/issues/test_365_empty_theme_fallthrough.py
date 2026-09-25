@@ -125,7 +125,7 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 def _naming(caplog: pytest.LogCaptureFixture, path: Path) -> list[str]:
-    """Warnings that name ``path`` (as given or resolved)."""
+    """Warnings that name ``path`` (as given, absolute, or resolved)."""
     forms = {str(path), str(path.absolute())}
     try:
         forms.add(str(path.resolve()))
