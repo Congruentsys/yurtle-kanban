@@ -2887,7 +2887,7 @@ class KanbanService:
             check_encodable(field, value)
 
     @staticmethod
-    def _normalize_priority(priority: str | None) -> str | None:
+    def _normalize_priority(priority: object) -> str | None:
         """Lowercase a priority and reject anything outside PRIORITIES (#125).
 
         Every write path (CLI, MCP, hooks, direct callers) goes through the
@@ -2899,12 +2899,12 @@ class KanbanService:
             return None
         if not isinstance(priority, str):  # e.g. `priority: 1` in a hooks config (#153)
             raise ValueError(
-                unknown_priority_message(repr(priority))
+                unknown_priority_message(priority)
             )
         normalized = priority.strip().lower()
         if normalized not in PRIORITIES:
             raise ValueError(
-                unknown_priority_message(repr(priority))
+                unknown_priority_message(priority)
             )
         return normalized
 

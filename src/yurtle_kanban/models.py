@@ -23,8 +23,11 @@ if TYPE_CHECKING:
 PRIORITIES = ("critical", "high", "medium", "low")
 
 
-def unknown_priority_message(shown: str) -> str:
-    """The one wording for a refused priority, everywhere (CLI, MCP, service; #171)."""
+def unknown_priority_message(value: object) -> str:
+    """The one wording for a refused priority, everywhere (CLI, MCP, service; #171):
+    a printable string as typed, anything else as its repr (`5`, `True`, `['high']`,
+    `'a\\x1bb'`), so no control character reaches a terminal raw (#190, #161)."""
+    shown = value if isinstance(value, str) and value.isprintable() else repr(value)
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 

@@ -372,14 +372,13 @@ class KanbanMCPServer:
         return {"item": item.to_dict()}
 
     @staticmethod
-    def _check_priority(priority: str | None) -> dict[str, Any] | None:
+    def _check_priority(priority: object) -> dict[str, Any] | None:
         """Reject a priority outside PRIORITIES, any case like the CLI (#106, #125);
         the schema enum is not enforced. The service lowercases what it writes."""
         if priority is None:
             return None
-        if not isinstance(priority, str):  # a JSON number / bool / list (#171)
-            return {"error": unknown_priority_message(repr(priority))}
-        if priority.strip().lower() not in PRIORITIES:
+        # a JSON number / bool / list is refused too, never `.strip()`ed (#171)
+        if not isinstance(priority, str) or priority.strip().lower() not in PRIORITIES:
             return {"error": unknown_priority_message(priority)}
         return None
 
