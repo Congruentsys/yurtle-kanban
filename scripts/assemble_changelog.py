@@ -65,7 +65,11 @@ def headings(text: str, prefix: str, first_line: int = 1) -> list[tuple[int, int
     """(start, end) of each line starting with `prefix`, outside fenced code
     blocks: a ``` or ~~~ block may quote a `### ` or `## [` line (#197)."""
     found, pos, fence, opened = [], 0, "", 0
-    for number, line in enumerate(text.splitlines(keepends=True), first_line):
+    # only "\n" breaks a line: splitlines() would also split on form feed, \u2028
+    # or a lone \r inside an entry and shift line numbers and headings (#260)
+    lines = text.split("\n")
+    lines = [ln + "\n" for ln in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+    for number, line in enumerate(lines, first_line):
         if fence:
             m = FENCE_CLOSE.fullmatch(line)
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
