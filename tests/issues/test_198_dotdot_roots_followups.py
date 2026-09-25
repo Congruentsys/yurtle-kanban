@@ -110,7 +110,7 @@ def _no_git_path(tmp_path: Path, monkeypatch) -> None:
 def _run_init(args: list[str]):
     result = CliRunner().invoke(main, ["init", "--theme", "software", *args])
     tb = ""
-    if result.exc_info and not isinstance(result.exception, SystemExit):
+    if result.exception is not None and not isinstance(result.exception, SystemExit):
         tb = "".join(traceback.format_exception(*result.exc_info))
     return result, tb
 
