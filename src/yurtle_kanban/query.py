@@ -536,12 +536,12 @@ class QueryEngine:
 
         # Status inclusions
         if parsed.status_include:
-            values = " ".join(f"kb:{s}" for s in parsed.status_include)
+            values = ", ".join(f"kb:{s}" for s in parsed.status_include)  # IN needs commas (#64)
             filters.append(f"FILTER(?status IN ({values}))")
 
         # Type filters
         if parsed.type_filter:
-            type_values = " ".join(f"kb:{t.title()}" for t in parsed.type_filter)
+            type_values = ", ".join(f"kb:{t.title()}" for t in parsed.type_filter)
             wheres.append(f"?item a ?type . FILTER(?type IN ({type_values}))")
 
         # ID range
