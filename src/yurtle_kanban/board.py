@@ -6,6 +6,7 @@ Provides beautiful terminal-based kanban board visualization.
 
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -60,7 +61,7 @@ def render_board(board: Board, console: Console | None = None) -> None:
 
     # Title
     console.print()
-    console.print(f"[bold]{board.name}[/bold]", justify="center")
+    console.print(f"[bold]{escape(str(board.name))}[/bold]", justify="center")
     console.print()
 
     # Get column counts
@@ -90,7 +91,10 @@ def render_board(board: Board, console: Console | None = None) -> None:
             wip_str = f" ({count})"
 
         color = STATUS_COLORS.get(col.id, "white")
-        table.add_column(f"[{color}]{col.name}{wip_str}[/{color}]", width=25)
+        # fold, don't crop: a narrow column cut `[bold]x[/bold]` to `[bold]x[…` (#179)
+        table.add_column(
+            f"[{color}]{escape(str(col.name))}{wip_str}[/{color}]", width=25, overflow="fold"
+        )
 
     # Group items by status
     items_by_status: dict[str, list[WorkItem]] = {}
@@ -126,11 +130,11 @@ def render_board(board: Board, console: Console | None = None) -> None:
             if item_type:
                 limit = col.get_wip_limit(item_type)
                 console.print(
-                    f"  - {col.name} ({item_type}): {count}/{limit}"
+                    f"  - {escape(str(col.name))} ({escape(str(item_type))}): {count}/{limit}"
                 )
             else:
                 console.print(
-                    f"  - {col.name}: {count}/{col.wip_limit}"
+                    f"  - {escape(str(col.name))}: {count}/{col.wip_limit}"
                 )
 
     console.print()
@@ -143,26 +147,26 @@ def render_card(item: WorkItem) -> Panel:
 
     # ID and type icon
     icon = TYPE_ICONS.get(item.item_type.value, "•")
-    lines.append(f"[dim]{icon}[/dim] [bold]{item.id}[/bold]")
+    lines.append(f"[dim]{icon}[/dim] [bold]{escape(item.id)}[/bold]")
 
     # Title (truncate if too long)
     title = item.title
     if len(title) > 20:
         title = title[:17] + "..."
-    lines.append(title)
+    lines.append(escape(title))
 
     # Priority badge
     if item.priority:
         color = PRIORITY_COLORS.get(item.priority, "white")
-        lines.append(f"[{color}]●[/{color}] {item.priority}")
+        lines.append(f"[{color}]●[/{color}] {escape(str(item.priority))}")
 
     # Assignee
     if item.assignee:
-        lines.append(f"[dim]@{item.assignee}[/dim]")
+        lines.append(f"[dim]@{escape(str(item.assignee))}[/dim]")
 
     # Tags
     if item.tags:
-        tag_str = " ".join(f"[cyan]#{t}[/cyan]" for t in item.tags[:2])
+        tag_str = " ".join(f"[cyan]#{escape(str(t))}[/cyan]" for t in item.tags[:2])
         lines.append(tag_str)
 
     content = "\n".join(lines)
@@ -194,7 +198,7 @@ def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
     console.print()
     console.print(
         Panel(
-            f"[bold]{icon} {item.id}: {item.title}[/bold]",
+            f"[bold]{icon} {escape(item.id)}: {escape(item.title)}[/bold]",
             border_style="cyan",
         )
     )
@@ -206,22 +210,22 @@ def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
 
     table.add_row("Type", item.item_type.value)
     table.add_row("Status", item.status.value)
-    table.add_row("Priority", item.priority or "medium")
-    table.add_row("Assignee", item.assignee or "unassigned")
+    table.add_row("Priority", escape(str(item.priority or "medium")))
+    table.add_row("Assignee", escape(str(item.assignee or "unassigned")))
 
     if item.created:
         table.add_row("Created", item.created.isoformat())
 
     if item.tags:
-        table.add_row("Tags", ", ".join(item.tags))
+        table.add_row("Tags", escape(", ".join(str(t) for t in item.tags)))
 
     if item.depends_on:
-        table.add_row("Depends On", ", ".join(item.depends_on))
+        table.add_row("Depends On", escape(", ".join(str(d) for d in item.depends_on)))
 
     if item.graph and len(item.graph) > 0:
         table.add_row("Triples", str(len(item.graph)))
 
-    table.add_row("File", str(item.file_path))
+    table.add_row("File", escape(str(item.file_path)))
 
     console.print(table)
 
@@ -229,7 +233,7 @@ def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
     if item.description:
         console.print()
         console.print("[bold]Description[/bold]")
-        console.print(Panel(item.description, border_style="dim"))
+        console.print(Panel(escape(item.description), border_style="dim"))
 
     # Comments
     if item.comments:
@@ -237,8 +241,8 @@ def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
         console.print("[bold]Comments[/bold]")
         for comment in item.comments:
             timestamp = comment.created_at.strftime("%Y-%m-%d %H:%M")
-            console.print(f"  [dim]{timestamp}[/dim] [bold]{comment.author}[/bold]")
-            console.print(f"    {comment.content}")
+            console.print(f"  [dim]{timestamp}[/dim] [bold]{escape(str(comment.author))}[/bold]")
+            console.print(f"    {escape(str(comment.content))}")
 
     console.print()
 
@@ -276,11 +280,11 @@ def render_list(items: list[WorkItem], console: Console | None = None) -> None:
         assignee = assignee or "-"
 
         table.add_row(
-            f"{icon} {item.id}",
-            title,
+            f"{icon} {escape(item.id)}",
+            escape(title),
             f"[{status_color}]{item.status.value}[/{status_color}]",
-            f"[{priority_color}]{item.priority or 'medium'}[/{priority_color}]",
-            assignee,
+            f"[{priority_color}]{escape(str(item.priority or 'medium'))}[/{priority_color}]",
+            escape(assignee),
         )
 
     console.print(table)
@@ -316,7 +320,7 @@ def render_roadmap(
 
         for type_name, group_items in groups.items():
             icon = TYPE_ICONS.get(type_name, "•")
-            console.print(f"\n[bold]{icon} {type_name.title()}s[/bold]")
+            console.print(f"\n[bold]{icon} {escape(type_name.title())}s[/bold]")
             _render_roadmap_table(group_items, console, ranked=ranked)
     else:
         _render_roadmap_table(items, console, ranked=ranked)
@@ -358,17 +362,17 @@ def _render_roadmap_table(items: list[WorkItem], console: Console, ranked: bool 
             row.append(rank_str)
         row.extend([
             str(i),
-            item.id,
-            title,
-            f"[{priority_color}]{item.priority or 'medium'}[/{priority_color}]",
+            escape(item.id),
+            escape(title),
+            f"[{priority_color}]{escape(str(item.priority or 'medium'))}[/{priority_color}]",
             f"[{status_color}]{item.status.value}[/{status_color}]",
-            assignee,
+            escape(assignee),
         ])
         if ranked:
             summary = item.value_summary or ""
             if len(summary) > 35:
                 summary = summary[:32] + "..."
-            row.append(summary)
+            row.append(escape(summary))
 
         table.add_row(*row)
 
@@ -400,7 +404,10 @@ def render_history(
             groups.setdefault(key, []).append(item)
 
         for assignee_name, group_items in groups.items():
-            console.print(f"\n[bold]@{assignee_name}[/bold] ({len(group_items)} items)")
+            console.print(
+                f"\n[bold]@{escape(str(assignee_name))}[/bold] "
+                f"({len(group_items)} items)"
+            )
             _render_history_table(group_items, console)
     elif by_type:
         groups2: dict[str, list[WorkItem]] = {}
@@ -410,7 +417,10 @@ def render_history(
 
         for type_name, group_items in groups2.items():
             icon = TYPE_ICONS.get(type_name, "•")
-            console.print(f"\n[bold]{icon} {type_name.title()}s[/bold] ({len(group_items)} items)")
+            console.print(
+                f"\n[bold]{icon} {escape(type_name.title())}s[/bold] "
+                f"({len(group_items)} items)"
+            )
             _render_history_table(group_items, console)
     else:
         _render_history_table(items, console)
@@ -421,7 +431,10 @@ def render_history(
     if items:
         assignees = set(i.assignee for i in items if i.assignee)
         if assignees:
-            console.print(f"[bold]Contributors:[/bold] {', '.join(sorted(assignees))}")
+            console.print(
+                "[bold]Contributors:[/bold] "
+                f"{escape(', '.join(str(a) for a in sorted(assignees)))}"
+            )
 
     console.print()
 
@@ -450,7 +463,7 @@ def _render_history_table(items: list[WorkItem], console: Console) -> None:
             assignee = ", ".join(str(a) for a in assignee if a)
         assignee = assignee or "-"
 
-        table.add_row(item.id, title, completed, assignee)
+        table.add_row(escape(item.id), escape(title), completed, escape(assignee))
 
     console.print(table)
 
@@ -482,7 +495,7 @@ def render_stats(board: Board, console: Console | None = None) -> None:
         color = STATUS_COLORS.get(col.id, "white")
 
         table.add_row(
-            f"[{color}]{col.name}[/{color}]",
+            f"[{color}]{escape(str(col.name))}[/{color}]",
             str(count),
             f"[{color}]{bar}[/{color}]",
         )

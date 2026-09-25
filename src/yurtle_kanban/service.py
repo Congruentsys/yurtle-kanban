@@ -366,8 +366,12 @@ class KanbanService:
             if not item_id:
                 # Generate from filename
                 item_id = file_path.stem.upper().replace("-", "_")
+            item_id = str(item_id)  # `id: 42` is an int in YAML; IDs are text (#179)
 
             item_type_str = frontmatter.get("type", "task")
+            if item_type_str in (None, "") or isinstance(item_type_str, (int, float)):
+                # `type:` empty or `type: 5` falls back; a list still warns (#179)
+                item_type_str = "task"
             try:
                 item_type = WorkItemType.from_string(item_type_str)
             except ValueError:
@@ -377,6 +381,9 @@ class KanbanService:
                     return None
 
             status_str = frontmatter.get("status", "backlog")
+            if status_str in (None, "") or isinstance(status_str, (int, float)):
+                # `status:` empty or numeric falls back; a list still warns (#179)
+                status_str = "backlog"
             try:
                 status = WorkItemStatus.from_string(status_str)
             except ValueError:
@@ -387,6 +394,8 @@ class KanbanService:
 
             # Get title
             title = frontmatter.get("title", file_path.stem.replace("-", " ").title())
+            if title is not None and not isinstance(title, str):
+                title = str(title)  # `title: 2024` (#179)
 
             # Parse optional fields
             priority = frontmatter.get("priority")

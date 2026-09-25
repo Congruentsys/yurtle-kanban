@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from rdflib import RDFS, Namespace
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from .models import WorkItem, WorkItemStatus, WorkItemType
@@ -118,7 +119,7 @@ def render_research_interlinks(items: list[WorkItem], console: Console) -> None:
             color = _STATUS_COLORS.get(p.status, "white")
             label = _first_triple(p, RDFS.label) or p.title
             console.print(
-                f"    [bold]{p.id}[/bold]  {label[:50]}  "
+                f"    [bold]{escape(p.id)}[/bold]  {escape(str(label)[:50])}  "
                 f"[{color}]({p.status.value})[/{color}]"
             )
 
@@ -139,10 +140,10 @@ def render_research_interlinks(items: list[WorkItem], console: Console) -> None:
             label = _first_triple(h, RDFS.label) or h.title
             color = _STATUS_COLORS.get(h.status, "white")
             table.add_row(
-                h.id,
-                label[:35],
-                paper_display,
-                target[:14],
+                escape(h.id),
+                escape(str(label)[:35]),
+                escape(str(paper_display)),
+                escape(str(target)[:14]),
                 f"[{color}]{h.status.value}[/{color}]",
             )
         console.print(table)
@@ -165,10 +166,10 @@ def render_research_interlinks(items: list[WorkItem], console: Console) -> None:
             label = _first_triple(e, RDFS.label) or e.title
             color = _STATUS_COLORS.get(e.status, "white")
             table.add_row(
-                e.id,
-                label[:35],
-                hyp_display,
-                paper_display,
+                escape(e.id),
+                escape(str(label)[:35]),
+                escape(str(hyp_display)),
+                escape(str(paper_display)),
                 f"[{color}]{e.status.value}[/{color}]",
             )
         console.print(table)
@@ -186,7 +187,9 @@ def render_research_interlinks(items: list[WorkItem], console: Console) -> None:
             label = _first_triple(m, RDFS.label) or m.title
             unit = _first_triple(m, MEASURE.unit) or "-"
             category = _first_triple(m, MEASURE.category) or "-"
-            table.add_row(m.id, label[:30], unit, category)
+            table.add_row(
+                escape(m.id), escape(str(label)[:30]), escape(str(unit)), escape(str(category))
+            )
         console.print(table)
 
     # Literature
@@ -196,8 +199,8 @@ def render_research_interlinks(items: list[WorkItem], console: Console) -> None:
             color = _STATUS_COLORS.get(lit.status, "white")
             label = _first_triple(lit, RDFS.label) or lit.title
             explores_uri = _first_triple(lit, LIT.explores)
-            explores = f" \u2192 {_obj_id(explores_uri)}" if explores_uri else ""
+            explores = f" \u2192 {escape(str(_obj_id(explores_uri)))}" if explores_uri else ""
             console.print(
-                f"    [bold]{lit.id}[/bold]  {label[:40]}{explores}  "
+                f"    [bold]{escape(lit.id)}[/bold]  {escape(str(label)[:40])}{explores}  "
                 f"[{color}]({lit.status.value})[/{color}]"
             )
