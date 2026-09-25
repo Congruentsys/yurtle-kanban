@@ -114,6 +114,12 @@ def git_toplevel(cwd: Path) -> Path | None:
     return Path(out) if out else None
 
 
+def _scalar_text(value: Any) -> Any:
+    """A number or boolean read from YAML as text; None, strings and lists as
+    they are (#206)."""
+    return str(value) if isinstance(value, (int, float)) else value
+
+
 class LineEndings:
     """A text file's original line endings, so an edit can keep them (#128, #151).
 
@@ -483,8 +489,10 @@ class KanbanService:
                 title = str(title)  # `title: 2024` (#179)
 
             # Parse optional fields
-            priority = frontmatter.get("priority")
-            assignee = frontmatter.get("assignee")
+            # YAML reads `assignee: 5` / `priority: 1` as numbers; these are text
+            # everywhere they're shown (#179, #206). A list stays a list.
+            priority = _scalar_text(frontmatter.get("priority"))
+            assignee = _scalar_text(frontmatter.get("assignee"))
             tags = frontmatter.get("tags", [])
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",")]
@@ -518,7 +526,7 @@ class KanbanService:
                     priority_rank = int(priority_rank)
                 except (ValueError, TypeError):
                     priority_rank = None
-            value_summary = frontmatter.get("value_summary")
+            value_summary = _scalar_text(frontmatter.get("value_summary"))
 
             # Parse resolution fields
             resolution = frontmatter.get("resolution")
