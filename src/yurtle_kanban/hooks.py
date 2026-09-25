@@ -123,6 +123,11 @@ def _path_safe(value: str) -> str:
     return "_" if value in ("", ".", "..") else value
 
 
+# HookEvents nothing in yurtle-kanban triggers yet (#440): stale detection and a
+# WIP-exceeded check are not wired. Remove one here when its emitter lands.
+_NOT_EMITTED = frozenset({HookEvent.STALE_DETECTED.value, HookEvent.WIP_EXCEEDED.value})
+
+
 def _clean_hooks(raw: Any, path: Path) -> dict[str, list[dict]]:
     """The `hooks:` mapping with every part of the wrong shape dropped, one warning
     each, naming the file, the event and the field (#425)."""
@@ -143,6 +148,12 @@ def _clean_hooks(raw: Any, path: Path) -> dict[str, list[dict]]:
             continue
         if hook_list is None:
             continue
+        if event in _NOT_EMITTED and hook_list:
+            # kept, so they run once the event is wired, but not silently dead (#440)
+            logger.warning(
+                f"{path}: `{event}` hooks are declared, but yurtle-kanban doesn't emit "
+                "this event yet; they won't run"
+            )
         if not isinstance(hook_list, list):
             logger.warning(
                 f"{path}: hooks for `{_text(event)}` are not a list "
