@@ -126,7 +126,11 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 def _naming(caplog: pytest.LogCaptureFixture, path: Path) -> list[str]:
     """Warnings that name ``path`` (as given or resolved)."""
-    forms = {str(path), str(path.resolve())}
+    forms = {str(path), str(path.absolute())}
+    try:
+        forms.add(str(path.resolve()))
+    except (OSError, RuntimeError):  # a symlink loop raises on Python < 3.13 (#393)
+        pass
     return [m for m in _warnings(caplog) if any(f in m for f in forms)]
 
 
