@@ -148,10 +148,16 @@ class UnifiedGraph:
         # IRI: they come from the item(s) above (#385, #395). A blank node is not an
         # item (e.g. `move`'s `kb:statusChange [ kb:status … ]` history): it merges
         if item.graph is not None:
-            for triple in item.graph:
-                if triple[1] in _FRONTMATTER_OWNED and not isinstance(triple[0], BNode):
+            # `<>` in a block means this item, but the parser resolves it against the
+            # process cwd (`file:///<cwd>/`), one node shared by every file: map it
+            # to the item's own IRI (#404)
+            phantom = URIRef(Path.cwd().as_uri() + "/")
+            for s, p, o in item.graph:
+                s = item_uri if s == phantom else s
+                o = item_uri if o == phantom else o
+                if p in _FRONTMATTER_OWNED and not isinstance(s, BNode):
                     continue
-                self._graph.add(triple)
+                self._graph.add((s, p, o))
 
     def add_items(self, items: list[WorkItem]) -> None:
         """Add multiple work items."""
