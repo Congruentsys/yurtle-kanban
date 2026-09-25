@@ -114,14 +114,29 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     # block-style `related:` list, `--- # comment` openers and continuation lines
     fm = service._parse_frontmatter(content)
     if not isinstance(fm, dict):
-        console.print(f"[yellow]Warning: No frontmatter in {escape(item_id)}[/yellow]")
+        reason = service._unparseable_reason(item.file_path, content)
+        if reason is None:
+            console.print(f"[yellow]Warning: No frontmatter in {escape(item_id)}[/yellow]")
+        else:  # it's there but broken: say why, as the scan does (#139, #188)
+            console.print(
+                f"[yellow]Warning: {escape(item_id)}'s frontmatter doesn't parse "
+                f"({escape(reason)}); not linked[/yellow]",
+                soft_wrap=True,
+            )
         return False
 
     related = fm.get("related") or []  # `related: null` / empty → []
     if isinstance(related, str):
         related = [r.strip() for r in related.split(",") if r.strip()]
     elif not isinstance(related, list):
-        related = [related]
+        # a mapping or a number isn't a list of IDs; writing it back as
+        # `["{...}"]` would corrupt it (#188)
+        console.print(
+            f"[yellow]Warning: {escape(item_id)}'s `related:` is a "
+            f"{type(related).__name__}, not a list of IDs; not linked[/yellow]",
+            soft_wrap=True,
+        )
+        return False
     related = [str(r) for r in related]
 
     if epic_id in related:
@@ -137,6 +152,14 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     KanbanService._write_item_text(item.file_path, new_content, eol)
     item.related = related
     return True
+
+
+def _already_linked(service, item_id: str, epic_id: str) -> bool:
+    """True when the item's `related` already lists epic_id (a malformed
+    `related:` such as a number or a mapping never does, #188)."""
+    item = service._items.get(item_id)
+    related = item.related if item is not None else None
+    return isinstance(related, list) and epic_id in related
 
 
 # ---------------------------------------------------------------------------
@@ -207,8 +230,9 @@ def _do_create(title: str, priority: str, items: str | None, push: bool):
         for linked_id in item_ids:
             if _update_item_related(service, linked_id, item.id):
                 console.print(f"  Linked {escape(linked_id)} → {escape(item.id)}")
-            else:
-                console.print(f"  {escape(linked_id)} already linked or not found")
+            elif _already_linked(service, linked_id, item.id):
+                console.print(f"  {escape(linked_id)} already linked")
+            # otherwise _update_item_related printed why it didn't link
 
 
 def _do_show(epic_id: str):
@@ -311,8 +335,9 @@ def _do_add(epic_id: str, item_id: str):
         item = service._items.get(item_id)
         if item is None:
             raise click.ClickException(f"Item {item_id} not found")
-        else:
+        elif _already_linked(service, item_id, epic_id):
             console.print(f"{escape(item_id)} is already linked to {escape(epic_id)}")
+        # otherwise _update_item_related printed why it didn't link
 
 
 # ---------------------------------------------------------------------------

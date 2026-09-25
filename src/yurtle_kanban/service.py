@@ -520,13 +520,20 @@ class KanbanService:
     def _note_unparseable(self, file_path: Path, content: str) -> None:
         """Record why a file that looks like an item (starts with `---`) didn't
         parse (#139). Plain notes and `_TEMPLATE*` files stay silent."""
+        reason = self._unparseable_reason(file_path, content)
+        if reason is not None:
+            self.parse_warnings.append((file_path, reason))
+
+    def _unparseable_reason(self, file_path: Path, content: str) -> str | None:
+        """Why frontmatter that is there doesn't parse, or None when there is none
+        to report (no `---`, a `_TEMPLATE*` file, Turtle frontmatter) (#139, #188)."""
         if not content.startswith("---") or file_path.name.startswith("_TEMPLATE"):
-            return
+            return None
         split = self._split_frontmatter(content)
         if split is not None and _TURTLE_FRONTMATTER.match(split[0]):
             # Yurtle frontmatter may be Turtle, not YAML (`@prefix …`): a document,
             # not a broken item
-            return
+            return None
         if split is None:
             first_newline = content.find("\n")
             later = content[first_newline + 1 :] if first_newline != -1 else ""
@@ -546,7 +553,7 @@ class KanbanService:
                     if not data
                     else "frontmatter is not a key: value mapping"
                 )
-        self.parse_warnings.append((file_path, reason))
+        return reason
 
     def _parse_frontmatter(self, content: str) -> dict[str, Any] | None:
         """Parse YAML frontmatter from markdown content."""
@@ -2787,9 +2794,12 @@ class KanbanService:
                 pattern, lambda _: f"{field}: {value}", frontmatter, flags=re.MULTILINE,
             )
         else:
-            # Field doesn't exist — append before end
+            # Field doesn't exist — append after the last key; blank lines before
+            # the closing `---` stay where they are (#188)
             body = frontmatter.rstrip()
-            frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n"
+            gap = frontmatter[len(body) :].split("\n", 1)[1] if body else ""
+            gap = gap if not gap.strip() else ""
+            frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n" + gap
 
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
