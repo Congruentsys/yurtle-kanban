@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rdflib import RDF, Graph, Literal, Namespace, URIRef
+from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
 from ._logging import get_logger
@@ -50,6 +50,13 @@ _IRI_UNSAFE = frozenset(' <>"{}|\\^`')
 
 def _iri_safe(value: str) -> bool:
     return not any(ch in _IRI_UNSAFE for ch in value)
+
+
+# single-valued facts frontmatter owns: a fenced block can't redefine them (#395)
+_FRONTMATTER_OWNED = frozenset({
+    KB.id, KB.status, KB.title, KB.priority, KB.created, KB.priorityRank,
+    KB.description, KB.numericId,
+})
 
 
 class UnifiedGraph:
@@ -136,11 +143,13 @@ class UnifiedGraph:
         # Numeric ID for range queries
         self._graph.add((item_uri, KB.numericId, Literal(item.numeric_id, datatype=XSD.integer)))
 
-        # Merge per-file RDF graph (fenced turtle/yurtle blocks). The numeric ID is
-        # derived from the item's own ID above; a block can't redefine it (#385)
+        # Merge per-file RDF graph (fenced turtle/yurtle blocks). A block may add
+        # facts but not redefine the single-valued ones frontmatter owns, about any
+        # IRI: they come from the item(s) above (#385, #395). A blank node is not an
+        # item (e.g. `move`'s `kb:statusChange [ kb:status … ]` history): it merges
         if item.graph is not None:
             for triple in item.graph:
-                if triple[1] == KB.numericId:
+                if triple[1] in _FRONTMATTER_OWNED and not isinstance(triple[0], BNode):
                     continue
                 self._graph.add(triple)
 
@@ -576,7 +585,7 @@ class QueryEngine:
         filters = []
         bindings: dict[str, Any] = {}  # user values, bound rather than spliced in
         wheres = [
-            "?item kb:id ?id .",
+            "?item kb:id ?id . FILTER(isIRI(?item))",  # never a blank node (#395)
             "?item kb:status ?status .",
             "?item kb:numericId ?numId .",
         ]
@@ -650,8 +659,9 @@ class QueryEngine:
         items = []
         seen: set[str] = set()
         for row in results:
-            # DISTINCT still leaves one row per numericId when an item's block adds a
-            # second one: keep the first (highest) row per id (#373)
+            # a guard: blocks can no longer add a second kb:id / kb:numericId
+            # (#385, #395), but one duplicate row per id is dropped here if the graph
+            # ever holds two; the first row is the highest numericId (#373)
             if row["id"] in seen:
                 continue
             seen.add(row["id"])
