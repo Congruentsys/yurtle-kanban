@@ -31,11 +31,11 @@ def unknown_priority_message(value: object) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
-def check_encodable(field: str, value: str | list[str] | None) -> None:
+def check_encodable(field: str, value: object) -> None:
     """Refuse text that can't be written as UTF-8: a lone surrogate, which is what
     Python's surrogateescape makes of undecodable argv bytes (#172). Checked before
     anything is written, so a bad value never leaves a 0-byte item file behind."""
-    for text in value if isinstance(value, list) else [value]:
+    for text in value if isinstance(value, (list, tuple)) else [value]:
         if isinstance(text, str):
             try:
                 text.encode("utf-8")

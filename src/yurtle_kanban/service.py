@@ -2217,6 +2217,7 @@ class KanbanService:
         import json
         from datetime import datetime
 
+        self._check_text(prefix=prefix)  # before any write or commit (#219)
         prefix = prefix.upper()
 
         # Step 1: Fetch latest from remote
@@ -2918,7 +2919,7 @@ class KanbanService:
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
     @staticmethod
-    def _check_text(**fields: str | list[str] | None) -> None:
+    def _check_text(**fields: object) -> None:
         """Refuse user text that can't be written as UTF-8 (#172)."""
         for field, value in fields.items():
             check_encodable(field, value)
@@ -3291,6 +3292,7 @@ class KanbanService:
         """
         if rank < 1:
             raise ValueError(f"Rank must be >= 1, got {rank}")
+        self._check_text(value_summary=value_summary)  # before any write (#219)
 
         item = self.get_item(item_id)
         if not item:
@@ -3365,6 +3367,10 @@ class KanbanService:
                 f"Invalid experiment ID format: {expr_id!r} — "
                 "expected PREFIX-ID (e.g., EXPR-130 or EXPR-131.5)"
             )
+        # before the run folder exists (#219)
+        self._check_text(being=being, run_by=run_by)
+        for key, val in (params or {}).items():
+            self._check_text(**{"params key": key, f"params[{key!r}]": val})
 
         # Resolve run_by from git config if not provided
         if run_by is None:
