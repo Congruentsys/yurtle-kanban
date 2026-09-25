@@ -127,17 +127,34 @@ class LineEndings:
             # and difflib is quadratic on long runs of identical lines
             eol = used.pop() if used else self.majority
             return text.replace("\n", eol) if eol != "\n" else text
-        import difflib
-
         new_lines = text.split("\n")
         new_endings = [self.majority] * (len(new_lines) - 1) + [""]
-        matcher = difflib.SequenceMatcher(a=self.lines, b=new_lines, autojunk=False)
-        for tag, i1, i2, j1, _ in matcher.get_opcodes():
-            if tag == "equal":
-                for k in range(i2 - i1):
-                    j = j1 + k
-                    if j < len(new_lines) - 1 and self.endings[i1 + k]:
-                        new_endings[j] = self.endings[i1 + k]
+
+        def keep(i: int, j: int) -> None:  # new line j is old line i, unchanged
+            if j < len(new_lines) - 1 and self.endings[i]:
+                new_endings[j] = self.endings[i]
+
+        # An edit touches a few lines: the unchanged prefix and suffix map line for
+        # line, and only the changed middle is diffed; difflib is quadratic on long
+        # runs of identical lines, so it never sees the whole file (#181)
+        old, n_old, n_new = self.lines, len(self.lines), len(new_lines)
+        pre = 0
+        while pre < min(n_old, n_new) and old[pre] == new_lines[pre]:
+            keep(pre, pre)
+            pre += 1
+        suf = 0
+        while suf < min(n_old, n_new) - pre and old[-1 - suf] == new_lines[-1 - suf]:
+            keep(n_old - 1 - suf, n_new - 1 - suf)
+            suf += 1
+        mid_old, mid_new = old[pre : n_old - suf], new_lines[pre : n_new - suf]
+        if mid_old and mid_new:
+            import difflib
+
+            matcher = difflib.SequenceMatcher(a=mid_old, b=mid_new, autojunk=False)
+            for tag, i1, i2, j1, _ in matcher.get_opcodes():
+                if tag == "equal":
+                    for k in range(i2 - i1):
+                        keep(pre + i1 + k, pre + j1 + k)
         return "".join(line + end for line, end in zip(new_lines, new_endings))
 
 class KanbanService:
