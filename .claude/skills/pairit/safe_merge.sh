@@ -112,8 +112,13 @@ if [ -n "$wt" ]; then
     # (config on AND patterns set) explains skip-worktree entries; a hand-set flag,
     # or assume-unchanged, has to be cleared file by file
     sparse=""
+    # patterns set: `sparse-checkout list` prints them, but a cone that keeps only
+    # root files prints nothing while its file still holds `/*` and `!/*/` (#288)
+    sparse_file=$(git -C "$wt" rev-parse --git-path info/sparse-checkout 2>/dev/null)
+    case $sparse_file in /*) ;; ?*) sparse_file="$wt/$sparse_file" ;; esac
     if [ "$(git -C "$wt" config --bool core.sparseCheckout 2>/dev/null)" = true ] &&
-      [ -n "$(git -C "$wt" sparse-checkout list 2>/dev/null)" ]; then
+      { [ -n "$(git -C "$wt" sparse-checkout list 2>/dev/null)" ] ||
+        [ -s "$sparse_file" ]; }; then
       sparse=yes
     fi
     echo "NOT MERGING #$PR: worktree $wt has files whose edits git hides:"
@@ -122,7 +127,8 @@ if [ -n "$wt" ]; then
       echo "  - it is a sparse checkout; its files outside the cone are skip-worktree"\
         "(run git sparse-checkout disable in it)"
     fi
-    if printf '%s\n' "$hidden" | grep -q 'assume-unchanged' ||
+    # anchored: a file whose path contains "assume-unchanged" isn't one (#288)
+    if printf '%s\n' "$hidden" | grep -qE '^(assume-unchanged|skip-worktree \+ assume-unchanged):' ||
       { [ -z "$sparse" ] && printf '%s\n' "$hidden" | grep -q '^skip-worktree'; }; then
       echo "  - hand-set flags (clear the flag): git update-index --no-skip-worktree"\
         "/ --no-assume-unchanged on the files above"
