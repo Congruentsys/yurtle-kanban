@@ -40,7 +40,7 @@ ITEM = Namespace("https://yurtle.dev/kanban/item/")
 # ---------------------------------------------------------------------------
 
 
-_ITEM_ID_RE = re.compile(r"^[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*$")
+_ITEM_ID_RE = re.compile(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*")  # used with fullmatch (#183)
 
 
 class UnifiedGraph:
@@ -55,7 +55,7 @@ class UnifiedGraph:
         """Return an ITEM URI ref for valid IDs, or a Literal for free text."""
         if not isinstance(value, str):
             return Literal(str(value))
-        if _ITEM_ID_RE.match(value):
+        if _ITEM_ID_RE.fullmatch(value):  # `$` would accept a trailing newline
             return ITEM[value]
         return Literal(value)
 

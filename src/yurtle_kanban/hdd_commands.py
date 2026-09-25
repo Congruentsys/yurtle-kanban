@@ -18,6 +18,7 @@ from rich.markup import escape
 
 from .models import PRIORITIES, WorkItemType
 from .template_engine import TemplateEngine
+from .turtle_builder import InvalidTurtleName
 
 console = Console()
 
@@ -34,7 +35,7 @@ def _render(engine: TemplateEngine, theme: str, item_type: str, variables: dict)
     clean CLI error, not a traceback (#161)."""
     try:
         return engine.render(theme, item_type, variables)
-    except ValueError as e:
+    except InvalidTurtleName as e:  # only this: another ValueError is a real bug (#183)
         raise click.ClickException(str(e)) from e
 
 

@@ -17,6 +17,11 @@ from .models import turtle_string
 _SAFE_LOCAL_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
+class InvalidTurtleName(ValueError):  # noqa: N818 — the name #183 specifies
+    """A value refused as a Turtle local name. Its own type, so a CLI can turn
+    exactly this into a clean error and let any other ValueError surface (#183)."""
+
+
 def _escape_turtle_string(value: str) -> str:
     """Escape a value for a Turtle "..." literal (the shared escaper, #141)."""
     return turtle_string(value)
@@ -28,14 +33,14 @@ def _validate_turtle_local_name(value: str) -> str:
     Rejects characters that could break TTL syntax or inject triples.
     Only allows alphanumeric, dot, hyphen, and underscore.
 
-    Raises ValueError if the value contains disallowed characters.
+    Raises InvalidTurtleName (a ValueError) if the value contains disallowed characters.
     """
     # fullmatch: `$` in `.match` would also accept a trailing newline (`H1\n`)
     if not _SAFE_LOCAL_NAME.fullmatch(value):
         # the value as typed when printable (`H1\b`), else its repr, so control
         # characters (ESC, CR, newlines) never reach the terminal raw (#161)
         shown = f'"{value}"' if value.isprintable() else repr(value)
-        raise ValueError(
+        raise InvalidTurtleName(
             f"Invalid Turtle local name: {shown} — only [A-Za-z0-9._-] are allowed"
         )
     return value
