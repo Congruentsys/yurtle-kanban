@@ -117,3 +117,29 @@ def test_yk_loop_holds_only_bucket_three():
     tri = yk_triage().lower()
     assert "needs-decision" in tri
     assert re.search(r"bucket[ -]3", tri), "only a bucket-3 item is held with needs-decision"
+
+
+def yk_overview_triage() -> str:
+    text = YK_LOOP.read_text()
+    m = re.search(r"^\s*3\. TRIAGE(.*?)^\s*4\. LAND", text, re.S | re.M)
+    assert m, "yk-loop repeat: block step 3 (TRIAGE) not found"
+    return m.group(1)
+
+
+def test_yk_loop_overview_triage_steers_and_builds():
+    step = yk_overview_triage().lower()
+    assert "steer" in step, "overview step 3 must name the /steer classifier"
+    assert "build" in step, "overview step 3 must say a bucket-1/2 decision is built"
+    assert "never built" not in step, "overview step 3 still says a decision is held, never built"
+
+
+def test_yk_loop_hold_bullets_are_candidates():
+    assert "candidate" in yk_triage().lower(), "the hold bullets are candidates, not holds"
+
+
+def test_yk_loop_reliance_is_measured_by_fleet_scan():
+    tri = " ".join(yk_triage().lower().split())
+    sentences = [s for s in re.split(r"(?<=[.;])\s", tri) if "rely on" in s]
+    assert sentences, "triage must still discuss behaviour someone may rely on"
+    assert any("fleet" in s and ("measur" in s or "scan" in s) for s in sentences), \
+        "'rely on' must be measured first with a read-only fleet scan"
