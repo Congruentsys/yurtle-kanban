@@ -204,6 +204,20 @@ class EmbeddingHit:
     item: WorkItem | None = None
 
 
+def _importable(module: str) -> bool:
+    """Whether `module` can be imported, without importing it (a `None` entry in
+    `sys.modules` means it is blocked)."""
+    import importlib.util
+    import sys
+
+    if module in sys.modules:
+        return sys.modules[module] is not None
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 class EmbeddingIndex:
     """Semantic search over work item titles and descriptions.
 
@@ -214,6 +228,16 @@ class EmbeddingIndex:
     DEFAULT_MODEL = "all-MiniLM-L6-v2"
 
     def __init__(self, cache_dir: Path | None = None, model_name: str | None = None):
+        # say up front when the search extra is missing, so callers can fall back to
+        # graph-only instead of failing later inside search() (#346)
+        missing = [
+            m for m in ("numpy", "sentence_transformers") if not _importable(m)
+        ]
+        if missing:
+            raise ImportError(
+                f"{' and '.join(missing)} not installed: semantic search needs "
+                "sentence-transformers. Install with: pip install yurtle-kanban[search]"
+            )
         self._model_name = model_name or self.DEFAULT_MODEL
         self._model = None  # lazy load
         self._ids: list[str] = []
@@ -514,6 +538,11 @@ class QueryEngine:
         self._emb = embedding_index
         self._decomposer = NLDecomposer()
         self._alpha = alpha  # weight for graph match in combined score
+
+    @property
+    def semantic_enabled(self) -> bool:
+        """Whether semantic ranking is available (the search extra is installed)."""
+        return self._emb is not None
 
     def sparql(self, query: str) -> list[dict[str, str]]:
         """Direct SPARQL query pass-through."""
