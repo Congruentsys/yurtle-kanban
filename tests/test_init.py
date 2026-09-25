@@ -9,6 +9,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban.cli import _get_skills_dir, _get_templates_dir, main
 
 
@@ -547,7 +548,7 @@ class TestInitWritesThemeRoot:
         expected_file = tmp_path / type_dir / f"{prefix}-001-probe.md"
         assert expected_file.is_file(), (
             f"created item not at {type_dir}{prefix}-001-probe.md; found "
-            f"{[str(p.relative_to(tmp_path)) for p in tmp_path.rglob('*probe*')]}"
+            f"{[str(p.relative_to(tmp_path)) for p in glob_outside_git(tmp_path, '*probe*')]}"
         )
 
         listed = self._listed_ids(tmp_path, monkeypatch)
@@ -575,7 +576,7 @@ class TestInitWritesThemeRoot:
     @pytest.mark.parametrize("theme", ["software", "nautical", "hdd"])
     def test_scaffolded_templates_not_listed(self, tmp_path, monkeypatch, theme):
         self._run(tmp_path, monkeypatch, "init", "--theme", theme)
-        assert list(tmp_path.rglob("_TEMPLATE.md")), "non-vacuity: no templates on disk"
+        assert list(glob_outside_git(tmp_path, "_TEMPLATE.md")), "non-vacuity: no templates on disk"
         listed = self._listed_ids(tmp_path, monkeypatch)
         assert listed == [], f"fresh board lists {listed}"
 
@@ -638,7 +639,9 @@ class TestInitWritesThemeRoot:
         )
 
         self._run(tmp_path, monkeypatch, "create", "feature", "probe")
-        found = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("FEAT-001*"))
+        found = sorted(
+            str(p.relative_to(tmp_path)) for p in glob_outside_git(tmp_path, "FEAT-001*")
+        )
         assert found == ["features/FEAT-001-probe.md"], (
             f"flat theme: create feature landed at {found}, expected features/FEAT-001-probe.md"
         )
@@ -653,7 +656,7 @@ class TestInitWritesThemeRoot:
 
         on_disk = sorted(
             str(p.relative_to(tmp_path))
-            for p in tmp_path.rglob("*.md")
+            for p in glob_outside_git(tmp_path, "*.md")
             if p.name.startswith(("FEAT-", "BUG-"))
         )
         assert on_disk == ["bugs/BUG-001-x.md", "features/FEAT-001-probe.md"], on_disk
@@ -833,7 +836,9 @@ class TestInitExplicitPathScaffolding:
         ]
         assert not missing, (
             f"init --theme {theme} --path custom/ did not scaffold {missing}; found "
-            f"{sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob('_TEMPLATE.md'))}"
+            + str(sorted(
+                str(p.relative_to(tmp_path)) for p in glob_outside_git(tmp_path, "_TEMPLATE.md")
+            ))
         )
 
     @pytest.mark.parametrize("theme", THEMES)
@@ -884,7 +889,9 @@ class TestInitExplicitPathScaffolding:
         self._init_custom(tmp_path, monkeypatch, theme)
         self.H._run(tmp_path, monkeypatch, "create", item_type, "probe")
 
-        found = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob(f"{prefix}-001*"))
+        found = sorted(
+            str(p.relative_to(tmp_path)) for p in glob_outside_git(tmp_path, f"{prefix}-001*")
+        )
         assert found == [f"custom/{folder}/{prefix}-001-probe.md"], found
         # The folder create wrote into is the one init scaffolded.
         assert (tmp_path / "custom" / folder / "_TEMPLATE.md").is_file(), (
@@ -918,13 +925,13 @@ class TestInitExplicitPathScaffolding:
 
         items = {
             f.parent
-            for f in tmp_path.rglob("*-001-probe.md")
-            if rel(f).split("/")[0] not in (".git", ".claude", ".kanban")
+            for f in glob_outside_git(tmp_path, "*-001-probe.md")
+            if rel(f).split("/")[0] not in (".claude", ".kanban")
         }
         templates = {
             f.parent
-            for f in tmp_path.rglob("_TEMPLATE.md")
-            if rel(f).split("/")[0] not in (".git", ".claude", ".kanban")
+            for f in glob_outside_git(tmp_path, "_TEMPLATE.md")
+            if rel(f).split("/")[0] not in (".claude", ".kanban")
         }
         assert len(items) == len(type_ids), sorted(rel(p) for p in items)
         stray_items = sorted(rel(p) for p in items - templates)
@@ -988,6 +995,6 @@ class TestInitExplicitPathScaffolding:
         assert self.H._theme_type_paths("spec") == {}, "non-vacuity: spec gained paths"
         self.H._run(tmp_path, monkeypatch, "init", "--theme", "spec", "--path", "custom/")
         self.H._run(tmp_path, monkeypatch, "create", "task", "probe")
-        found = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob("TASK-001*")]
+        found = [str(p.relative_to(tmp_path)) for p in glob_outside_git(tmp_path, "TASK-001*")]
         assert len(found) == 1 and found[0].startswith("custom/"), found
         assert self.H._listed_ids(tmp_path, monkeypatch) == ["TASK-001"]

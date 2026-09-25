@@ -33,7 +33,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from tests.issues._snapshot import files_outside_git
+from tests.issues._snapshot import files_outside_git, glob_outside_git
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItemStatus, WorkItemType, check_encodable
 from yurtle_kanban.service import KanbanService
@@ -445,4 +445,4 @@ class TestCyclicContainers:
             timeout=15,
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        assert list(sw.rglob("FEAT-002*.md")), proc.stdout + proc.stderr
+        assert list(glob_outside_git(sw, "FEAT-002*.md")), proc.stdout + proc.stderr

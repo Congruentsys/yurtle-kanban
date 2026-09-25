@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.issues._snapshot import files_outside_git
+from tests.issues._snapshot import files_outside_git, glob_outside_git
 
 MSG = "invalid UTF-8"
 BAD = b"a\xffb"  # undecodable argv bytes -> "a\udcffb" under surrogateescape
@@ -140,7 +140,7 @@ class TestEpicCreate:
         code, out = _run(sw, *cmd, GOOD)
         assert code == 0, out
         assert "Traceback" not in out, out
-        assert any(GOOD in p.read_text("utf-8") for p in sw.rglob("EPIC-*.md")), out
+        assert any(GOOD in p.read_text("utf-8") for p in glob_outside_git(sw, "EPIC-*.md")), out
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ class TestRankSummary:
         code, out = _run(sw, "rank", "FEAT-001", "1", "--summary", GOOD)
         assert code == 0, out
         assert "Traceback" not in out, out
-        assert any(GOOD in p.read_text("utf-8") for p in sw.rglob("FEAT-001*.md")), out
+        assert any(GOOD in p.read_text("utf-8") for p in glob_outside_git(sw, "FEAT-001*.md")), out
 
 
 # ---------------------------------------------------------------------------

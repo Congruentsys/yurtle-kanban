@@ -9,7 +9,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from tests.issues._snapshot import paths_outside_git
+from tests.issues._snapshot import glob_outside_git, paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemStatus, WorkItemType
@@ -1614,7 +1614,7 @@ def _created_files(repo: Path, prefix: str) -> list[Path]:
     """All work-item files with the given ID prefix, repo-relative, outside .kanban/."""
     return sorted(
         p.relative_to(repo)
-        for p in repo.rglob(f"{prefix}-*.md")
+        for p in glob_outside_git(repo, f"{prefix}-*.md")
         if ".kanban" not in p.relative_to(repo).parts
     )
 
@@ -3068,7 +3068,7 @@ class TestTypeNamedFolders:
 
         created = sorted(
             p.relative_to(tmp_path)
-            for p in tmp_path.rglob("*-001-probe.md")
+            for p in glob_outside_git(tmp_path, "*-001-probe.md")
             if ".kanban" not in p.relative_to(tmp_path).parts
         )
         assert created == [Path(expected)], created
@@ -4793,7 +4793,8 @@ class TestBoardRootOutsideRepo:
 
             files = sorted(p for p in outside.rglob("FEAT-*.md"))
             assert len(files) == 2, files
-            assert not list(repo.rglob("FEAT-*.md")), list(repo.rglob("FEAT-*.md"))
+            in_repo = list(glob_outside_git(repo, "FEAT-*.md"))
+            assert not in_repo, in_repo
 
             ids = self._list_ids(runner)
             assert {"FEAT-001", "FEAT-002"} <= ids, ids

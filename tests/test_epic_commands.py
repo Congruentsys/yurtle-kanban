@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 from yurtle_kanban.service import KanbanService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures — Nautical theme (voyages)
@@ -486,7 +486,7 @@ class TestEpicCreatePriority:
     """epic create -p must reach both frontmatter and the kb:priority triple (#99)."""
 
     def _epic_text(self, software_repo: Path) -> str:
-        return next(software_repo.rglob("EPIC-*.md")).read_text()
+        return next(glob_outside_git(software_repo, "EPIC-*.md")).read_text()
 
     def test_explicit_priority_written(self, software_runner, software_repo):
         result = software_runner.invoke(
@@ -509,7 +509,7 @@ class TestEpicCreatePriority:
         """`-p "very high"` would write the invalid Turtle `kb:very high`."""
         result = software_runner.invoke(main, ["epic", "create", "Auth", "-p", "very high"])
         assert result.exit_code == 2
-        assert not list(software_repo.rglob("EPIC-*.md"))
+        assert not list(glob_outside_git(software_repo, "EPIC-*.md"))
 
 
 # ---------------------------------------------------------------------------
@@ -529,7 +529,7 @@ class TestThemePathsUnderConfiguredRoot:
         assert result.exit_code == 0, result.output
 
         files = sorted(
-            p.relative_to(software_repo) for p in software_repo.rglob("EPIC-*.md")
+            p.relative_to(software_repo) for p in glob_outside_git(software_repo, "EPIC-*.md")
         )
         assert len(files) == 1, files
         assert files[0].parts[0] == "work", (
@@ -552,7 +552,7 @@ class TestThemePathsUnderConfiguredRoot:
         )
         assert result.exit_code == 0, result.output
         files = sorted(
-            p.relative_to(nautical_repo) for p in nautical_repo.rglob("VOY-*.md")
+            p.relative_to(nautical_repo) for p in glob_outside_git(nautical_repo, "VOY-*.md")
         )
         assert len(files) == 1, files
         assert files[0].parent == Path("kanban-work/voyages")
@@ -607,7 +607,7 @@ class TestTemplateValuesRoundTrip:
         result = runner.invoke(main, [command, "create", value])
         assert result.exit_code == 0, (result.output, result.exception)
 
-        files = list(repo.rglob(glob))
+        files = list(glob_outside_git(repo, glob))
         assert len(files) == 1, files
         fm = _epic_frontmatter(files[0])
         assert fm["title"] == value
@@ -629,7 +629,7 @@ class TestTemplateValuesRoundTrip:
             main, ["epic", "create", "User Auth Overhaul"], catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
-        text = next(software_repo.rglob("EPIC-*.md")).read_text()
+        text = next(glob_outside_git(software_repo, "EPIC-*.md")).read_text()
         assert 'title: "User Auth Overhaul"\n' in text
         assert "\n# User Auth Overhaul\n" in text
 

@@ -7,6 +7,7 @@ FileNotFoundError mid-way. Pruning `.git` from the walk itself avoids that.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,6 +27,29 @@ def paths_outside_git(root: Path, suffix: str = "") -> Iterator[Path]:
         for name in dirs + names:
             if name != ".git" and name.endswith(suffix):
                 yield Path(dirpath) / name
+
+
+def glob_outside_git(root: Path, pattern: str) -> Iterator[Path]:
+    """`root.rglob(pattern)` minus `.git` and everything under it, without entering it (#266).
+
+    Same Paths in the same order as Python 3.11's rglob for a simple name pattern: each
+    directory's matches (files and dirs, in scandir order) before its subdirectories,
+    which are visited depth-first; symlinked directories are not followed. Matching is
+    `fnmatchcase` on the name, as PosixPath does. Path-containing or `**` patterns are
+    rejected rather than half-emulated.
+    """
+    if "/" in pattern or os.sep in pattern or "**" in pattern:
+        raise ValueError(f"glob_outside_git takes a name pattern, not {pattern!r}")
+    if not root.is_dir():
+        return
+    with os.scandir(root) as it:
+        entries = list(it)
+    for entry in entries:
+        if entry.name != ".git" and fnmatch.fnmatchcase(entry.name, pattern):
+            yield root / entry.name
+    for entry in entries:
+        if entry.name != ".git" and entry.is_dir() and not entry.is_symlink():
+            yield from glob_outside_git(root / entry.name, pattern)
 
 
 def files_outside_git(repo: Path) -> dict[str, bytes]:
