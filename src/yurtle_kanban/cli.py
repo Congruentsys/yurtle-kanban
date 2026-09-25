@@ -843,6 +843,8 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             status, limit = wip.split(":", 1)
             try:
                 wip_limits[status] = int(limit)
+                if wip_limits[status] < 0:  # the same rule as a config limit (#420)
+                    raise ValueError
             except ValueError:
                 console.print(f"[red]Invalid WIP limit: {safe(wip)}[/red]")
                 sys.exit(1)

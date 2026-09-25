@@ -5,6 +5,7 @@ Supports both single-board (v1) and multi-board (v2) configurations.
 Multi-board is opt-in: detected when config has 'version: 2.0' and 'boards' key.
 """
 
+import copy
 import os
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -16,6 +17,8 @@ import yaml
 from ._logging import get_logger
 
 logger = get_logger("yurtle-kanban")
+
+_NO_RAW: Any = object()  # a BoardConfig not loaded from config.yaml (#420)
 
 # Cache for loaded themes
 _theme_cache: dict[str, dict[str, Any] | None] = {}  # None: not a mapping (#338)
@@ -283,6 +286,9 @@ class BoardConfig:
     wip_limits: dict[str, int | dict[str, int | None] | None] | None = field(
         default_factory=dict
     )
+    # what config.yaml said, kept so a save never rewrites the user's limits; the
+    # cleaned `wip_limits` above is what runs (#420)
+    raw_wip_limits: Any = field(default=_NO_RAW, repr=False, compare=False)
     wip_exempt_types: list[str] = field(default_factory=list)
     gates: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     ignore: list[str] = field(default_factory=lambda: ["**/archive/**", "**/templates/**"])
@@ -322,6 +328,7 @@ class BoardConfig:
             # a bare key (YAML null) means empty, never None (#194, #204)
             scan_paths=data.get("scan_paths") or [],
             wip_limits=wip_limits,
+            raw_wip_limits=copy.deepcopy(raw_wip),
             wip_exempt_types=data.get("wip_exempt_types") or [],
             gates=data.get("gates") or {},
             ignore=_ignore_list(data),
@@ -338,8 +345,9 @@ class BoardConfig:
             result["scan_paths"] = self.scan_paths
         # Serialize wip_limits: None means "explicitly unlimited" (must be preserved),
         # empty dict {} means "no overrides" (omit for cleaner output)
-        if self.wip_limits is None or self.wip_limits:
-            result["wip_limits"] = self.wip_limits
+        wip_limits = self.wip_limits if self.raw_wip_limits is _NO_RAW else self.raw_wip_limits
+        if wip_limits is None or wip_limits:
+            result["wip_limits"] = wip_limits
         if self.wip_exempt_types:
             result["wip_exempt_types"] = self.wip_exempt_types
         if self.gates:
@@ -675,7 +683,8 @@ def _clean_wip_limits(raw: Any, where: str) -> dict[str, Any]:
                 )
                 if keep:
                     per_type[item_type] = value
-            cleaned[column] = per_type
+            if per_type or not limit:  # all dropped: no override, the theme's applies (#420)
+                cleaned[column] = per_type
         else:
             keep, value = _wip_limit_value(limit, f"{where} wip_limits.{column}")
             if keep:
