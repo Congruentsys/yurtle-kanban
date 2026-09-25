@@ -33,7 +33,6 @@ except ImportError:
 
 import contextlib
 import logging
-import logging.handlers
 
 
 @contextlib.contextmanager
