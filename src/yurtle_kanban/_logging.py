@@ -51,7 +51,10 @@ def _escaped_traceback(exc_info: Any) -> str:
             for attr in ("msg", "text"):  # formatted from these, not from _str
                 value = getattr(te, attr, None)
                 if isinstance(value, str):
-                    setattr(te, attr, escape_nonprintable(value))
+                    # a source line's own trailing newline is layout, not content:
+                    # keep it, so the formatter strips it as usual (#252)
+                    end = "\n" if attr == "text" and value.endswith("\n") else ""
+                    setattr(te, attr, escape_nonprintable(value[: len(value) - len(end)]) + end)
         todo += [t for t in (te.__cause__, te.__context__) if t is not None]
         todo += list(getattr(te, "exceptions", None) or [])
     text = "".join(top.format())
