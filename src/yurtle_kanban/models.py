@@ -234,7 +234,7 @@ class Column:
     def is_over_wip(self, count: int, item_type: str | None = None) -> bool:
         """Check if column is over WIP limit, optionally for a specific type."""
         limit = self.get_wip_limit(item_type)
-        if limit is None:
+        if not limit:  # None or 0: no limit, as the board shows it (#402)
             return False
         return count > limit
 

@@ -68,7 +68,8 @@ def _is_int(value: Any) -> bool:
 
 
 def _is_int_or_none(value: Any) -> bool:
-    return value is None or _is_int(value)  # a null WIP limit means "no limit"
+    # a null (or 0) WIP limit means "no limit"; a negative one is nonsense (#402)
+    return value is None or (_is_int(value) and value >= 0)
 
 
 def _is_str(value: Any) -> bool:
@@ -108,20 +109,20 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
         )
     # and one level further: the fields consumers compare, sort or join (#378)
     for section, key, ok, want in (
-        ("columns", "wip_limit", _is_int_or_none, "a whole number"),
+        ("columns", "wip_limit", _is_int_or_none, "a whole number, 0 or more"),
         ("columns", "order", _is_int, "a whole number"),
         ("item_types", "path", _is_str, "text"),
         ("item_types", "id_prefix", _is_str, "text"),
     ):
         for entry, definition in data.get(section, {}).items():
-            value = definition.get(key)
-            if key in ("wip_limit", "order") and isinstance(value, float) and value.is_integer():
-                definition[key] = int(value)  # `3.0` is the number 3 (#391)
+            raw = definition.get(key)
+            if key in ("wip_limit", "order") and isinstance(raw, float) and raw.is_integer():
+                definition[key] = int(raw)  # `3.0` is the number 3 (#391)
             if key in definition and not ok(definition[key]):
-                value = definition.pop(key)
+                dropped = definition.pop(key)
                 logger.warning(
                     f"theme file {theme_path}: `{section}.{entry}.{key}` is not "
-                    f"{want} ({type(value).__name__}); ignored"
+                    f"{want} ({type(dropped).__name__}); ignored"
                 )
     # no columns is no column section: the board falls back to the defaults
     # instead of drawing zero columns and hiding every item (#391)

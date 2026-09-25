@@ -1118,16 +1118,17 @@ class KanbanService:
                 )
         else:
             # Default columns
+            # the same defaults as a single board's (#402)
             columns = [
                 Column(id="backlog", name="Backlog", order=1),
-                Column(id="ready", name="Ready", order=2),
+                Column(id="ready", name="Ready", order=2, wip_limit=overrides.get("ready", 5)),
                 Column(
                     id="in_progress",
                     name="In Progress",
                     order=3,
                     wip_limit=overrides.get("in_progress", 3),
                 ),
-                Column(id="review", name="Review", order=4),
+                Column(id="review", name="Review", order=4, wip_limit=overrides.get("review", 2)),
                 Column(id="done", name="Done", order=5),
             ]
 
