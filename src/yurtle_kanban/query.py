@@ -19,12 +19,12 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from rdflib import RDF, Graph, Literal, Namespace
 from rdflib.namespace import XSD
 
-from .models import WorkItem, turtle_string
+from .models import WorkItem
 
 if TYPE_CHECKING:
     from .service import KanbanService
@@ -154,15 +154,19 @@ class UnifiedGraph:
                 query = declaration + query
         return query
 
-    def sparql(self, query: str) -> list[dict[str, str]]:
+    def sparql(
+        self, query: str, bindings: dict[str, Any] | None = None
+    ) -> list[dict[str, str]]:
         """Execute a SPARQL SELECT query and return results as list of dicts.
 
         Standard prefixes (kb:, item:, xsd:) are auto-prepended if used but
-        not declared in the query.
+        not declared in the query. `bindings` pre-binds variables (rdflib
+        initBindings): values never pass through the query text, where rdflib
+        expands `\\uXXXX` escapes before parsing (#184).
         """
         query = self._prepend_prefixes(query)
         results = []
-        for row in self._graph.query(query):
+        for row in self._graph.query(query, initBindings=bindings or {}):
             results.append({
                 str(var): str(val) if val is not None else ""
                 for var, val in zip(row.labels, row)
@@ -519,6 +523,7 @@ class QueryEngine:
         """Execute structured constraints against the unified graph."""
         # Build SPARQL dynamically
         filters = []
+        bindings: dict[str, Any] = {}  # user values, bound rather than spliced in
         wheres = [
             "?item kb:id ?id .",
             "?item kb:status ?status .",
@@ -548,16 +553,16 @@ class QueryEngine:
         # Assignee
         if parsed.assignee:
             wheres.append("?item kb:assignee ?assignee .")
-            # escaped: a quote or backslash in the value can't break or inject into
-            # the query (#162); SPARQL string escapes are Turtle's
-            needle = turtle_string(parsed.assignee.lower())
-            filters.append(f'FILTER(CONTAINS(LCASE(?assignee), "{needle}"))')
+            # a bound Literal, never query text: nothing in the value can break or
+            # inject into the query (#162), and a literal `\u0041` stays literal (#184)
+            bindings["assigneeNeedle"] = Literal(parsed.assignee.lower())
+            filters.append("FILTER(CONTAINS(LCASE(?assignee), ?assigneeNeedle))")
 
         # Tag
         if parsed.tag:
             wheres.append("?item kb:tag ?tag .")
-            needle = turtle_string(parsed.tag.lower())
-            filters.append(f'FILTER(CONTAINS(LCASE(?tag), "{needle}"))')
+            bindings["tagNeedle"] = Literal(parsed.tag.lower())
+            filters.append("FILTER(CONTAINS(LCASE(?tag), ?tagNeedle))")
 
         sparql_query = (
             "PREFIX kb: <https://yurtle.dev/kanban/>\n"
@@ -572,7 +577,7 @@ class QueryEngine:
 
         logger.debug("Generated SPARQL:\n%s", sparql_query)
 
-        results = self._ug.sparql(sparql_query)
+        results = self._ug.sparql(sparql_query, bindings)
         items = []
         for row in results:
             item = self._ug.get_item(row["id"])
