@@ -123,6 +123,34 @@ def _scalar_text(value: Any) -> Any:
     return str(value) if isinstance(value, (int, float)) else value
 
 
+_MAX_FIELD_NODES = 10_000  # values in one frontmatter field, aliases expanded (#277)
+
+
+def _expanded_size(value: Any, limit: int) -> int:
+    """How many values `value` holds with every alias expanded, counting a shared
+    node once per use; stops counting past `limit`. Memoised per node, so a
+    billion-laughs DAG costs its unique nodes, not its expansion. Call it only on
+    non-cyclic values (#277)."""
+    sizes: dict[int, int] = {}
+    stack: list[tuple[Any, bool]] = [(value, False)]
+    while stack:
+        node, expanded = stack.pop()
+        if not isinstance(node, (list, tuple, dict)) or id(node) in sizes:
+            continue
+        children = [*node.keys(), *node.values()] if isinstance(node, dict) else list(node)
+        if not expanded:
+            stack.append((node, True))
+            stack.extend((c, False) for c in children)
+            continue
+        total = 1
+        for child in children:
+            total += sizes.get(id(child), 1)
+            if total > limit:
+                break
+        sizes[id(node)] = min(total, limit + 1)
+    return sizes.get(id(value), 1)
+
+
 def _is_cyclic(value: Any) -> bool:
     """True when a YAML value contains itself: an anchor used inside its own
     node. A node shared by several fields, or used twice, is not a cycle (#262).
@@ -502,13 +530,22 @@ class KanbanService:
             if not isinstance(frontmatter, dict) or not frontmatter:
                 self._note_unparseable(file_path, content)
                 return None
-            for key in [k for k, v in frontmatter.items() if _is_cyclic(v)]:
-                # a YAML anchor that contains itself (`tags: &a [x, *a]`) can't be
-                # serialised or rendered: drop the field, keep the item (#262)
-                logger.warning(
-                    f"{file_path}: frontmatter field `{key}` is cyclic (a YAML anchor "
-                    "that contains itself); ignored"
-                )
+            too_large: list[Any] = []  # keys the graph parser must not re-expand either
+            for key in list(frontmatter):
+                value = frontmatter[key]
+                if _is_cyclic(value):
+                    # a YAML anchor that contains itself (`tags: &a [x, *a]`) can't be
+                    # serialised or rendered: drop the field, keep the item (#262). The
+                    # graph parser copes with cycles on its own, so its text is left as is
+                    why = "is cyclic (a YAML anchor that contains itself)"
+                elif _expanded_size(value, _MAX_FIELD_NODES) > _MAX_FIELD_NODES:
+                    # shared aliases nested a few levels deep (a "billion laughs") expand
+                    # to more than any rendering or export can hold (#277)
+                    why = f"is too large (over {_MAX_FIELD_NODES:,} values once aliases expand)"
+                    too_large.append(key)
+                else:
+                    continue
+                logger.warning(f"{file_path}: frontmatter field `{key}` {why}; ignored")
                 del frontmatter[key]
 
             # Get required fields
@@ -619,8 +656,16 @@ class KanbanService:
             # Preserve original status string for theme-aware rendering
             metadata["_original_status"] = status_str
 
-            # Parse RDF graph from frontmatter + fenced blocks
-            graph = self._parse_graph(content)
+            # Parse RDF graph from frontmatter + fenced blocks. The graph parser reads
+            # the text again, so a too-large field is blanked there too or it would be
+            # re-expanded; one under a non-text key (`5:`, `true:`) can't be located in
+            # the text, so the item goes without a graph instead (#277)
+            graph: Graph | None = None
+            if all(isinstance(key, str) for key in too_large):
+                graph_text = content
+                for key in too_large:
+                    graph_text = self._add_or_update_frontmatter_field(graph_text, key, "[]")
+                graph = self._parse_graph(graph_text)
 
             return WorkItem(
                 id=item_id,
