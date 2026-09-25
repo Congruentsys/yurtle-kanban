@@ -294,7 +294,7 @@ def test_actions_null_trigger_safe_others_fire(
 
 BAD_FILTERS = [
     pytest.param("item_types", "5", id="item_types-int"),
-    pytest.param("item_types", "expedition", id="item_types-str"),
+    # a lone-string item_types is a one-element list now (#432, test_432_hook_config_polish)
     pytest.param("item_types", "{expedition: 1}", id="item_types-mapping"),
     pytest.param("from", "5", id="from-int"),
     pytest.param("from", "[backlog, ready]", id="from-list"),

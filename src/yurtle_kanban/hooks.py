@@ -132,7 +132,15 @@ def _clean_hooks(raw: Any, path: Path) -> dict[str, list[dict]]:
         logger.warning(f"{path}: `hooks` is not a mapping ({type(raw).__name__}); ignored")
         return {}
     cleaned: dict[str, list[dict]] = {}
+    known = [e.value for e in HookEvent]
     for event, hook_list in raw.items():
+        if event not in known:
+            # a typo like `on_created` can never fire: say so (#432)
+            logger.warning(
+                f"{path}: `{_text(event)}` is not a hook event "
+                f"(known: {', '.join(known)}); ignored"
+            )
+            continue
         if hook_list is None:
             continue
         if not isinstance(hook_list, list):
@@ -156,12 +164,18 @@ def _hook_problem(hook_def: Any) -> str | None:
     """Why one hook definition can't be used, or None."""
     if not isinstance(hook_def, dict):
         return f"is not a mapping ({type(hook_def).__name__})"
+    if isinstance(hook_def.get("item_types"), str):
+        # `item_types: expedition` means the one type, as it always worked (#432)
+        hook_def["item_types"] = [hook_def["item_types"]]
     for key in ("actions", "item_types"):
         value = hook_def.get(key)
         if value is not None and not isinstance(value, list):
             return f"`{key}` is not a list ({type(value).__name__})"
     for key in ("from", "to"):
         value = hook_def.get(key)
+        if isinstance(value, bool):
+            # YAML reads `yes`/`no`/`on`/`off` as booleans (#432)
+            return f"`{key}` is a boolean ({value}); quote the status name, e.g. \"on\""
         if value is not None and not isinstance(value, str):
             return f"`{key}` is not a status name ({type(value).__name__})"
     return None
