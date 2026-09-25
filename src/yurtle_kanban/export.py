@@ -19,13 +19,10 @@ from .models import Board, WorkItem, WorkItemStatus
 def export_html(board: Board) -> str:
     """Export board to standalone HTML."""
     # Group items by status
-    items_by_status: dict[str, list[WorkItem]] = {}
-    for col in board.columns:
-        try:
-            status = WorkItemStatus.from_string(col.id)
-            items_by_status[col.id] = board.get_items_by_status(status)
-        except ValueError:
-            items_by_status[col.id] = []
+    # the same column→status lookup the counts use (#87)
+    items_by_status: dict[str, list[WorkItem]] = {
+        col.id: board.get_column_items(col.id) for col in board.columns
+    }
 
     # Build HTML
     columns_html = []
@@ -248,13 +245,10 @@ def export_markdown(board: Board) -> str:
     lines.append(separator)
 
     # Group items by status
-    items_by_status: dict[str, list[WorkItem]] = {}
-    for col in board.columns:
-        try:
-            status = WorkItemStatus.from_string(col.id)
-            items_by_status[col.id] = board.get_items_by_status(status)
-        except ValueError:
-            items_by_status[col.id] = []
+    # the same column→status lookup the counts use (#87)
+    items_by_status: dict[str, list[WorkItem]] = {
+        col.id: board.get_column_items(col.id) for col in board.columns
+    }
 
     # Find max items
     max_items = max(len(items) for items in items_by_status.values()) if items_by_status else 0
