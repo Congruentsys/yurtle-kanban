@@ -118,6 +118,8 @@ def git_toplevel(cwd: Path) -> Path | None:
 def _scalar_text(value: Any) -> Any:
     """A number or boolean read from YAML as text; None, strings and lists as
     they are (#206)."""
+    if isinstance(value, bool):  # YAML's spelling, not Python's `True` (#225)
+        return "true" if value else "false"
     return str(value) if isinstance(value, (int, float)) else value
 
 
