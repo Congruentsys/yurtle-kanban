@@ -682,9 +682,9 @@ class KanbanService:
             # Preserve original status string for theme-aware rendering
             metadata["_original_status"] = status_str
 
-            # Parse RDF graph from frontmatter + fenced blocks. The graph parser reads
-            # the text again; _parse_graph blanks too-large fields there itself (#277,
-            # #296), or skips the graph when one sits under a non-text key
+            # Parse RDF graph from frontmatter + fenced blocks. _parse_graph blanks the
+            # too-large fields found above, reusing this parse (#277, #296, #311), or
+            # skips the graph when one sits under a non-text key
             graph = self._parse_graph(content, (parsed, too_large))
 
             return WorkItem(
@@ -795,7 +795,7 @@ class KanbanService:
             return None
 
     def _graph_safe_text(
-        self, content: str, guarded: tuple[dict, list] | None = None
+        self, content: str, guarded: tuple[dict[Any, Any], list[Any]] | None = None
     ) -> str | None:
         """`content` with every frontmatter field the graph parser must not expand
         blanked to `[]`: a too-large one (#277), and any field that aliases an anchor
@@ -806,11 +806,12 @@ class KanbanService:
         `guarded` is the scan's own (frontmatter, too-large keys) for this content, so
         the scan parses and sizes each file once (#311); without it, this checks itself.
 
-        Known limits, both only costing triples, never an item (#311): a kept field
+        Known limits, all only costing triples, never an item (#311, #322): a kept field
         sharing a container with a dropped one only through an anchor defined outside
         the dropped field is blanked too; and an alias of a *scalar* anchor inside a
-        dropped field (`tags: [&s foo, ...]`, `owner: *s`) isn't tracked, so the graph
-        parser meets an undefined alias and that item gets no graph."""
+        dropped field (`tags: [&s foo, ...]`, `owner: *s`) isn't tracked, nor is a
+        cyclic kept field aliasing a dropped anchor (`cyc: &c [*a0, *c]`), so the graph
+        parser meets an undefined alias and that item gets an empty graph (0 triples)."""
         if guarded is not None:
             frontmatter, too_large = guarded
             blank = list(too_large)
@@ -840,7 +841,7 @@ class KanbanService:
         return content
 
     def _parse_graph(
-        self, content: str, guarded: tuple[dict, list] | None = None
+        self, content: str, guarded: tuple[dict[Any, Any], list[Any]] | None = None
     ) -> Graph | None:
         """Parse RDF graph from file content using yurtle-rdflib.
 
