@@ -123,6 +123,15 @@ def _path_safe(value: str) -> str:
     return "_" if value in ("", ".", "..") else value
 
 
+def _describe(value: object) -> str:
+    """`repr(value)`, or its type name when even that raises: a warning about a bad
+    value must not itself crash (#408)."""
+    try:
+        return repr(value)
+    except Exception:
+        return f"<unprintable {type(value).__name__}>"
+
+
 # ─── Engine ────────────────────────────────────────────────────────────────
 
 
@@ -208,7 +217,7 @@ class HookEngine:
                         # not a path at all (or a PathLike that raises): a hook never
                         # crashes its caller (#388, #399)
                         logger.warning(
-                            f"hook context repo root {root!r} is not a path; "
+                            f"hook context repo root {_describe(root)} is not a path; "
                             "using the engine's"
                         )
                         root = self._repo_root
