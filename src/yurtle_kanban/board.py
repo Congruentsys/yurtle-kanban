@@ -5,10 +5,11 @@ Provides beautiful terminal-based kanban board visualization.
 """
 
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .models import Board, WorkItem, WorkItemStatus
 
@@ -142,34 +143,39 @@ def render_board(board: Board, console: Console | None = None) -> None:
 
 def render_card(item: WorkItem) -> Panel:
     """Render a single work item card."""
-    # Build card content
-    lines = []
+    # Build card content. The ID and title fold in a narrow column, so they stay
+    # whole and a title is never cut mid-escape (#179); other lines wrap between
+    # words and cut a word too long for the card with an ellipsis, so a tag or
+    # assignee is never split across lines (#206)
+    lines: list[Text] = []
+
+    def line(markup: str, overflow: str = "ellipsis") -> None:
+        lines.append(Text.from_markup(markup, overflow=overflow))
 
     # ID and type icon
     icon = TYPE_ICONS.get(item.item_type.value, "•")
-    lines.append(f"[dim]{icon}[/dim] [bold]{escape(item.id)}[/bold]")
+    line(f"[dim]{icon}[/dim] [bold]{escape(item.id)}[/bold]", overflow="fold")
 
     # Title (truncate if too long)
     title = item.title
     if len(title) > 20:
         title = title[:17] + "..."
-    lines.append(escape(title))
+    line(escape(title), overflow="fold")
 
     # Priority badge
     if item.priority:
         color = PRIORITY_COLORS.get(item.priority, "white")
-        lines.append(f"[{color}]●[/{color}] {escape(str(item.priority))}")
+        line(f"[{color}]●[/{color}] {escape(str(item.priority))}")
 
     # Assignee
     if item.assignee:
-        lines.append(f"[dim]@{escape(str(item.assignee))}[/dim]")
+        line(f"[dim]@{escape(str(item.assignee))}[/dim]")
 
     # Tags
     if item.tags:
-        tag_str = " ".join(f"[cyan]#{escape(str(t))}[/cyan]" for t in item.tags[:2])
-        lines.append(tag_str)
+        line(" ".join(f"[cyan]#{escape(str(t))}[/cyan]" for t in item.tags[:2]))
 
-    content = "\n".join(lines)
+    content = Group(*lines)
 
     # Determine border color based on priority
     border_color = "white"
