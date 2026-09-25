@@ -252,11 +252,13 @@ class EmbeddingIndex:
         try:
             from sentence_transformers import SentenceTransformer
             self._model = SentenceTransformer(self._model_name)
-        except ImportError:
+        except ImportError as e:
+            # keep the real cause: a broken torch reads very differently from a
+            # missing package (#371)
             raise ImportError(
-                "sentence-transformers is required for semantic search. "
+                f"sentence-transformers is required for semantic search ({e}). "
                 "Install with: pip install yurtle-kanban[search]"
-            )
+            ) from e
 
     def add_item(self, item: WorkItem) -> None:
         """Add a work item to the index."""
@@ -659,7 +661,7 @@ class QueryEngine:
         if not parsed.has_semantic or self._emb is None:
             return [
                 QueryResult(item=item, graph_match=True, combined_score=1.0)
-                for item in graph_items
+                for item in graph_items[:top_k]  # graph-only honours top_k too (#371)
             ]
 
         # Phase 2: semantic ranking within graph results
@@ -672,7 +674,7 @@ class QueryEngine:
             self._emb = None
             return [
                 QueryResult(item=item, graph_match=True, combined_score=1.0)
-                for item in graph_items
+                for item in graph_items[:top_k]
             ]
         score_map = {hit.item_id: hit.score for hit in semantic_hits}
 

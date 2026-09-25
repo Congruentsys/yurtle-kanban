@@ -98,6 +98,8 @@ def _get_skills_dir() -> Path:
 
 
 console = Console()
+# messages that must not mix into piped/--json stdout: hints, errors (#360, #371)
+err_console = Console(stderr=True)
 
 
 def get_service() -> KanbanService:
@@ -1476,7 +1478,7 @@ def query(
         try:
             results = ug.sparql(sparql_query)
         except Exception as e:
-            console.print(f"[red]SPARQL error:[/red] {safe(e)}")
+            err_console.print(f"[red]SPARQL error:[/red] {safe(e)}", soft_wrap=True)
             sys.exit(1)
 
         if as_json:
@@ -1502,8 +1504,9 @@ def query(
             emb = EmbeddingIndex.from_service(service)
             hits = emb.search(semantic_query, top_k=top_k)
         except ImportError as e:
-            # missing, or installed but broken (#346, #358): one line, never wrapped
-            console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
+            # missing, or installed but broken (#346, #358): one line, never wrapped,
+            # on stderr so `--json` stdout stays empty (#371)
+            err_console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
             sys.exit(1)
         if as_json:
             click.echo(json.dumps(
@@ -1544,34 +1547,36 @@ def query(
     engine = QueryEngine.from_service(service, enable_semantic=enable_semantic)
 
     if verbose:
+        # with --json the parse goes to stderr, so stdout stays pure JSON (#371)
+        out = err_console if as_json else console
         decomposer = NLDecomposer()
         parsed = decomposer.parse(query_text)
-        console.print("[bold]Parsed query:[/bold]")
+        out.print("[bold]Parsed query:[/bold]")
         if parsed.status_filter:
-            console.print(f"  Status exclude: {escape(str(parsed.status_filter))}")
+            out.print(f"  Status exclude: {escape(str(parsed.status_filter))}")
         if parsed.status_include:
-            console.print(f"  Status include: {escape(str(parsed.status_include))}")
+            out.print(f"  Status include: {escape(str(parsed.status_include))}")
         if parsed.type_filter:
-            console.print(f"  Type: {escape(str(parsed.type_filter))}")
+            out.print(f"  Type: {escape(str(parsed.type_filter))}")
         if parsed.id_min is not None:
-            console.print(f"  ID min: {parsed.id_min}")
+            out.print(f"  ID min: {parsed.id_min}")
         if parsed.id_max is not None:
-            console.print(f"  ID max: {parsed.id_max}")
+            out.print(f"  ID max: {parsed.id_max}")
         if parsed.assignee:
-            console.print(f"  Assignee: {escape(str(parsed.assignee))}")
+            out.print(f"  Assignee: {escape(str(parsed.assignee))}")
         if parsed.tag:
-            console.print(f"  Tag: {escape(str(parsed.tag))}")
+            out.print(f"  Tag: {escape(str(parsed.tag))}")
         if parsed.semantic_query:
-            console.print(f"  Semantic: \"{escape(str(parsed.semantic_query))}\"")
-        console.print()
+            out.print(f"  Semantic: \"{escape(str(parsed.semantic_query))}\"")
+        out.print()
 
     results = engine.query(query_text, top_k=top_k)
     if enable_semantic and not engine.semantic_enabled:
         # the search extra is missing or broken: graph-only results, said once (after
         # the query, which may find it broken, #358), on stderr so
         # `--json` output stays pure JSON (#346)
-        Console(stderr=True).print(
-            "[dim]semantic search is off (sentence-transformers not installed; "
+        err_console.print(
+            "[dim]semantic search is off (sentence-transformers unavailable; "
             "pip install yurtle-kanban\\[search]); using graph-only mode[/dim]",
             soft_wrap=True,
         )
