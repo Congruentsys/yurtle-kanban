@@ -75,6 +75,18 @@ fi
 wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '
   /^worktree / { path = substr($0, 10) } $0 == "branch " b { print path }')
 if [ -n "$wt" ]; then
+  # --force would discard uncommitted work with it, and a merge refused after this
+  # point (the head moved) would leave it gone for nothing: refuse first (#208)
+  dirty=""
+  if [ -d "$wt" ]; then   # a registered worktree whose directory is gone holds nothing
+    dirty=$(git -C "$wt" status --porcelain 2>/dev/null) || {
+      echo "NOT MERGING #$PR: could not read the status of worktree $wt"; exit 1; }
+  fi
+  if [ -n "$dirty" ]; then
+    echo "NOT MERGING #$PR: worktree $wt has uncommitted changes (commit or remove them):"
+    printf '%s\n' "$dirty" | sed 's/^/  /'
+    exit 1
+  fi
   git worktree remove --force "$wt" || { echo "NOT MERGING #$PR: could not remove worktree $wt"; exit 1; }
 fi
 
