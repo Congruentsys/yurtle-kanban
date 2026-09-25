@@ -300,7 +300,7 @@ class KanbanConfig:
             data = yaml.safe_load(f) or {}
         # themes are looked up in the config's own repo first (`<repo>/.kanban/…`),
         # whatever the cwd, as the service does (#272)
-        repo_root = config_path.resolve().parent.parent
+        repo_root = config_path.absolute().parent.parent  # as given, like the service
 
         # Check for v2 multi-board config
         version = data.get("version", CONFIG_VERSION_SINGLE)
