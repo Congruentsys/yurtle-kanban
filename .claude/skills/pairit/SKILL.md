@@ -109,16 +109,16 @@ because `gh pr checks --json` exits 0 whatever the states are (#167). `safe_merg
 state instead. Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
 verdict. Done means the merge is on `origin/main` and the issue is closed.
 
-**Rebased after approval?** Each PR adds only new files for its tests (`tests/issues/`) and its changelog
-entry (`changelog.d/`), so a rebase onto a moved `origin/main` is normally clean. Rebase before each
-review with `git -c core.commentChar=';' rebase origin/main`: with the default `#` comment character a
-conflicted pick re-opens the message and drops any line starting with `#`, which is why test commits are
-named `test(#<N>): …`. A real conflict in `src/` is resolved by hand and re-tested. Push with
-`--force-with-lease`. If a rebase is needed AFTER an
-`approve`, the verdict doesn't carry to the new head by itself. Run one short distinct-session check that
-`git range-diff <old-base>..<old> origin/main..<new>` shows no change to the PR's own patch (`<old-base>` is
-`git merge-base <old> origin/main`, taken BEFORE the fetch that moved `origin/main`), and that the PR's `src`/`tests`
-patch is unchanged. That session posts a new `reviewed-at-sha: <new>` / `verdict: approve` comment.
+**Rebased after approval?** Each PR adds only new files for its tests (`tests/issues/`) and its
+changelog entry (`changelog.d/`), so a rebase onto a moved `origin/main` is normally clean. Rebase
+before each review with `git -c core.commentChar=';' rebase origin/main`: with the default `#`
+comment character a conflicted pick re-opens the message and drops any line starting with `#`,
+which is why test commits are named `test(#<N>): …`. A real conflict in `src/` is resolved by hand
+and re-tested. Push with `--force-with-lease`. If a rebase is needed AFTER an `approve`, the
+verdict doesn't carry to the new head by itself. Run one short distinct-session check that
+`git range-diff <old-base>..<old> origin/main..<new>` shows no change to the PR's own `src`/`tests`
+patch (`<old-base>` is `git merge-base <old> origin/main`, taken BEFORE the fetch that moved
+`origin/main`). That session posts a new `reviewed-at-sha: <new>` / `verdict: approve` comment.
 
 **Carry the findings.** Every `(follow-up)` finding becomes an issue (`gh issue create --label bug …`,
 unassigned) with a verified repro, cross-linked to the PR.
