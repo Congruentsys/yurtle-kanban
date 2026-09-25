@@ -221,6 +221,63 @@ class TestNonCyclicAnchorsControl:
         assert item["related"] == ["x", "y"]
         assert not _cyclic_lines(proc.stderr), proc.stderr
 
+    # one field reusing a container inside itself: shared, not cyclic (review of #274)
+    REUSED = {
+        "extra-mapping": ("extra: {a: &x [1], b: *x}\n", "extra", {"a": [1], "b": [1]}),
+        "depends-mapping": (
+            "depends_on: {a: &x [FEAT-9], b: *x}\n",
+            "depends_on",
+            {"a": ["FEAT-9"], "b": ["FEAT-9"]},
+        ),
+        "tags-list": ("tags: [&t [x], *t]\n", "tags", [["x"], ["x"]]),
+    }
+
+    @pytest.mark.parametrize("case", list(REUSED), ids=list(REUSED))
+    def test_reused_within_one_field_in_process(
+        self, sw: Path, case: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        lines, key, expected = self.REUSED[case]
+        path = _add_frontmatter(sw, lines)
+        svc = _service(sw)
+        with caplog.at_level(logging.WARNING, logger="yurtle-kanban"):
+            items = svc.get_items()
+        item = next((i for i in items if i.id == "FEAT-001"), None)
+        assert item is not None, svc.parse_warnings
+        value = item.metadata.get(key) if key == "extra" else getattr(item, key)
+        assert value == expected
+        noted = [r for p, r in svc.parse_warnings if p == path] + [
+            r.getMessage() for r in caplog.records if "cyclic" in r.getMessage().lower()
+        ]
+        assert not noted, noted
+
+    @pytest.mark.parametrize("case", list(REUSED), ids=list(REUSED))
+    def test_reused_within_one_field_cli(self, sw: Path, case: str) -> None:
+        lines, key, _expected = self.REUSED[case]
+        _add_frontmatter(sw, lines)
+        proc = _cli(sw, "list")
+        _ok(proc)
+        assert "FEAT-001" in proc.stdout, proc.stdout + proc.stderr
+        assert not _cyclic_lines(proc.stderr), proc.stderr
+        assert "skipped" not in proc.stderr, proc.stderr
+
+
+class TestDeepNesting:
+    """Deep but acyclic frontmatter keeps its item, as on main (review of #274)."""
+
+    DEPTH = 400  # PyYAML parses ~500; a doubly recursive walk overflows near 340
+
+    def test_deep_list_item_kept(self, sw: Path) -> None:
+        deep = "[" * self.DEPTH + "x" + "]" * self.DEPTH
+        _add_frontmatter(sw, f"extra: {deep}\n")
+        proc = _cli(sw, "list", "--json")
+        _ok(proc)
+        assert "RecursionError" not in proc.stderr, proc.stderr
+        assert "skipped" not in proc.stderr, proc.stderr
+        assert not _cyclic_lines(proc.stderr), proc.stderr
+        out = proc.stdout.lstrip()
+        ids = [d["id"] for d in json.loads(out)] if out.startswith("[") else []
+        assert "FEAT-001" in ids, proc.stdout + proc.stderr
+
 
 HOOKS = (
     "---\n"
