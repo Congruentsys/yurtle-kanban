@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .models import Board, WorkItem, WorkItemStatus
+from .models import Board, WorkItem
 
 # Priority colors
 PRIORITY_COLORS = {
@@ -98,13 +98,10 @@ def render_board(board: Board, console: Console | None = None) -> None:
         )
 
     # Group items by status
-    items_by_status: dict[str, list[WorkItem]] = {}
-    for col in board.columns:
-        try:
-            status = WorkItemStatus.from_string(col.id)
-            items_by_status[col.id] = board.get_items_by_status(status)
-        except ValueError:
-            items_by_status[col.id] = []
+    # the same column→status lookup the header counts use (#87)
+    items_by_status: dict[str, list[WorkItem]] = {
+        col.id: board.get_column_items(col.id) for col in board.columns
+    }
 
     # Find max items in any column
     max_items = max(len(items) for items in items_by_status.values()) if items_by_status else 0

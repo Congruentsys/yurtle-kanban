@@ -480,22 +480,25 @@ class Board:
         """Get all items with a specific status."""
         return [item for item in self.items if item.status == status]
 
+    def column_status(self, column_id: str) -> WorkItemStatus | None:
+        """The status a column shows: the theme's mapping (hdd `draft` is backlog),
+        else the column id itself; None for a column that matches no status. The
+        header count and the drawn cards both use this, so they agree (#87)."""
+        if column_id in self.column_status_map:
+            return self.column_status_map[column_id]
+        try:
+            return WorkItemStatus.from_string(column_id)
+        except ValueError:
+            return None
+
+    def get_column_items(self, column_id: str) -> list[WorkItem]:
+        """The items drawn in (and counted for) a column (#87)."""
+        status = self.column_status(column_id)
+        return self.get_items_by_status(status) if status is not None else []
+
     def get_column_counts(self) -> dict[str, int]:
         """Get count of items in each column."""
-        counts = {}
-        for col in self.columns:
-            # Use column_status_map if available, otherwise try standard parsing
-            if col.id in self.column_status_map:
-                status = self.column_status_map[col.id]
-            else:
-                try:
-                    status = WorkItemStatus.from_string(col.id)
-                except ValueError:
-                    # Unknown column, count as 0
-                    counts[col.id] = 0
-                    continue
-            counts[col.id] = len(self.get_items_by_status(status))
-        return counts
+        return {col.id: len(self.get_column_items(col.id)) for col in self.columns}
 
     def get_items_by_status_and_type(
         self, status: WorkItemStatus, item_type: WorkItemType
