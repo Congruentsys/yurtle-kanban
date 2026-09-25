@@ -3675,6 +3675,10 @@ class KanbanService:
                 config_data = yaml.safe_load(config_path.read_text()) or {}
             except yaml.YAMLError:
                 continue
+            if not isinstance(config_data, dict):
+                # one bad run must not break the listing (#338)
+                logger.warning(f"{config_path} is not a mapping; run skipped")
+                continue
 
             run_info: dict[str, Any] = {
                 "timestamp": config_data.get("created", run_dir.name),
@@ -3720,6 +3724,8 @@ class KanbanService:
             raise FileNotFoundError(f"No config.yaml in {run_path}")
 
         config_data = yaml.safe_load(config_path.read_text()) or {}
+        if not isinstance(config_data, dict):
+            raise ValueError(f"{config_path} is not a mapping; run status not updated (#338)")
         config_data["status"] = status
         if outcome is not None:
             config_data["outcome"] = outcome
