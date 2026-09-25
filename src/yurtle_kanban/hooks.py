@@ -204,8 +204,9 @@ class HookEngine:
                 else:
                     try:
                         root = Path(root)
-                    except TypeError:
-                        # not a path at all: a hook never crashes its caller (#388)
+                    except Exception:
+                        # not a path at all (or a PathLike that raises): a hook never
+                        # crashes its caller (#388, #399)
                         logger.warning(
                             f"hook context repo root {root!r} is not a path; "
                             "using the engine's"
