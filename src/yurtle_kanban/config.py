@@ -65,6 +65,13 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
     return None
 
 
+def _or_default(data: dict[str, Any], key: str, default: str) -> Any:
+    """`data[key]`, or `default` when the key is absent or null (#220). Only null:
+    an explicit `""` is a value (#241)."""
+    value = data.get(key)
+    return default if value is None else value
+
+
 def _ignore_list(data: dict[str, Any]) -> list[str]:
     """`ignore` patterns from a config mapping: absent → the defaults; a bare
     `ignore:` (YAML null) → none, not a crash in the scan (#194)."""
@@ -143,10 +150,11 @@ class BoardConfig:
         # Preserve None (explicitly unlimited board)
         wip_limits = raw_wip if raw_wip is not None else None
         return cls(
-            # a bare scalar key means its default, like an absent one (#220)
-            name=data.get("name") or "default",
-            preset=data.get("preset") or "software",
-            path=data.get("path") or "work/",
+            # a bare (null) key means its default, like an absent one (#220); an
+            # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
+            name=_or_default(data, "name", "default"),
+            preset=_or_default(data, "preset", "software"),
+            path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
             scan_paths=data.get("scan_paths") or [],
             wip_limits=wip_limits,
@@ -279,7 +287,7 @@ class KanbanConfig:
 
         paths_data = kanban_data.get("paths") or {}
         paths = PathConfig(
-            root=paths_data.get("root") or "work/",
+            root=_or_default(paths_data, "root", "work/"),
             scan_paths=paths_data.get("scan_paths") or [],
             ignore=_ignore_list(paths_data),
             features=paths_data.get("features"),
@@ -290,7 +298,7 @@ class KanbanConfig:
 
         return cls(
             version=CONFIG_VERSION_SINGLE,
-            theme=kanban_data.get("theme") or "software",
+            theme=_or_default(kanban_data, "theme", "software"),
             paths=paths,
             workflows=kanban_data.get("workflows") or {},
             gates=kanban_data.get("gates") or {},
