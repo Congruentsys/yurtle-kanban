@@ -20,6 +20,13 @@ predicate (#349). The #373 seen-set in ``structured_query`` stays as a guard; it
 pinned here by injecting a second ``kb:numericId`` / ``kb:id`` straight into the unified
 graph, since after the skip no block can reach it.
 
+Round 2 ([steer] refinement after the PR #401 review): the skip applies only to triples
+whose subject is an IRI. Blank-node subjects are merged: ``move`` records history as
+``<> kb:statusChange [ kb:status … ; kb:at … ; kb:by … ; kb:closedBy <PR> ]`` (README
+"Graph provenance"), and that nested ``kb:status`` must stay in the unified graph. It
+can't redefine any item: ``structured_query`` matches ``?item kb:status ?status`` with
+``?item`` the item IRI bound through ``kb:id``, never the history blank node.
+
 Board (the #349 fixture): PAPER-001..003 (numericId 1..3) and H-004 (numericId 4).
 """
 
@@ -30,7 +37,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from rdflib import RDF, Literal, URIRef
+from rdflib import RDF, BNode, Literal, URIRef
 from rdflib.namespace import XSD
 
 from tests.issues.test_349_sparql_distinct import (  # noqa: F401 (fixtures)
@@ -437,3 +444,173 @@ def test_control_normal_board_queries(engine: QueryEngine) -> None:
 def test_control_cli_normal_board(repo: Path) -> None:
     assert _cli_ids("backlog items") == NORMAL_ORDER
     assert _cli_ids("items above 2") == [DUAL, "PAPER-003"]
+
+
+# ---------------------------------------------------------------------------
+# Round 2: blank-node subjects merge (move's kb:statusChange history)
+# ---------------------------------------------------------------------------
+
+PR_URL = "https://github.com/owner/repo/pull/42"
+
+# the README "Graph provenance" block, on an item whose frontmatter stays backlog
+_README_HISTORY = """<> kb:statusChange [
+    kb:status kb:done ;
+    kb:at "2026-03-03T12:34:56"^^xsd:dateTime ;
+    kb:by "github-actions[bot]" ;
+    kb:closedBy <https://github.com/owner/repo/pull/42> ;
+] ."""
+
+_HISTORY_SPARQL = (
+    "SELECT ?c ?s ?at ?by ?pr WHERE {\n"
+    "  ?x kb:statusChange ?c .\n"
+    "  ?c kb:status ?s .\n"
+    "  OPTIONAL { ?c kb:at ?at }\n"
+    "  OPTIONAL { ?c kb:by ?by }\n"
+    "  OPTIONAL { ?c kb:closedBy ?pr }\n"
+    "}"
+)
+
+
+def _history(engine: QueryEngine) -> list[tuple[str, str, str]]:
+    """(status, by, closedBy) of every statusChange node that has a kb:status."""
+    return sorted(
+        (row["s"], row["by"], row["pr"]) for row in engine.sparql(_HISTORY_SPARQL)
+    )
+
+
+def _move(*args: str) -> None:
+    result = CliRunner().invoke(main, ["move", *args, "--force", "--no-commit"])
+    assert result.exception is None, f"raised {result.exception!r}"
+    assert result.exit_code == 0, result.output
+
+
+@pytest.fixture
+def readme_history(repo: Path) -> QueryEngine:
+    """PAPER-001 (frontmatter backlog) carries the README's statusChange block."""
+    eng = _engine_with(repo, {"PAPER-001": _README_HISTORY})
+    item = eng._ug.get_item("PAPER-001")
+    assert item is not None and item.graph is not None
+    nodes = list(item.graph.subjects(KB.status, KB.done))
+    assert len(nodes) == 1 and isinstance(nodes[0], BNode), (
+        f"fixture: the history kb:status is not on one blank node: {nodes}"
+    )
+    return eng
+
+
+@pytest.fixture
+def moved(repo: Path) -> QueryEngine:
+    """PAPER-002 moved to done (closed by a PR) and back to backlog by the real CLI."""
+    _move("PAPER-002", "done", "--closed-by", PR_URL)
+    _move("PAPER-002", "backlog")
+    text = _item_file(repo, "PAPER-002").read_text(encoding="utf-8")
+    assert "\nstatus: backlog\n" in text, "fixture: frontmatter not back to backlog"
+    assert text.count("kb:status kb:") == 2, f"fixture: two history entries expected:\n{text}"
+    eng = QueryEngine.from_service(get_service(), enable_semantic=False)
+    item = eng._ug.get_item("PAPER-002")
+    assert item is not None and item.graph is not None
+    assert len(set(item.graph.subjects(KB.status, None))) == 2, "fixture: history not parsed"
+    return eng
+
+
+# --- (a) RED at 950c49e: the history blank node keeps its kb:status ---------
+
+
+def test_readme_history_status_kept_in_unified_graph(readme_history: QueryEngine) -> None:
+    item = readme_history._ug.get_item("PAPER-001")
+    assert item is not None and item.graph is not None
+    for triple in item.graph:
+        if isinstance(triple[0], BNode):
+            assert triple in readme_history._ug.graph, f"blank-node triple dropped: {triple}"
+
+
+def test_readme_history_sparql(readme_history: QueryEngine) -> None:
+    assert _history(readme_history) == [(str(KB.done), "github-actions[bot]", PR_URL)]
+
+
+def test_real_move_history_sparql(moved: QueryEngine) -> None:
+    rows = _history(moved)
+    assert [s for s, _, _ in rows] == [str(KB.backlog), str(KB.done)], rows
+    # the move to done carries its closedBy; the one back to backlog has none
+    assert [pr for s, _, pr in rows if s == str(KB.done)] == [PR_URL], rows
+    assert all(by for _, by, _ in rows), rows
+    ats = moved.sparql(
+        "SELECT ?at WHERE { ?x kb:statusChange ?c . ?c kb:status ?s ; kb:at ?at ; kb:by ?by }"
+    )
+    assert len(ats) == 2, ats
+
+
+def test_blank_node_owned_predicates_merged(repo: Path) -> None:
+    # blank-node subjects merge for every owned predicate, not only kb:status
+    eng = _engine_with(
+        repo,
+        {
+            "PAPER-003": (
+                'item:PAPER-003 kb:note [ kb:id "NOTE-1" ; kb:title "A note" ;'
+                ' kb:status kb:done ; kb:priority kb:critical ; kb:priorityRank 1 ;'
+                ' kb:description "nested" ; kb:numericId 99 ] .'
+            )
+        },
+    )
+    (note,) = list(eng._ug.graph.objects(ITEM["PAPER-003"], KB.note))
+    assert isinstance(note, BNode)
+    got = {p: list(eng._ug.graph.objects(note, KB[p])) for p in OWNED if p != "created"}
+    assert got == {
+        "id": [Literal("NOTE-1")],
+        "title": [Literal("A note")],
+        "status": [KB.done],
+        "priority": [KB.critical],
+        "priorityRank": [Literal(1, datatype=XSD.integer)],
+        "description": [Literal("nested")],
+        "numericId": [Literal(99, datatype=XSD.integer)],
+    }
+
+
+# --- (b) a history kb:status never makes the item match a status filter -----
+# GREEN at 950c49e (the blank node is dropped); must stay green once it merges.
+
+
+def test_readme_history_does_not_match_done(readme_history: QueryEngine) -> None:
+    assert _ids(readme_history, ParsedQuery(status_include=["done"])) == []
+    assert _ids(readme_history, ParsedQuery(status_filter=["backlog"])) == []
+    assert _ids(readme_history, ParsedQuery(status_include=["backlog"])) == NORMAL_ORDER
+    assert _objects(readme_history, "PAPER-001", "status") == [KB.backlog]
+
+
+def test_real_move_history_does_not_match_done(moved: QueryEngine) -> None:
+    assert _ids(moved, ParsedQuery(status_include=["done"])) == []
+    assert _ids(moved, ParsedQuery(status_filter=["backlog"])) == []
+    assert _ids(moved, ParsedQuery(status_include=["backlog"])) == NORMAL_ORDER
+    assert _objects(moved, "PAPER-002", "status") == [KB.backlog]
+
+
+def test_cli_real_move_history_does_not_match(moved: QueryEngine) -> None:
+    assert _cli_ids("backlog items") == NORMAL_ORDER
+
+
+def test_blank_node_owned_predicates_do_not_skew_queries(repo: Path) -> None:
+    eng = _engine_with(
+        repo,
+        {
+            "PAPER-003": (
+                'item:PAPER-003 kb:note [ kb:id "PAPER-001" ; kb:status kb:done ;'
+                " kb:numericId 99 ] ."
+            )
+        },
+    )
+    assert _ids(eng, ParsedQuery(status_include=["done"])) == []
+    assert _ids(eng, ParsedQuery(id_min=2)) == [DUAL, "PAPER-003"]
+    ids = _ids(eng, ParsedQuery(status_include=["backlog"]))
+    _assert_unique(ids)
+    assert ids == NORMAL_ORDER
+
+
+def test_moved_to_done_matches_done_via_frontmatter(repo: Path) -> None:
+    # control: a real move to done is found through frontmatter, once
+    _move("PAPER-002", "done", "--closed-by", PR_URL)
+    eng = QueryEngine.from_service(get_service(), enable_semantic=False)
+    assert _ids(eng, ParsedQuery(status_include=["done"])) == ["PAPER-002"]
+    assert _ids(eng, ParsedQuery(status_include=["backlog"])) == [
+        DUAL,
+        "PAPER-003",
+        "PAPER-001",
+    ]
