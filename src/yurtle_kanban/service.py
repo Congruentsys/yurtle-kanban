@@ -712,7 +712,9 @@ class KanbanService:
                 looks_like_item = False
             if looks_like_item and not file_path.name.startswith("_TEMPLATE"):
                 # a RecursionError is YAML nested past what the parser can walk: say
-                # that, not Python's internals (#280)
+                # that, not Python's internals (#280). Frontmatter too deep to parse is
+                # caught earlier (#297); one arriving here comes from a later step,
+                # which in practice is still a too-deep value being walked (#309)
                 reason = (
                     "frontmatter nested too deeply to parse"
                     if isinstance(e, RecursionError)
@@ -3579,7 +3581,10 @@ class KanbanService:
         if item and item.file_path and item.file_path.exists():
             content = item.file_path.read_text()
             fm = self._parse_frontmatter(content)
-            hypothesis = fm.get("hypothesis", "")
+            # a file rewritten since the scan may no longer parse to a mapping: the
+            # run is still recorded, with no hypothesis link (#309)
+            if isinstance(fm, dict):
+                hypothesis = fm.get("hypothesis", "")
 
         # Create timestamped folder (microseconds to avoid collisions)
         now = datetime.now()
