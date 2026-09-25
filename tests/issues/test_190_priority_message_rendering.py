@@ -198,6 +198,37 @@ class TestCheckPriorityAnnotation:
         # `from __future__ import annotations` leaves the annotation as a string.
         assert param.annotation in ("object", object), param.annotation
 
+    def test_normalize_priority_param_is_object(self):
+        param = inspect.signature(KanbanService._normalize_priority).parameters["priority"]
+        assert param.annotation in ("object", object), param.annotation
+
+
+# --- 7. round 2: a non-printable string is shown as its repr ---------------------
+
+NON_PRINTABLE = [
+    ("a\x1bb", f"Unknown priority: 'a\\x1bb'; {VALID}"),
+    ("a\nb", f"Unknown priority: 'a\\nb'; {VALID}"),
+]
+NON_PRINTABLE_IDS = ["esc", "newline"]
+
+
+class TestNonPrintableShownAsRepr:
+    @pytest.mark.parametrize(("value", "expected"), NON_PRINTABLE, ids=NON_PRINTABLE_IDS)
+    def test_helper(self, value, expected):
+        assert unknown_priority_message(value) == expected
+
+    @pytest.mark.parametrize(("value", "expected"), NON_PRINTABLE, ids=NON_PRINTABLE_IDS)
+    def test_normalize_priority(self, value, expected):
+        with pytest.raises(ValueError) as exc:
+            KanbanService._normalize_priority(value)
+        assert str(exc.value) == expected
+
+    def test_printable_string_still_raw(self):
+        assert unknown_priority_message("urgent") == URGENT_MSG
+        with pytest.raises(ValueError) as exc:
+            KanbanService._normalize_priority("urgent")
+        assert str(exc.value) == URGENT_MSG
+
 
 # --- negative controls -------------------------------------------------------------
 
