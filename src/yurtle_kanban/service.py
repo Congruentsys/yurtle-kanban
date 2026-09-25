@@ -858,6 +858,10 @@ class KanbanService:
         Returns an rdflib.Graph with triples from both YAML/Turtle frontmatter
         and fenced ```turtle/```yurtle blocks in the markdown body.
         Returns None if parsing fails.
+
+        The IRI `<>` resolved to (the cwd at parse time) is recorded for the
+        returned graph, so a later merge maps it to the item; adding triples with
+        `+=` keeps that parse-time IRI (#404, #413, #421).
         """
         safe_text = self._graph_safe_text(content, guarded)
         if safe_text is None:
