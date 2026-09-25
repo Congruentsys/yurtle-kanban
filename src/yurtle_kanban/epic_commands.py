@@ -15,6 +15,7 @@ from datetime import date
 
 import click
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
@@ -104,7 +105,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         service.scan()
     item = service._items.get(item_id)
     if item is None:
-        console.print(f"[yellow]Warning: Item {item_id} not found[/yellow]")
+        console.print(f"[yellow]Warning: Item {escape(item_id)} not found[/yellow]")
         return False
 
     # keep the item file's own line endings (#151)
@@ -113,7 +114,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     # block-style `related:` list, `--- # comment` openers and continuation lines
     fm = service._parse_frontmatter(content)
     if not isinstance(fm, dict):
-        console.print(f"[yellow]Warning: No frontmatter in {item_id}[/yellow]")
+        console.print(f"[yellow]Warning: No frontmatter in {escape(item_id)}[/yellow]")
         return False
 
     related = fm.get("related") or []  # `related: null` / empty → []
@@ -194,17 +195,20 @@ def _do_create(title: str, priority: str, items: str | None, push: bool):
             item_id=item_id,
         )
 
-    console.print(f"Created {type_label} [bold green]{item.id}[/bold green]: {title}")
-    console.print(f"  File: {item.file_path}")
+    console.print(
+        f"Created {type_label} [bold green]{escape(item.id)}[/bold green]: "
+        f"{escape(title)}"
+    )
+    console.print(f"  File: {escape(str(item.file_path))}")
 
     # Link items if provided
     if items:
         item_ids = [i.strip() for i in items.split(",") if i.strip()]
         for linked_id in item_ids:
             if _update_item_related(service, linked_id, item.id):
-                console.print(f"  Linked {linked_id} → {item.id}")
+                console.print(f"  Linked {escape(linked_id)} → {escape(item.id)}")
             else:
-                console.print(f"  {linked_id} already linked or not found")
+                console.print(f"  {escape(linked_id)} already linked or not found")
 
 
 def _do_show(epic_id: str):
@@ -246,7 +250,7 @@ def _do_show(epic_id: str):
     type_label = _TYPE_LABELS.get(epic_item.item_type, "Epic")
     color = status_colors.get(epic_item.status, "white")
     console.print(
-        f"\n[bold]{type_label} {epic_item.id}[/bold]: {epic_item.title} "
+        f"\n[bold]{type_label} {escape(epic_item.id)}[/bold]: {escape(epic_item.title)} "
         f"[{color}]({epic_item.status.value})[/{color}]"
     )
 
@@ -254,7 +258,7 @@ def _do_show(epic_id: str):
         cmd = "voyage" if epic_item.item_type == WorkItemType.VOYAGE else "epic"
         console.print("  No linked items found.")
         console.print(
-            f"  [dim]Link items with: yurtle-kanban {cmd} add {epic_id} ITEM-ID[/dim]"
+            f"  [dim]Link items with: yurtle-kanban {cmd} add {escape(epic_id)} ITEM-ID[/dim]"
         )
         return
 
@@ -275,11 +279,11 @@ def _do_show(epic_id: str):
         color = status_colors.get(item.status, "white")
         status_str = f"[{color}]{item.status.value}[/{color}]"
         table.add_row(
-            item.id,
-            item.title[:40],
+            escape(item.id),
+            escape(item.title[:40]),
             status_str,
-            item.assignee or "-",
-            item.priority or "medium",
+            escape(str(item.assignee or "-")),
+            escape(str(item.priority or "medium")),
         )
 
     console.print(table)
@@ -302,13 +306,13 @@ def _do_add(epic_id: str, item_id: str):
         raise click.ClickException(f"{epic_id} not found")
 
     if _update_item_related(service, item_id, epic_id):
-        console.print(f"Linked [bold]{item_id}[/bold] → [bold]{epic_id}[/bold]")
+        console.print(f"Linked [bold]{escape(item_id)}[/bold] → [bold]{escape(epic_id)}[/bold]")
     else:
         item = service._items.get(item_id)
         if item is None:
             raise click.ClickException(f"Item {item_id} not found")
         else:
-            console.print(f"{item_id} is already linked to {epic_id}")
+            console.print(f"{escape(item_id)} is already linked to {escape(epic_id)}")
 
 
 # ---------------------------------------------------------------------------

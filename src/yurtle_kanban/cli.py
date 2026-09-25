@@ -331,13 +331,13 @@ kanban:
                     shutil.copytree(skill_dir, dst)
                     skills_installed += 1
 
-    console.print(f"[green]Initialized yurtle-kanban with theme '{theme}'[/green]")
+    console.print(f"[green]Initialized yurtle-kanban with theme '{escape(theme)}'[/green]")
     console.print("  Config:  .kanban/config.yaml")
     if dirs_created:
         for d in dirs_created:
-            console.print(f"  Created: {d} (with _TEMPLATE.md)")
+            console.print(f"  Created: {escape(str(d))} (with _TEMPLATE.md)")
     else:
-        console.print(f"  Created: {path}")
+        console.print(f"  Created: {escape(str(path))}")
     if templates_copied:
         console.print(f"  Copied:  {templates_copied} templates to .kanban/templates/")
     if skills_installed:
@@ -347,7 +347,10 @@ kanban:
     console.print()
     console.print("Next steps:")
     example_type = list(item_types.keys())[0] if item_types else "feature"
-    console.print(f"  1. Create work items: yurtle-kanban create {example_type} 'My item' --push")
+    console.print(
+        "  1. Create work items: yurtle-kanban create "
+        f"{escape(str(example_type))} 'My item' --push"
+    )
     console.print("  2. View board: yurtle-kanban board")
 
 
@@ -388,7 +391,7 @@ def list_items(
         try:
             status_filter = WorkItemStatus.from_string(status)
         except ValueError:
-            console.print(f"[red]Unknown status: {status}[/red]")
+            console.print(f"[red]Unknown status: {escape(status)}[/red]")
             sys.exit(1)
 
     type_filter = None
@@ -396,7 +399,7 @@ def list_items(
         try:
             type_filter = WorkItemType.from_string(item_type)
         except ValueError:
-            console.print(f"[red]Unknown type: {item_type}[/red]")
+            console.print(f"[red]Unknown type: {escape(item_type)}[/red]")
             sys.exit(1)
 
     priority_filter = None
@@ -472,7 +475,7 @@ def create(
     try:
         work_type = WorkItemType.from_string(item_type)
     except ValueError:
-        console.print(f"[red]Unknown type: {item_type}[/red]")
+        console.print(f"[red]Unknown type: {escape(item_type)}[/red]")
         console.print(f"Valid types: {', '.join(t.value for t in WorkItemType)}")
         sys.exit(1)
 
@@ -499,12 +502,18 @@ def create(
         if result["success"]:
             item = result["item"]
             if result.get("pushed"):
-                console.print(f"[green]Created and pushed {result['id']}: {title}[/green]")
-                console.print(f"  File: {item.file_path}")
+                console.print(
+                    f"[green]Created and pushed {escape(str(result['id']))}: "
+                    f"{escape(title)}[/green]"
+                )
+                console.print(f"  File: {escape(str(item.file_path))}")
                 console.print("[dim]  (committed and pushed to remote)[/dim]")
             else:
-                console.print(f"[green]Created {result['id']}: {title}[/green]")
-                console.print(f"  File: {item.file_path}")
+                console.print(
+                    f"[green]Created {escape(str(result['id']))}: "
+                    f"{escape(title)}[/green]"
+                )
+                console.print(f"  File: {escape(str(item.file_path))}")
                 if result.get("committed", True):
                     console.print("[dim]  (committed locally — no remote configured)[/dim]")
                 else:
@@ -513,7 +522,7 @@ def create(
                         "[/yellow]"
                     )
         else:
-            console.print(f"[red]Failed: {result['message']}[/red]")
+            console.print(f"[red]Failed: {escape(str(result['message']))}[/red]")
             sys.exit(1)
     else:
         item = service.create_item(
@@ -524,8 +533,8 @@ def create(
             description=description,
             tags=tag_list,
         )
-        console.print(f"[green]Created {item.id}: {item.title}[/green]")
-        console.print(f"  File: {item.file_path}")
+        console.print(f"[green]Created {escape(item.id)}: {escape(item.title)}[/green]")
+        console.print(f"  File: {escape(str(item.file_path))}")
 
 
 @main.command()
@@ -577,9 +586,9 @@ def move(
         if resolved:
             status = resolved
         else:
-            console.print(f"[red]Unknown status: {new_status}[/red]")
+            console.print(f"[red]Unknown status: {escape(new_status)}[/red]")
             valid = sorted({s.value for s in WorkItemStatus} | set(column_map.keys()))
-            console.print(f"Valid statuses: {', '.join(valid)}")
+            console.print(f"Valid statuses: {escape(', '.join(valid))}")
             sys.exit(1)
 
     # Build gate context from CLI flags
@@ -600,11 +609,11 @@ def move(
             skip_gates=skip_gates or force,
             gate_context=gate_context,
         )
-        console.print(f"[green]Moved {item.id} to {status.value}[/green]")
+        console.print(f"[green]Moved {escape(item.id)} to {status.value}[/green]")
         if assign:
-            console.print(f"  Assigned to: {assign}")
+            console.print(f"  Assigned to: {escape(assign)}")
     except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error: {escape(str(e))}[/red]")
         sys.exit(1)
 
     # Export board if requested
@@ -612,7 +621,7 @@ def move(
         board = service.get_board()
         content = export_expedition_index(board, min_id=600)
         Path(export_board).write_text(content)
-        console.print(f"[green]Exported board to {export_board}[/green]")
+        console.print(f"[green]Exported board to {escape(export_board)}[/green]")
 
 
 @main.command()
@@ -638,7 +647,7 @@ def show(item_id: str, as_json: bool):
                 ]
             click.echo(json.dumps(payload))
         else:
-            console.print(f"[red]Item not found: {item_id}[/red]")
+            console.print(f"[red]Item not found: {escape(item_id)}[/red]")
             for path, reason in broken:
                 try:
                     shown = path.relative_to(service.repo_root)
@@ -681,9 +690,9 @@ def board(board_name: str | None, show_all: bool, epic_id: str | None):
     if show_all and config.is_multi_board:
         # Show all boards
         for board_config in config.boards:
-            console.print(f"\n[bold cyan]Board: {board_config.name}[/bold cyan]")
-            console.print(f"  Preset: {board_config.preset}")
-            console.print(f"  Path: {board_config.path}")
+            console.print(f"\n[bold cyan]Board: {escape(str(board_config.name))}[/bold cyan]")
+            console.print(f"  Preset: {escape(str(board_config.preset))}")
+            console.print(f"  Path: {escape(str(board_config.path))}")
             board_data = service.get_board(board_name=board_config.name)
             if epic_id:
                 board_data.items = [
@@ -747,19 +756,19 @@ def list_boards(as_json: bool):
         )
         console.print()
         console.print("[bold]Board:[/bold] default")
-        console.print(f"  Preset: {config.theme}")
-        console.print(f"  Path: {config.paths.root or 'work/'}")
+        console.print(f"  Preset: {escape(str(config.theme))}")
+        console.print(f"  Path: {escape(str(config.paths.root or 'work/'))}")
     else:
         console.print(f"[bold]Configured Boards ({len(config.boards)})[/bold]")
         console.print()
         for info in boards_info:
             default_marker = " [cyan](default)[/cyan]" if info.get("default") else ""
-            console.print(f"  [bold]{info['name']}[/bold]{default_marker}")
-            console.print(f"    Preset: {info['preset']}")
-            console.print(f"    Path: {info['path']}")
+            console.print(f"  [bold]{escape(str(info['name']))}[/bold]{default_marker}")
+            console.print(f"    Preset: {escape(str(info['preset']))}")
+            console.print(f"    Path: {escape(str(info['path']))}")
             if info.get("wip_limits"):
                 wip_str = ", ".join(f"{k}: {v}" for k, v in info["wip_limits"].items())
-                console.print(f"    WIP Limits: {wip_str}")
+                console.print(f"    WIP Limits: {escape(wip_str)}")
             console.print()
 
 
@@ -791,7 +800,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     # Validate preset exists
     if not _load_builtin_theme(preset, repo_root):
         available = ["software", "nautical", "spec", "hdd"]
-        console.print(f"[red]Unknown preset: {preset}[/red]")
+        console.print(f"[red]Unknown preset: {escape(preset)}[/red]")
         console.print(f"[dim]Available presets: {', '.join(available)}[/dim]")
         sys.exit(1)
 
@@ -803,7 +812,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             try:
                 wip_limits[status] = int(limit)
             except ValueError:
-                console.print(f"[red]Invalid WIP limit: {wip}[/red]")
+                console.print(f"[red]Invalid WIP limit: {escape(wip)}[/red]")
                 sys.exit(1)
 
     # Upgrading to multi-board turns the single-board config into ONE board that
@@ -825,7 +834,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             # soft_wrap: never hard-wrap inside a path, or it can't be copied (#147)
             console.print(
                 "[red]Can't upgrade to multi-board: a board scans one path, and no "
-                f"single path covers these scan paths: {', '.join(uncovered)}[/red]",
+                f"single path covers these scan paths: {escape(', '.join(uncovered))}[/red]",
                 soft_wrap=True,
             )
             console.print(
@@ -837,7 +846,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
 
     # Check if board already exists
     if config.is_multi_board and config.get_board(name):
-        console.print(f"[red]Board '{name}' already exists[/red]")
+        console.print(f"[red]Board '{escape(name)}' already exists[/red]")
         sys.exit(1)
 
     # Create the new board config
@@ -863,14 +872,14 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     board_path = repo_root / path
     if not board_path.exists():
         board_path.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]Created directory: {path}[/green]")
+        console.print(f"[green]Created directory: {escape(path)}[/green]")
 
-    console.print(f"[green]Added board '{name}'[/green]")
-    console.print(f"  Preset: {preset}")
-    console.print(f"  Path: {path}")
+    console.print(f"[green]Added board '{escape(name)}'[/green]")
+    console.print(f"  Preset: {escape(preset)}")
+    console.print(f"  Path: {escape(path)}")
     if wip_limits:
         wip_str = ", ".join(f"{k}: {v}" for k, v in wip_limits.items())
-        console.print(f"  WIP Limits: {wip_str}")
+        console.print(f"  WIP Limits: {escape(wip_str)}")
     if make_default:
         console.print("  [cyan]Set as default board[/cyan]")
 
@@ -926,7 +935,7 @@ def roadmap(
             type_filter = WorkItemType.from_string(item_type)
             items = [i for i in items if i.item_type == type_filter]
         except ValueError:
-            console.print(f"[red]Unknown type: {item_type}[/red]")
+            console.print(f"[red]Unknown type: {escape(item_type)}[/red]")
             sys.exit(1)
 
     if as_json:
@@ -975,14 +984,14 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
             value_summary=summary,
             commit=not no_commit,
         )
-        console.print(f"[green]Ranked {item.id} as #{rank_number}[/green]")
+        console.print(f"[green]Ranked {escape(item.id)} as #{rank_number}[/green]")
         if summary:
-            console.print(f"  Value: {summary}")
+            console.print(f"  Value: {escape(summary)}")
         if item.priority:
-            console.print(f"  Priority: {item.priority}")
+            console.print(f"  Priority: {escape(str(item.priority))}")
         console.print(f"  Status: {item.status.value}")
     except ValueError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(f"[red]{escape(str(e))}[/red]")
         sys.exit(1)
 
 
@@ -1029,7 +1038,7 @@ def history(
         try:
             cutoff = datetime.fromisoformat(since)
         except ValueError:
-            console.print(f"[red]Invalid date format: {since} (use YYYY-MM-DD)[/red]")
+            console.print(f"[red]Invalid date format: {escape(since)} (use YYYY-MM-DD)[/red]")
             sys.exit(1)
 
     if cutoff:
@@ -1077,9 +1086,9 @@ def comment(item_id: str, comment: str, author: str):
 
     try:
         item = service.add_comment(item_id.upper(), comment, author)
-        console.print(f"[green]Added comment to {item.id}[/green]")
+        console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error: {escape(str(e))}[/red]")
         sys.exit(1)
 
 
@@ -1117,14 +1126,14 @@ def metrics(item_id: str | None, as_json: bool):
         metrics_data = service.get_flow_metrics(item_id.upper())
 
         if "error" in metrics_data:
-            console.print(f"[yellow]{metrics_data['error']}[/yellow]")
+            console.print(f"[yellow]{escape(str(metrics_data['error']))}[/yellow]")
             console.print("[dim]Status history is recorded when items move between statuses.[/dim]")
             return
 
         if as_json:
             click.echo(json.dumps(metrics_data, indent=2, default=str))
         else:
-            console.print(f"[bold]Flow Metrics: {item_id.upper()}[/bold]")
+            console.print(f"[bold]Flow Metrics: {escape(item_id.upper())}[/bold]")
             console.print()
 
             if metrics_data.get("cycle_time_hours"):
@@ -1148,9 +1157,9 @@ def metrics(item_id: str | None, as_json: bool):
                 console.print("  [bold]Time in Status:[/bold]")
                 for status, hours in sorted(metrics_data["time_in_status"].items()):
                     if hours < 24:
-                        console.print(f"    {status}: {hours:.1f} hours")
+                        console.print(f"    {escape(str(status))}: {hours:.1f} hours")
                     else:
-                        console.print(f"    {status}: {hours / 24:.1f} days")
+                        console.print(f"    {escape(str(status))}: {hours / 24:.1f} days")
     else:
         # Board-wide metrics
         metrics_data = service.get_board_metrics()
@@ -1220,12 +1229,12 @@ def export_cmd(fmt: str, output: str | None, min_id: int, board_name: str | None
     elif fmt == "research-index":
         content = export_research_index(board)
     else:
-        console.print(f"[red]Unknown format: {fmt}[/red]")
+        console.print(f"[red]Unknown format: {escape(fmt)}[/red]")
         sys.exit(1)
 
     if output:
         Path(output).write_text(content)
-        console.print(f"[green]Exported to {output}[/green]")
+        console.print(f"[green]Exported to {escape(output)}[/green]")
     else:
         click.echo(content)
 
@@ -1261,13 +1270,13 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
         click.echo(json.dumps(result, indent=2))
     else:
         if result["success"]:
-            console.print(f"[green]Allocated: {result['id']}[/green]")
-            console.print(f"  Prefix: {result['prefix']}")
+            console.print(f"[green]Allocated: {escape(str(result['id']))}[/green]")
+            console.print(f"  Prefix: {escape(str(result['prefix']))}")
             console.print(f"  Number: {result['number']}")
             if not no_sync:
                 console.print("[dim]  (committed and pushed to remote)[/dim]")
         else:
-            console.print(f"[red]Failed to allocate ID: {result['message']}[/red]")
+            console.print(f"[red]Failed to allocate ID: {escape(str(result['message']))}[/red]")
             sys.exit(1)
 
 
@@ -1343,13 +1352,13 @@ def validate(fix: bool, as_json: bool):
 
     for issue in issues:
         if issue["type"] == "duplicate_id":
-            console.print(f"[red]DUPLICATE ID:[/red] {issue['id']}")
-            console.print(f"  File 1: {issue['file']}")
-            console.print(f"  File 2: {issue['other_file']}")
+            console.print(f"[red]DUPLICATE ID:[/red] {escape(issue['id'])}")
+            console.print(f"  File 1: {escape(issue['file'])}")
+            console.print(f"  File 2: {escape(issue['other_file'])}")
         elif issue["type"] == "filename_mismatch":
-            console.print(f"[yellow]FILENAME MISMATCH:[/yellow] {issue['id']}")
-            console.print(f"  File: {issue['file']}")
-            console.print(f"  Expected prefix: {issue['expected_prefix']}")
+            console.print(f"[yellow]FILENAME MISMATCH:[/yellow] {escape(issue['id'])}")
+            console.print(f"  File: {escape(issue['file'])}")
+            console.print(f"  Expected prefix: {escape(issue['expected_prefix'])}")
 
         console.print()
 
@@ -1374,7 +1383,10 @@ def validate(fix: bool, as_json: bool):
 
                 if new_path != old_path and not new_path.exists():
                     old_path.rename(new_path)
-                    console.print(f"[green]Fixed:[/green] {old_path.name} -> {new_path.name}")
+                    console.print(
+                        f"[green]Fixed:[/green] {escape(old_path.name)} -> "
+                        f"{escape(new_path.name)}"
+                    )
                     fixed += 1
 
         if fixed:
@@ -1434,7 +1446,7 @@ def query(
         try:
             results = ug.sparql(sparql_query)
         except Exception as e:
-            console.print(f"[red]SPARQL error:[/red] {e}")
+            console.print(f"[red]SPARQL error:[/red] {escape(str(e))}")
             sys.exit(1)
 
         if as_json:
@@ -1448,9 +1460,9 @@ def query(
             headers = list(results[0].keys())
             table = Table(title="SPARQL Results")
             for h in headers:
-                table.add_column(h)
+                table.add_column(escape(str(h)))
             for row in results[:top_k]:
-                table.add_row(*[row.get(h, "") for h in headers])
+                table.add_row(*[escape(str(row.get(h, ""))) for h in headers])
             console.print(table)
         return
 
@@ -1459,7 +1471,7 @@ def query(
         try:
             emb = EmbeddingIndex.from_service(service)
         except ImportError as e:
-            console.print(f"[red]{e}[/red]")
+            console.print(f"[red]{escape(str(e))}[/red]")
             sys.exit(1)
 
         hits = emb.search(semantic_query, top_k=top_k)
@@ -1477,7 +1489,7 @@ def query(
             ))
         else:
             from rich.table import Table
-            table = Table(title=f"Semantic Search: \"{semantic_query}\"")
+            table = Table(title=f"Semantic Search: \"{escape(semantic_query)}\"")
             table.add_column("ID", style="cyan")
             table.add_column("Score", justify="right")
             table.add_column("Status")
@@ -1485,7 +1497,7 @@ def query(
             for hit in hits:
                 title = hit.item.title if hit.item else ""
                 status = hit.item.status.value if hit.item else ""
-                table.add_row(hit.item_id, f"{hit.score:.4f}", status, title)
+                table.add_row(escape(hit.item_id), f"{hit.score:.4f}", status, escape(title))
             console.print(table)
         return
 
@@ -1512,21 +1524,21 @@ def query(
         parsed = decomposer.parse(query_text)
         console.print("[bold]Parsed query:[/bold]")
         if parsed.status_filter:
-            console.print(f"  Status exclude: {parsed.status_filter}")
+            console.print(f"  Status exclude: {escape(str(parsed.status_filter))}")
         if parsed.status_include:
-            console.print(f"  Status include: {parsed.status_include}")
+            console.print(f"  Status include: {escape(str(parsed.status_include))}")
         if parsed.type_filter:
-            console.print(f"  Type: {parsed.type_filter}")
+            console.print(f"  Type: {escape(str(parsed.type_filter))}")
         if parsed.id_min is not None:
             console.print(f"  ID min: {parsed.id_min}")
         if parsed.id_max is not None:
             console.print(f"  ID max: {parsed.id_max}")
         if parsed.assignee:
-            console.print(f"  Assignee: {parsed.assignee}")
+            console.print(f"  Assignee: {escape(str(parsed.assignee))}")
         if parsed.tag:
-            console.print(f"  Tag: {parsed.tag}")
+            console.print(f"  Tag: {escape(str(parsed.tag))}")
         if parsed.semantic_query:
-            console.print(f"  Semantic: \"{parsed.semantic_query}\"")
+            console.print(f"  Semantic: \"{escape(str(parsed.semantic_query))}\"")
         console.print()
 
     results = engine.query(query_text, top_k=top_k)
@@ -1550,7 +1562,7 @@ def query(
     else:
         from rich.table import Table
         has_semantic = any(r.semantic_score > 0 for r in results)
-        table = Table(title=f"Query: \"{query_text}\"")
+        table = Table(title=f"Query: \"{escape(query_text)}\"")
         table.add_column("ID", style="cyan")
         table.add_column("Status")
         table.add_column("Priority")
@@ -1559,10 +1571,10 @@ def query(
         table.add_column("Title")
 
         for r in results:
-            row = [r.item.id, r.item.status.value, r.item.priority or ""]
+            row = [escape(r.item.id), r.item.status.value, escape(r.item.priority or "")]
             if has_semantic:
                 row.append(f"{r.combined_score:.3f}")
-            row.append(r.item.title)
+            row.append(escape(r.item.title))
             table.add_row(*row)
         console.print(table)
 
