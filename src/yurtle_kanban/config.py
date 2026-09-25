@@ -72,6 +72,18 @@ def _or_default(data: dict[str, Any], key: str, default: str) -> Any:
     return default if value is None else value
 
 
+def _theme_name(data: dict[str, Any], key: str, where: str) -> Any:
+    """A theme/preset name: null means the default (#220), an explicit value is
+    kept (#241), but an empty or blank one is never a theme, so say so (#256)."""
+    value = _or_default(data, key, "software")
+    if isinstance(value, str) and not value.strip():
+        logger.warning(
+            f"config: `{key}` is empty{where}; no theme is loaded "
+            "(no WIP limits or workflows). Remove the key for the default."
+        )
+    return value
+
+
 def _ignore_list(data: dict[str, Any]) -> list[str]:
     """`ignore` patterns from a config mapping: absent → the defaults; a bare
     `ignore:` (YAML null) → none, not a crash in the scan (#194)."""
@@ -153,7 +165,7 @@ class BoardConfig:
             # a bare (null) key means its default, like an absent one (#220); an
             # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
             name=_or_default(data, "name", "default"),
-            preset=_or_default(data, "preset", "software"),
+            preset=_theme_name(data, "preset", f" for board {data.get('name')!r}"),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
             scan_paths=data.get("scan_paths") or [],
@@ -298,7 +310,7 @@ class KanbanConfig:
 
         return cls(
             version=CONFIG_VERSION_SINGLE,
-            theme=_or_default(kanban_data, "theme", "software"),
+            theme=_theme_name(kanban_data, "theme", ""),
             paths=paths,
             workflows=kanban_data.get("workflows") or {},
             gates=kanban_data.get("gates") or {},
