@@ -148,15 +148,24 @@ class LineEndings:
     _DIFFLIB_MAX_PAIRS = 250_000
 
     def _match(
-        self, a_lo: int, a_hi: int, new: list[str], b_lo: int, b_hi: int, keep: Any
+        self,
+        a_lo: int,
+        a_hi: int,
+        new: list[str],
+        b_lo: int,
+        b_hi: int,
+        keep: Any,
+        split: bool = True,
     ) -> None:
-        """Call keep(i, j) for old line i matched to new line j, in order.
+        """Call keep(i, j) for each old line i matched to new line j; the pairs
+        increase in both i and j.
 
         An edit touches a few lines: the unchanged prefix and suffix map line for
         line and only the changed middle is diffed (#181). A large middle is split
-        on anchors (lines that occur once on each side, longest increasing run),
-        and one with no anchors (e.g. all identical lines) maps position for
-        position, so no segment difflib sees is large (#202).
+        ONCE on anchors (lines that occur once on each side, longest increasing
+        run); a gap still too large for difflib, or a large middle with no anchors
+        (e.g. all identical lines), maps position for position. Recursion is at
+        most one level deep and the time linear beyond difflib's bound (#202).
         """
         old = self.lines
         while a_lo < a_hi and b_lo < b_hi and old[a_lo] == new[b_lo]:
@@ -178,17 +187,17 @@ class LineEndings:
                     for k in range(i2 - i1):
                         keep(a_lo + i1 + k, b_lo + j1 + k)
             return
-        anchors = self._anchors(old, a_lo, a_hi, new, b_lo, b_hi)
+        anchors = self._anchors(old, a_lo, a_hi, new, b_lo, b_hi) if split else []
         if not anchors:
             for k in range(min(a_hi - a_lo, b_hi - b_lo)):
                 if old[a_lo + k] == new[b_lo + k]:
                     keep(a_lo + k, b_lo + k)
             return
         for i, j in anchors:
-            self._match(a_lo, i, new, b_lo, j, keep)
+            self._match(a_lo, i, new, b_lo, j, keep, split=False)
             keep(i, j)
             a_lo, b_lo = i + 1, j + 1
-        self._match(a_lo, a_hi, new, b_lo, b_hi, keep)
+        self._match(a_lo, a_hi, new, b_lo, b_hi, keep, split=False)
 
     @staticmethod
     def _anchors(
