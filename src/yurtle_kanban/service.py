@@ -151,6 +151,21 @@ def _expanded_size(value: Any, limit: int) -> int:
     return sizes.get(id(value), 1)
 
 
+def _container_ids(values: Any) -> set[int]:
+    """ids of every list/dict reachable from `values`, each node visited once, so a
+    shared-alias DAG costs its unique nodes (#296). Call on non-cyclic values."""
+    seen: set[int] = set()
+    todo = [v for v in values if isinstance(v, (list, tuple, dict))]
+    while todo:
+        node = todo.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        children = [*node.keys(), *node.values()] if isinstance(node, dict) else node
+        todo.extend(c for c in children if isinstance(c, (list, tuple, dict)))
+    return seen
+
+
 def _is_cyclic(value: Any) -> bool:
     """True when a YAML value contains itself: an anchor used inside its own
     node. A node shared by several fields, or used twice, is not a cycle (#262).
@@ -530,19 +545,17 @@ class KanbanService:
             if not isinstance(frontmatter, dict) or not frontmatter:
                 self._note_unparseable(file_path, content)
                 return None
-            too_large: list[Any] = []  # keys the graph parser must not re-expand either
             for key in list(frontmatter):
                 value = frontmatter[key]
                 if _is_cyclic(value):
                     # a YAML anchor that contains itself (`tags: &a [x, *a]`) can't be
                     # serialised or rendered: drop the field, keep the item (#262). The
-                    # graph parser copes with cycles on its own, so its text is left as is
+                    # graph parser copes with cycles on its own
                     why = "is cyclic (a YAML anchor that contains itself)"
                 elif _expanded_size(value, _MAX_FIELD_NODES) > _MAX_FIELD_NODES:
                     # shared aliases nested a few levels deep (a "billion laughs") expand
                     # to more than any rendering or export can hold (#277)
                     why = f"is too large (over {_MAX_FIELD_NODES:,} values once aliases expand)"
-                    too_large.append(key)
                 else:
                     continue
                 logger.warning(f"{file_path}: frontmatter field `{key}` {why}; ignored")
@@ -657,15 +670,9 @@ class KanbanService:
             metadata["_original_status"] = status_str
 
             # Parse RDF graph from frontmatter + fenced blocks. The graph parser reads
-            # the text again, so a too-large field is blanked there too or it would be
-            # re-expanded; one under a non-text key (`5:`, `true:`) can't be located in
-            # the text, so the item goes without a graph instead (#277)
-            graph: Graph | None = None
-            if all(isinstance(key, str) for key in too_large):
-                graph_text = content
-                for key in too_large:
-                    graph_text = self._add_or_update_frontmatter_field(graph_text, key, "[]")
-                graph = self._parse_graph(graph_text)
+            # the text again; _parse_graph blanks too-large fields there itself (#277,
+            # #296), or skips the graph when one sits under a non-text key
+            graph = self._parse_graph(content)
 
             return WorkItem(
                 id=item_id,
@@ -772,6 +779,36 @@ class KanbanService:
         except (yaml.YAMLError, RecursionError):  # too deep counts as unparseable (#297)
             return None
 
+    def _graph_safe_text(self, content: str) -> str | None:
+        """`content` with every frontmatter field the graph parser must not expand
+        blanked to `[]`: a too-large one (#277), and any field that aliases an anchor
+        defined inside one, which would otherwise be left undefined (#296). None when
+        such a field has a key that can't be located in the text (`5:`, `true:`).
+        Every caller of the graph parser gets this, not just the scan (#296)."""
+        frontmatter = self._parse_frontmatter(content)
+        if not isinstance(frontmatter, dict):
+            return content
+        blank = [
+            key for key, value in frontmatter.items()
+            if not _is_cyclic(value)
+            and _expanded_size(value, _MAX_FIELD_NODES) > _MAX_FIELD_NODES
+        ]
+        if not blank:
+            return content
+        # the containers inside the dropped values (each walked once) ...
+        inside = _container_ids(frontmatter[key] for key in blank)
+        # ... and any other field sharing one of them (an alias of a dropped anchor)
+        blank += [
+            key for key, value in frontmatter.items()
+            if key not in blank and not _is_cyclic(value)
+            and _container_ids([value]) & inside
+        ]
+        if not all(isinstance(key, str) for key in blank):
+            return None
+        for key in blank:
+            content = self._add_or_update_frontmatter_field(content, key, "[]")
+        return content
+
     def _parse_graph(self, content: str) -> Graph | None:
         """Parse RDF graph from file content using yurtle-rdflib.
 
@@ -779,6 +816,10 @@ class KanbanService:
         and fenced ```turtle/```yurtle blocks in the markdown body.
         Returns None if parsing fails.
         """
+        safe_text = self._graph_safe_text(content)
+        if safe_text is None:
+            return None
+        content = safe_text
         try:
             import yurtle_rdflib
             # Suppress rdflib URI warnings for placeholder URIs like
