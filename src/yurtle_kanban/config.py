@@ -56,18 +56,21 @@ def _available_themes(repo_root: Path | None = None) -> list[str]:
 
 
 def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[str, Any] | None:
-    """Load a theme from local .kanban/themes/ or package resources."""
-    if theme_name in _theme_cache:
-        return _theme_cache[theme_name]
+    """Load a theme from local .kanban/themes/ or package resources.
 
+    The cache is keyed by the theme FILE that wins the lookup, not by the name:
+    two repos with different `.kanban/themes/nautical.yaml` never share an entry,
+    and a repo without an override still shares the built-in (#287)."""
     for theme_dir in _theme_dirs(repo_root):
         theme_path = theme_dir / f"{theme_name}.yaml"
         try:
-            if theme_path.exists():
+            if not theme_path.exists():
+                continue
+            key = str(theme_path.resolve())
+            if key not in _theme_cache:
                 with open(theme_path) as f:
-                    theme = yaml.safe_load(f)
-                    _theme_cache[theme_name] = theme
-                    return theme
+                    _theme_cache[key] = yaml.safe_load(f)
+            return _theme_cache[key]
         except Exception:
             continue
 
@@ -239,6 +242,8 @@ class KanbanConfig:
     boards: list[BoardConfig] = field(default_factory=list)
     namespace: str | None = None  # RDF namespace for graph-queryable items
     default_board: str | None = None  # Name of default board
+    # the repo this config belongs to (set by load); themes resolve there first (#287)
+    repo_root: Path | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_multi_board(self) -> bool:
@@ -306,7 +311,9 @@ class KanbanConfig:
         version = data.get("version", CONFIG_VERSION_SINGLE)
         # a bare `boards:` is the same as none: fall back to v1 (#204)
         if version == CONFIG_VERSION_MULTI and data.get("boards") is not None:
-            return cls._load_v2(data, repo_root)
+            config = cls._load_v2(data, repo_root)
+            config.repo_root = repo_root
+            return config
         dropped = [k for k in ("namespace", "default_board") if data.get(k) is not None]
         if version == CONFIG_VERSION_MULTI and "boards" in data and dropped:
             logger.warning(
@@ -315,7 +322,9 @@ class KanbanConfig:
             )
 
         # Fall back to v1 single-board config
-        return cls._load_v1(data, repo_root)
+        config = cls._load_v1(data, repo_root)
+        config.repo_root = repo_root
+        return config
 
     @classmethod
     def _load_v1(cls, data: dict[str, Any], repo_root: Path | None = None) -> "KanbanConfig":
@@ -491,10 +500,10 @@ class KanbanConfig:
         if self.is_multi_board and board_name:
             board = self.get_board(board_name)
             if board:
-                return board.get_theme()
+                return board.get_theme(self.repo_root)
             return None
 
-        return _load_builtin_theme(self.theme)
+        return _load_builtin_theme(self.theme, self.repo_root)
 
 
 # ---------------------------------------------------------------------------
