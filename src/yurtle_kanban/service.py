@@ -134,28 +134,105 @@ class LineEndings:
             if j < len(new_lines) - 1 and self.endings[i]:
                 new_endings[j] = self.endings[i]
 
-        # An edit touches a few lines: the unchanged prefix and suffix map line for
-        # line, and only the changed middle is diffed; difflib is quadratic on long
-        # runs of identical lines, so it never sees the whole file (#181)
-        old, n_old, n_new = self.lines, len(self.lines), len(new_lines)
-        pre = 0
-        while pre < min(n_old, n_new) and old[pre] == new_lines[pre]:
-            keep(pre, pre)
-            pre += 1
-        suf = 0
-        while suf < min(n_old, n_new) - pre and old[-1 - suf] == new_lines[-1 - suf]:
-            keep(n_old - 1 - suf, n_new - 1 - suf)
-            suf += 1
-        mid_old, mid_new = old[pre : n_old - suf], new_lines[pre : n_new - suf]
-        if mid_old and mid_new:
+        self._match(0, len(self.lines), new_lines, 0, len(new_lines), keep)
+
+        # A kept lone `\r` right before an empty line ending `\n` would serialise
+        # as one `\r\n` and lose that line on re-read (#202): end it `\r` too
+        for j in range(len(new_lines) - 2):
+            if new_endings[j] == "\r" and not new_lines[j + 1] and new_endings[j + 1] == "\n":
+                new_endings[j + 1] = "\r"
+        return "".join(line + end for line, end in zip(new_lines, new_endings))
+
+    # Past this many line pairs, a segment is split on lines unique to both sides
+    # (patience diff) instead of going to difflib, which is quadratic (#202)
+    _DIFFLIB_MAX_PAIRS = 250_000
+
+    def _match(
+        self,
+        a_lo: int,
+        a_hi: int,
+        new: list[str],
+        b_lo: int,
+        b_hi: int,
+        keep: Any,
+        split: bool = True,
+    ) -> None:
+        """Call keep(i, j) for each old line i matched to new line j; the pairs
+        increase in both i and j.
+
+        An edit touches a few lines: the unchanged prefix and suffix map line for
+        line and only the changed middle is diffed (#181). A large middle is split
+        ONCE on anchors (lines that occur once on each side, longest increasing
+        run); a gap still too large for difflib, or a large middle with no anchors
+        (e.g. all identical lines), maps position for position. Recursion is at
+        most one level deep and the time linear beyond difflib's bound (#202).
+        """
+        old = self.lines
+        while a_lo < a_hi and b_lo < b_hi and old[a_lo] == new[b_lo]:
+            keep(a_lo, b_lo)
+            a_lo, b_lo = a_lo + 1, b_lo + 1
+        while a_lo < a_hi and b_lo < b_hi and old[a_hi - 1] == new[b_hi - 1]:
+            a_hi, b_hi = a_hi - 1, b_hi - 1
+            keep(a_hi, b_hi)
+        if a_lo == a_hi or b_lo == b_hi:
+            return
+        if (a_hi - a_lo) * (b_hi - b_lo) <= self._DIFFLIB_MAX_PAIRS:
             import difflib
 
-            matcher = difflib.SequenceMatcher(a=mid_old, b=mid_new, autojunk=False)
+            matcher = difflib.SequenceMatcher(
+                a=old[a_lo:a_hi], b=new[b_lo:b_hi], autojunk=False
+            )
             for tag, i1, i2, j1, _ in matcher.get_opcodes():
                 if tag == "equal":
                     for k in range(i2 - i1):
-                        keep(pre + i1 + k, pre + j1 + k)
-        return "".join(line + end for line, end in zip(new_lines, new_endings))
+                        keep(a_lo + i1 + k, b_lo + j1 + k)
+            return
+        anchors = self._anchors(old, a_lo, a_hi, new, b_lo, b_hi) if split else []
+        if not anchors:
+            for k in range(min(a_hi - a_lo, b_hi - b_lo)):
+                if old[a_lo + k] == new[b_lo + k]:
+                    keep(a_lo + k, b_lo + k)
+            return
+        for i, j in anchors:
+            self._match(a_lo, i, new, b_lo, j, keep, split=False)
+            keep(i, j)
+            a_lo, b_lo = i + 1, j + 1
+        self._match(a_lo, a_hi, new, b_lo, b_hi, keep, split=False)
+
+    @staticmethod
+    def _anchors(
+        old: list[str], a_lo: int, a_hi: int, new: list[str], b_lo: int, b_hi: int
+    ) -> list[tuple[int, int]]:
+        """(i, j) pairs of lines unique on both sides, longest run in order."""
+        from bisect import bisect_left
+        from collections import Counter
+
+        count_a = Counter(old[a_lo:a_hi])
+        count_b = Counter(new[b_lo:b_hi])
+        where_b = {new[j]: j for j in range(b_lo, b_hi) if count_b[new[j]] == 1}
+        pairs = [
+            (i, where_b[old[i]])
+            for i in range(a_lo, a_hi)
+            if count_a[old[i]] == 1 and old[i] in where_b
+        ]
+        # longest increasing subsequence of j (patience sorting)
+        tails: list[int] = []  # j at the end of the best run of each length
+        tail_idx: list[int] = []  # index into pairs of that end
+        back = [-1] * len(pairs)
+        for n, (_, j) in enumerate(pairs):
+            k = bisect_left(tails, j)
+            back[n] = tail_idx[k - 1] if k else -1
+            if k == len(tails):
+                tails.append(j)
+                tail_idx.append(n)
+            else:
+                tails[k], tail_idx[k] = j, n
+        run: list[tuple[int, int]] = []
+        n = tail_idx[-1] if tail_idx else -1
+        while n != -1:
+            run.append(pairs[n])
+            n = back[n]
+        return run[::-1]
 
 class KanbanService:
     """Service for managing kanban work items."""
