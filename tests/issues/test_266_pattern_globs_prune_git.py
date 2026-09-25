@@ -12,6 +12,7 @@ as does the #283 control that an unpruned scandir walk trips the fake.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import os
 import sys
 from collections.abc import Callable, Iterator
@@ -124,18 +125,6 @@ def test_rglob_itself_trips_the_fake(tmp_path: Path, monkeypatch: pytest.MonkeyP
         list(root.rglob("FEAT-*.md"))
 
 
-def _unpruned_glob(root: Path, pattern: str) -> Iterator[Path]:
-    """glob_outside_git's walk with the two `.git` checks removed: what it would do unpruned."""
-    with os.scandir(root) as it:
-        entries = list(it)
-    for entry in entries:
-        if fnmatch.fnmatchcase(entry.name, pattern):
-            yield root / entry.name
-    for entry in entries:
-        if entry.is_dir() and not entry.is_symlink():
-            yield from _unpruned_glob(root / entry.name, pattern)
-
-
 def _reraise(err: OSError) -> None:
     raise err
 
@@ -147,12 +136,16 @@ def _unpruned_walk(root: Path, pattern: str) -> Iterator[Path]:
             yield Path(dirpath) / name
 
 
-@pytest.mark.parametrize("walker", [_unpruned_glob, _unpruned_walk], ids=["glob", "os.walk"])
+_UNPRUNED_GLOB = functools.partial(glob_outside_git, _prune=False)  # the real helper (#299)
+
+
+@pytest.mark.parametrize("walker", [_UNPRUNED_GLOB, _unpruned_walk], ids=["glob", "os.walk"])
 def test_unpruned_walk_trips_the_fake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, walker: Callable[..., Iterator[Path]]
 ) -> None:
-    """#283 control on every version: the fake reaches an unpruned os.scandir-based walk,
-    so test_never_enters_git passes because of the pruning, not because the fake is inert."""
+    """#283 control on every version: the fake reaches an unpruned os.scandir-based walk
+    (glob_outside_git itself with `_prune=False`, #299), so test_never_enters_git passes
+    because of the pruning, not because the fake is inert."""
     root = _tree(tmp_path)
     _deny_git_scans(monkeypatch)
     with pytest.raises(FileNotFoundError, match="mid-walk"):

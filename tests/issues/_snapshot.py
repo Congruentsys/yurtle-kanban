@@ -29,7 +29,7 @@ def paths_outside_git(root: Path, suffix: str = "") -> Iterator[Path]:
                 yield Path(dirpath) / name
 
 
-def glob_outside_git(root: Path, pattern: str) -> Iterator[Path]:
+def glob_outside_git(root: Path, pattern: str, *, _prune: bool = True) -> Iterator[Path]:
     """`root.rglob(pattern)` minus `.git` and everything under it, without entering it (#266).
 
     Same Paths in the same order as Python 3.11's rglob for a simple name pattern: each
@@ -37,6 +37,9 @@ def glob_outside_git(root: Path, pattern: str) -> Iterator[Path]:
     which are visited depth-first; symlinked directories are not followed. Matching is
     `fnmatchcase` on the name, as PosixPath does. Path-containing or `**` patterns are
     rejected rather than half-emulated.
+
+    `_prune=False` is for tests only (#299): the same walk without the `.git` checks, so
+    test_266's control can show the fake scandir reaches this very code when unpruned.
     """
     if "/" in pattern or os.sep in pattern or "**" in pattern:
         raise ValueError(f"glob_outside_git takes a name pattern, not {pattern!r}")
@@ -44,12 +47,13 @@ def glob_outside_git(root: Path, pattern: str) -> Iterator[Path]:
         return
     with os.scandir(root) as it:
         entries = list(it)
-    for entry in entries:
-        if entry.name != ".git" and fnmatch.fnmatchcase(entry.name, pattern):
+    kept = [e for e in entries if e.name != ".git"] if _prune else entries
+    for entry in kept:
+        if fnmatch.fnmatchcase(entry.name, pattern):
             yield root / entry.name
-    for entry in entries:
-        if entry.name != ".git" and entry.is_dir() and not entry.is_symlink():
-            yield from glob_outside_git(root / entry.name, pattern)
+    for entry in kept:
+        if entry.is_dir() and not entry.is_symlink():
+            yield from glob_outside_git(root / entry.name, pattern, _prune=_prune)
 
 
 def files_outside_git(repo: Path) -> dict[str, bytes]:
