@@ -463,7 +463,7 @@ def list_items(
         data = [item.to_dict() for item in items]
         click.echo(json.dumps(data, indent=2))
     else:
-        render_list(items, console)
+        render_list(items, console, status_label=service.status_label)
 
 
 @main.command()
@@ -1137,7 +1137,7 @@ def blocked():
         return
 
     console.print(f"[bold red]Blocked Items ({len(items)})[/bold red]")
-    render_list(items, console)
+    render_list(items, console, status_label=service.status_label)
 
 
 @main.command()
