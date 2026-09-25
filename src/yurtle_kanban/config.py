@@ -55,6 +55,28 @@ def _available_themes(repo_root: Path | None = None) -> list[str]:
     return sorted(names)
 
 
+# theme sections every consumer walks as a mapping (`.items()`, `.get()`) (#351)
+_THEME_SECTIONS = (
+    "theme", "item_types", "columns", "transitions", "id_formats", "status_mappings",
+    "status_aliases",
+)
+
+
+def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
+    """`data` without any section that isn't a mapping: it is ignored, with one
+    warning, as if it were absent (a `null` one too), so board/init/move fall back
+    instead of crashing (#351)."""
+    for section in _THEME_SECTIONS:
+        if section in data and not isinstance(data[section], dict):
+            value = data.pop(section)
+            if value is not None:
+                logger.warning(
+                    f"theme file {theme_path}: `{section}` is not a mapping "
+                    f"({type(value).__name__}); ignored"
+                )
+    return data
+
+
 def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[str, Any] | None:
     """Load a theme from local .kanban/themes/ or package resources.
 
@@ -78,6 +100,8 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
                         f"({type(data).__name__}); ignored"
                     )
                     data = None
+                else:
+                    data = _drop_bad_sections(data, theme_path)
                 _theme_cache[key] = data
             return _theme_cache[key]
         except Exception:
