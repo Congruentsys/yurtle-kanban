@@ -14,6 +14,9 @@
 4. Shell templates already use `shlex.quote`; they stay as they are (control).
 
 Helpers are reused from the #347 tests.
+
+#369 later made a `:` in a substituted log-path value `_`, so a `{timestamp}` log
+path uses the caller's timestamp in that path-safe form.
 """
 
 from __future__ import annotations
@@ -319,7 +322,8 @@ def test_timestamp_placeholder_in_log_path_is_callers(
     monkeypatch.chdir(elsewhere)
     service._hook_engine.trigger(HookEvent.ITEM_CREATED, _fixed_ctx())
     files = [p.name for p in (repo / "logs").iterdir()]
-    assert files == [f"{FIXED_TS}.jsonl"], files
+    # the caller's FIXED_TS, path-safe: each `:` in a substituted value becomes `_` (#369)
+    assert files == ["2020-01-02T03_04_05.000006+00_00.jsonl"], files
     _assert_cwd_untouched(elsewhere)
 
 
