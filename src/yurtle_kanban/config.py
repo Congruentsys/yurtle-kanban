@@ -146,11 +146,11 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
         theme_path = theme_dir / f"{theme_name}.yaml"
         try:
             if not theme_path.exists():
-                if theme_path.is_symlink():  # an override pointing nowhere (#365)
+                if theme_path.is_symlink():  # dangling or a loop: points nowhere (#365, #381)
                     key = str(theme_path.absolute())
                     if key not in _theme_cache:
                         logger.warning(
-                            f"theme file {theme_path} is a symlink to a missing file; "
+                            f"theme file {theme_path} is a symlink that can't be followed; "
                             "ignored"
                         )
                         _theme_cache[key] = None
