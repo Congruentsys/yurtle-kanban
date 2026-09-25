@@ -351,9 +351,10 @@ class LineEndings:
 class KanbanService:
     """Service for managing kanban work items.
 
-    A config with no `repo_root` (built directly, not by `KanbanConfig.load`) is bound
-    to this service's repo: the service fills `config.repo_root` in place, so a bare
-    `KanbanConfig()` reused for a second repo keeps resolving themes in the first (#313).
+    A config from `KanbanConfig.load` keeps its own `repo_root`. One with no `repo_root`
+    (built directly) is bound to this service's repo: the service fills
+    `config.repo_root` in place, so a bare `KanbanConfig()` reused for a second repo
+    keeps resolving themes in the first (#313, #326).
     """
 
     def __init__(
