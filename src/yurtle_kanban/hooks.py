@@ -195,11 +195,22 @@ class HookEngine:
         self._depth += 1
         try:
             root = context.repo_root
-            if root is None or not isinstance(root, Path):
+            if not isinstance(root, Path):
                 # a copy: the caller's context is never changed, so one reused
                 # across engines runs in each engine's own repo (#357); actions
                 # always see a Path, even for a str root set by the caller (#375)
-                root = self._repo_root if root is None else Path(root)
+                if root is None:
+                    root = self._repo_root
+                else:
+                    try:
+                        root = Path(root)
+                    except TypeError:
+                        # not a path at all: a hook never crashes its caller (#388)
+                        logger.warning(
+                            f"hook context repo root {root!r} is not a path; "
+                            "using the engine's"
+                        )
+                        root = self._repo_root
                 timestamp = context.timestamp
                 context = replace(context, repo_root=root)
                 # replace() re-runs __post_init__: keep the event's own time (#357)
