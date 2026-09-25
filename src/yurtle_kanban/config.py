@@ -66,7 +66,8 @@ _THEME_SECTIONS = (
 def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
     """`data` without any section that isn't a mapping: it is ignored, with one
     warning, as if it were absent (a `null` one too), so board/init/move fall back
-    instead of crashing (#351)."""
+    instead of crashing (#351). Likewise a column or item type that isn't a mapping,
+    and a `theme.name` that isn't a string (#363)."""
     for section in _THEME_SECTIONS:
         if section in data and not isinstance(data[section], dict):
             value = data.pop(section)
@@ -75,6 +76,23 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
                     f"theme file {theme_path}: `{section}` is not a mapping "
                     f"({type(value).__name__}); ignored"
                 )
+    # one level down: every column and item type is walked as a mapping too (#363)
+    for section in ("columns", "item_types"):
+        entries = data.get(section, {})
+        for entry in [k for k, v in entries.items() if not isinstance(v, dict)]:
+            value = entries.pop(entry)
+            logger.warning(
+                f"theme file {theme_path}: `{section}.{entry}` is not a mapping "
+                f"({type(value).__name__}); ignored"
+            )
+    # the theme's name is matched as text (epics look it up in a set) (#363)
+    meta = data.get("theme", {})
+    if "name" in meta and not isinstance(meta["name"], str):
+        value = meta.pop("name")
+        logger.warning(
+            f"theme file {theme_path}: `theme.name` is not a string "
+            f"({type(value).__name__}); ignored"
+        )
     return data
 
 
