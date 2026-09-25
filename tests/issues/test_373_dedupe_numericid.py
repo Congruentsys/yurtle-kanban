@@ -4,8 +4,11 @@
 1. ``structured_query`` runs ``SELECT DISTINCT ?id ?numId``. An item whose yurtle
    block adds a second ``kb:numericId`` (``item:PAPER-002 kb:numericId 999 .``) has two
    distinct ``(?id, ?numId)`` rows, so it still comes back twice.
-   Decided: each item once, ordered by its HIGHEST numericId (the kept row is the
-   first, highest one). Red through QueryEngine and ``query --no-semantic --json``.
+   Decided: each item once. Red through QueryEngine and ``query --no-semantic --json``.
+   Order (#385, superseding #373's "ordered by its HIGHEST numericId"): a block
+   can't redefine ``kb:numericId`` -- ``UnifiedGraph.add_item`` skips the block's
+   numericId triples -- so the extra value is ignored and each item sits at its own
+   id's position. The seen-set dedupe stays as a guard.
    Controls: the #349 multi-type / multi-tag / multi-assignee duplicates stay fixed,
    and ordering on a board with no extra numericId is unchanged.
 
@@ -27,6 +30,8 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from rdflib import Literal
+from rdflib.namespace import XSD
 
 from tests.issues.test_349_sparql_distinct import (  # noqa: F401 (fixtures)
     DUAL,
@@ -37,14 +42,14 @@ from tests.issues.test_357_hooks_context_copy_safe_paths import FIXED_TS, _engin
 from yurtle_kanban import hooks as hooks_mod
 from yurtle_kanban.cli import get_service, main
 from yurtle_kanban.hooks import HookContext, HookEvent
-from yurtle_kanban.query import ParsedQuery, QueryEngine
+from yurtle_kanban.query import ITEM, KB, ParsedQuery, QueryEngine
 
 # ---------------------------------------------------------------------------
 # 1. a second kb:numericId
 # ---------------------------------------------------------------------------
 
-# PAPER-002 (numericId 2) also claims 999: it must sort first, once.
-# PAPER-003 (numericId 3) also claims 0: it must keep its place (max is 3), once.
+# PAPER-002 (numericId 2) also claims 999: ignored (#385), it keeps its own place, once.
+# PAPER-003 (numericId 3) also claims 0: ignored (#385), it keeps its own place, once.
 _EXTRA_NUMID = {
     "PAPER-002": 999,
     "PAPER-003": 0,
@@ -58,8 +63,8 @@ item:{item_id} kb:numericId {num} .
 ```
 """
 
-# highest numericId first: PAPER-002 (999), H-004 (4), PAPER-003 (3), PAPER-001 (1)
-ALL_ORDER = ["PAPER-002", DUAL, "PAPER-003", "PAPER-001"]
+# each item's own numericId, descending (#385): H-004 (4), PAPER-003, PAPER-002, PAPER-001
+ALL_ORDER = [DUAL, "PAPER-003", "PAPER-002", "PAPER-001"]
 
 
 @pytest.fixture
@@ -80,13 +85,10 @@ def numid_engine(numid_repo: Path) -> QueryEngine:
     for item_id, num in _EXTRA_NUMID.items():
         item = eng._ug.get_item(item_id)
         assert item is not None, f"fixture: {item_id} not scanned"
-        rows = eng.sparql(
-            "PREFIX kb: <https://yurtle.dev/kanban/>\n"
-            f'SELECT ?n WHERE {{ ?i kb:id "{item_id}" ; kb:numericId ?n . }}'
-        )
-        nums = sorted(int(r["n"]) for r in rows)
-        assert len(nums) == 2 and num in nums, (
-            f"fixture: {item_id} should carry two kb:numericId values, got {nums}"
+        # the block parsed into the item's own graph (the unified graph drops it, #385)
+        extra = (ITEM[item_id], KB.numericId, Literal(num, datatype=XSD.integer))
+        assert item.graph is not None and extra in item.graph, (
+            f"fixture: {item_id}'s block did not parse kb:numericId {num}"
         )
     return eng
 
@@ -107,7 +109,7 @@ def _assert_unique(ids: list[str]) -> None:
     assert not dupes, f"items returned more than once {dupes}: {ids}"
 
 
-# --- RED before the fix ------------------------------------------------------
+# --- RED before the #373 fix; order red until #385 ------------------------------------------------------
 
 
 def test_engine_two_numericids_status_query(numid_engine: QueryEngine) -> None:
@@ -132,14 +134,15 @@ def test_engine_two_numericids_with_349_multimatch(numid_engine: QueryEngine) ->
 def test_engine_two_numericids_tag(numid_engine: QueryEngine) -> None:
     ids = _ids(numid_engine, ParsedQuery(tag="brain"))
     _assert_unique(ids)
-    assert ids == ["PAPER-002", DUAL]
+    assert ids == [DUAL, "PAPER-002"]
 
 
 def test_engine_lower_second_numericid_keeps_place(numid_engine: QueryEngine) -> None:
-    # PAPER-003's extra 0 must not add a row nor move it below PAPER-001
+    # PAPER-003's extra 0 must not add a row nor move it below PAPER-001 (or PAPER-002)
     ids = _ids(numid_engine, ParsedQuery(type_filter=["paper"], status_include=["backlog"]))
     _assert_unique(ids)
     assert ids.index("PAPER-003") < ids.index("PAPER-001"), ids
+    assert ids == ALL_ORDER
 
 
 def test_cli_two_numericids_backlog(numid_repo: Path) -> None:
@@ -151,7 +154,7 @@ def test_cli_two_numericids_backlog(numid_repo: Path) -> None:
 def test_cli_two_numericids_tag(numid_repo: Path) -> None:
     ids = _cli_ids("items tagged brain")
     _assert_unique(ids)
-    assert ids == ["PAPER-002", DUAL]
+    assert ids == [DUAL, "PAPER-002"]
 
 
 # --- controls (GREEN before and after) ---------------------------------------
