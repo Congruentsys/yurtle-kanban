@@ -5,13 +5,16 @@ before matching, so it races with git repacking objects just like the #259 snaps
 `glob_outside_git` is the drop-in replacement: same Paths (same order on 3.11), `.git`
 pruned. rglob's order and its use of `os.scandir` vary across CPython versions (3.12
 walks differently; 3.10 binds scandir at import), so order and the rglob-trips-the-fake
-control are asserted only on 3.11; the set, no-duplicates and pruning checks run everywhere.
+control are asserted only on 3.11; the set, no-duplicates and pruning checks run everywhere,
+as does the #283 control that an unpruned scandir walk trips the fake.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -119,6 +122,41 @@ def test_rglob_itself_trips_the_fake(tmp_path: Path, monkeypatch: pytest.MonkeyP
     _deny_git_scans(monkeypatch)
     with pytest.raises(FileNotFoundError, match="mid-walk"):
         list(root.rglob("FEAT-*.md"))
+
+
+def _unpruned_glob(root: Path, pattern: str) -> Iterator[Path]:
+    """glob_outside_git's walk with the two `.git` checks removed: what it would do unpruned."""
+    with os.scandir(root) as it:
+        entries = list(it)
+    for entry in entries:
+        if fnmatch.fnmatchcase(entry.name, pattern):
+            yield root / entry.name
+    for entry in entries:
+        if entry.is_dir() and not entry.is_symlink():
+            yield from _unpruned_glob(root / entry.name, pattern)
+
+
+def _reraise(err: OSError) -> None:
+    raise err
+
+
+def _unpruned_walk(root: Path, pattern: str) -> Iterator[Path]:
+    """os.walk (which calls os.scandir) with no pruning; onerror so it cannot skip .git."""
+    for dirpath, dirs, names in os.walk(root, onerror=_reraise):
+        for name in fnmatch.filter(dirs + names, pattern):
+            yield Path(dirpath) / name
+
+
+@pytest.mark.parametrize("walker", [_unpruned_glob, _unpruned_walk], ids=["glob", "os.walk"])
+def test_unpruned_walk_trips_the_fake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, walker: Callable[..., Iterator[Path]]
+) -> None:
+    """#283 control on every version: the fake reaches an unpruned os.scandir-based walk,
+    so test_never_enters_git passes because of the pruning, not because the fake is inert."""
+    root = _tree(tmp_path)
+    _deny_git_scans(monkeypatch)
+    with pytest.raises(FileNotFoundError, match="mid-walk"):
+        list(walker(root, "FEAT-*.md"))
 
 
 def test_unscannable_non_git_dir_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
