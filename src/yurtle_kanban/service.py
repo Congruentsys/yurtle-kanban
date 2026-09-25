@@ -779,15 +779,17 @@ class KanbanService:
         return reason
 
     def _parse_frontmatter(self, content: str) -> dict[str, Any] | None:
-        """Parse YAML frontmatter from markdown content."""
+        """Parse YAML frontmatter from markdown content; None unless it is a mapping
+        (a YAML list or scalar is as unusable as broken YAML to every caller, #321)."""
         split = self._split_frontmatter(content)
         if split is None:
             return None
 
         try:
-            return yaml.safe_load(split[0])
+            data = yaml.safe_load(split[0])
         except (yaml.YAMLError, RecursionError):  # too deep counts as unparseable (#297)
             return None
+        return data if isinstance(data, dict) else None
 
     def _graph_safe_text(
         self, content: str, guarded: tuple[dict, list] | None = None
@@ -3605,7 +3607,8 @@ class KanbanService:
             # a file rewritten since the scan may no longer parse to a mapping: the
             # run is still recorded, with no hypothesis link (#309)
             if isinstance(fm, dict):
-                hypothesis = fm.get("hypothesis", "")
+                # `hypothesis:` left empty is no link, not `null` (#321)
+                hypothesis = fm.get("hypothesis") or ""
 
         # Create timestamped folder (microseconds to avoid collisions)
         now = datetime.now()
