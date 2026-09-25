@@ -342,3 +342,110 @@ class TestRenderRefusalIsCleanCliError:
         with pytest.raises(ValueError, match="boom") as excinfo:
             hdd_commands._render(engine, "hdd", "idea", {})
         assert not isinstance(excinfo.value, click.ClickException)
+
+    def test_control_plain_value_error_keeps_traceback_through_group(
+        self, hdd: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#183 through Group.invoke: only InvalidText is softened, so a plain
+        ValueError from render reaches the caller as itself (its traceback kept)."""
+        from yurtle_kanban.hdd_commands import idea
+        from yurtle_kanban.template_engine import TemplateEngine
+
+        def boom(self: Any, *args: Any, **kwargs: Any) -> str:
+            raise ValueError("boom")
+
+        monkeypatch.setattr(TemplateEngine, "render", boom)
+        result = _invoke(hdd, monkeypatch, idea, ["create", "t"])
+        assert type(result.exception) is ValueError, repr(result.exception)
+        assert str(result.exception) == "boom"
+
+
+# ---------------------------------------------------------------------------
+# Self-referential containers never hang check_encodable (review of PR #253)
+# ---------------------------------------------------------------------------
+
+# Each case builds `value` in a child process; the child arms a 1 s alarm after
+# its imports, so a hang kills it (and the parent's timeout is a backstop).
+CYCLE_CASES = {
+    "list-self": ('value = ["x"]; value.append(value)', "ok"),
+    "list-self-bad": ("value = [LONE]; value.append(value)", "InvalidText"),
+    "dict-self": ('value = {"k": "x"}; value["me"] = value', "ok"),
+    "dict-self-bad": ('value = {"k": LONE}; value["me"] = value', "InvalidText"),
+    "mutual": ('a = ["x"]; b = [a]; a.append(b); value = a', "ok"),
+    "yaml-anchor": ('value = yaml.safe_load("&a [x, *a]")', "ok"),
+    "yaml-anchor-bad": (
+        'value = yaml.safe_load("&a [x, *a]"); value.insert(0, LONE)',
+        "InvalidText",
+    ),
+    "yaml-anchor-only": ('value = yaml.safe_load("&a [*a]")', "ok"),
+}
+
+_CYCLE_CHILD = """\
+import signal, sys, yaml
+from yurtle_kanban.models import InvalidText, check_encodable
+LONE = "a\\udcffb"
+{build}
+signal.alarm(1)
+try:
+    check_encodable("f", value)
+except InvalidText:
+    print("InvalidText")
+else:
+    print("ok")
+"""
+
+
+def _run_child(code: str, *args: str, cwd: Path | None = None, timeout: float = 60) -> Any:
+    env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONDONTWRITEBYTECODE": "1"}
+    try:
+        return subprocess.run(
+            [sys.executable, "-c", code, *args],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"hung for {timeout}s")
+
+
+class TestCyclicContainers:
+    @pytest.mark.parametrize("case", list(CYCLE_CASES), ids=list(CYCLE_CASES))
+    def test_cycle_terminates(self, case: str) -> None:
+        build, expected = CYCLE_CASES[case]
+        proc = _run_child(_CYCLE_CHILD.format(build=build))
+        assert proc.returncode == 0, f"exit {proc.returncode} (alarm = hang): {proc.stderr}"
+        assert proc.stdout.strip() == expected, proc.stdout + proc.stderr
+
+    def test_hooks_anchor_cycle_does_not_hang_create(self, sw: Path) -> None:
+        """The reviewer's repro: a hooks file whose create_item tags are a YAML cycle."""
+        hooks = sw / ".kanban" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "kanban-hooks.yurtle.md").write_text(
+            "---\n"
+            "type: kanban-hooks\n"
+            "version: 1\n"
+            "hooks:\n"
+            "  on_create:\n"
+            "    - item_types: [feature]\n"
+            "      actions:\n"
+            "        - type: create_item\n"
+            "          item_type: bug\n"
+            '          title: "Follow-up"\n'
+            "          tags: &a [x, *a]\n"
+            "---\n"
+            "# hooks\n",
+            encoding="utf-8",
+        )
+        _commit_all(sw, "hooks")
+        proc = _run_child(
+            "from yurtle_kanban.cli import main; main()",
+            "create",
+            "feature",
+            "Hello",
+            cwd=sw,
+            timeout=15,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert list(sw.rglob("FEAT-002*.md")), proc.stdout + proc.stderr
