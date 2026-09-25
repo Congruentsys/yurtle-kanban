@@ -259,7 +259,9 @@ class LineEndings:
 class KanbanService:
     """Service for managing kanban work items."""
 
-    def __init__(self, config: KanbanConfig, repo_root: Path, hooks_config: Path | None = None):
+    def __init__(
+        self, config: KanbanConfig, repo_root: Path | str, hooks_config: Path | None = None
+    ):
         self.config = config
         # absolute: git runs with cwd=repo_root, so a relative root would double
         # every path handed to `git add` (#198); `.absolute()` keeps symlinks as given
@@ -3338,7 +3340,8 @@ class KanbanService:
         """
         # Validate expr_id to prevent path traversal
         # Allow dotted sub-IDs like EXPR-131.5 (common for sub-experiments)
-        if not re.fullmatch(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*", expr_id):  # no `$`: #183
+        # fullmatch: `$` would accept a trailing newline (#183)
+        if not re.fullmatch(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*", expr_id):
             raise ValueError(
                 f"Invalid experiment ID format: {expr_id!r} — "
                 "expected PREFIX-ID (e.g., EXPR-130 or EXPR-131.5)"
@@ -3401,7 +3404,8 @@ class KanbanService:
         """
         # Validate expr_id to prevent path traversal
         # Allow dotted sub-IDs like EXPR-131.5 (common for sub-experiments)
-        if not re.fullmatch(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*", expr_id):  # no `$`: #183
+        # fullmatch: `$` would accept a trailing newline (#183)
+        if not re.fullmatch(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*", expr_id):
             raise ValueError(
                 f"Invalid experiment ID format: {expr_id!r} — "
                 "expected PREFIX-ID (e.g., EXPR-130 or EXPR-131.5)"

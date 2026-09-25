@@ -14,7 +14,7 @@ import re
 
 from .models import turtle_string
 
-_SAFE_LOCAL_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+_SAFE_LOCAL_NAME = re.compile(r"[A-Za-z0-9._-]+")  # used with fullmatch (#183)
 
 
 class InvalidTurtleName(ValueError):  # noqa: N818 — the name #183 specifies
