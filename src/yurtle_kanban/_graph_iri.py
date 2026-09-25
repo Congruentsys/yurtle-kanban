@@ -18,7 +18,19 @@ _self_iris: dict[int, tuple[weakref.ref, str]] = {}
 def set_self_iri(graph: Any, iri: str) -> None:
     """Record that `<>` meant `iri` when `graph` was parsed."""
     key = id(graph)
-    _self_iris[key] = (weakref.ref(graph, lambda _ref, k=key: _self_iris.pop(k, None)), iri)
+
+    def forget(ref: weakref.ref, k: int = key) -> None:
+        # only this graph's own entry: a late callback must not evict a newer graph
+        # that got the same id (#430)
+        entry = _self_iris.get(k)
+        if entry is not None and entry[0] is ref:
+            del _self_iris[k]
+
+    try:
+        ref = weakref.ref(graph, forget)
+    except TypeError:
+        return  # can't be weakly referenced: record nothing; merge falls back (#430)
+    _self_iris[key] = (ref, iri)
 
 
 def self_iri(graph: Any) -> str | None:
