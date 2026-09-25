@@ -1446,7 +1446,10 @@ main.add_command(measure)
     "--semantic", "semantic_query",
     help="Pure semantic search (requires sentence-transformers)",
 )
-@click.option("--top", "-n", "top_k", default=20, help="Max results to return (default: 20)")
+@click.option(
+    "--top", "-n", "top_k", default=20, type=click.IntRange(min=1),  # 0/-N made no sense (#377)
+    help="Max results to return (default: 20)",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 @click.option("--no-semantic", is_flag=True, help="Disable semantic search (graph-only mode)")
 @click.option("--verbose", "-v", is_flag=True, help="Show parsed query decomposition")
