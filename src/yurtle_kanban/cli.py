@@ -1541,13 +1541,15 @@ def query(
 
     # Hybrid NL query
     enable_semantic = not no_semantic
-    try:
-        engine = QueryEngine.from_service(service, enable_semantic=enable_semantic)
-    except ImportError:
-        # Fall back to graph-only if sentence-transformers not installed
-        engine = QueryEngine.from_service(service, enable_semantic=False)
-        if enable_semantic:
-            console.print("[dim]sentence-transformers not installed; using graph-only mode[/dim]")
+    engine = QueryEngine.from_service(service, enable_semantic=enable_semantic)
+    if enable_semantic and not engine.semantic_enabled:
+        # the search extra is missing: graph-only results, said once, on stderr so
+        # `--json` output stays pure JSON (#346)
+        Console(stderr=True).print(
+            "[dim]semantic search is off (sentence-transformers not installed; "
+            "pip install yurtle-kanban\\[search]); using graph-only mode[/dim]",
+            soft_wrap=True,
+        )
 
     if verbose:
         decomposer = NLDecomposer()
