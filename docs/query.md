@@ -187,6 +187,15 @@ Every mode, including `--json`, returns at most `--top` results (default 20). Wh
 matched, a one-line note on stderr says so; stdout stays pure JSON. Raise `--top` to get
 them all.
 
+## What fenced blocks can add
+
+Triples from an item's ```` ```yurtle ```` / ```` ```turtle ```` blocks are merged into the
+graph, except the single-valued facts the frontmatter owns: `kb:id`, `kb:status`,
+`kb:title`, `kb:priority`, `kb:created`, `kb:priorityRank`, `kb:description` and
+`kb:numericId` on any IRI. Blocks can add types, tags, assignees, relations and any other
+predicate; to describe an external thing, use e.g. `rdfs:label`. Blank nodes (such as the
+`kb:statusChange [ kb:status … ]` history `move` records) are kept as written.
+
 ## Architecture
 
 ```

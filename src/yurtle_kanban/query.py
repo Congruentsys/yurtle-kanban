@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rdflib import RDF, Graph, Literal, Namespace, URIRef
+from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
 from ._logging import get_logger
@@ -145,10 +145,11 @@ class UnifiedGraph:
 
         # Merge per-file RDF graph (fenced turtle/yurtle blocks). A block may add
         # facts but not redefine the single-valued ones frontmatter owns, about any
-        # subject: they come from the item(s) above (#385, #395)
+        # IRI: they come from the item(s) above (#385, #395). A blank node is not an
+        # item (e.g. `move`'s `kb:statusChange [ kb:status … ]` history): it merges
         if item.graph is not None:
             for triple in item.graph:
-                if triple[1] in _FRONTMATTER_OWNED:
+                if triple[1] in _FRONTMATTER_OWNED and not isinstance(triple[0], BNode):
                     continue
                 self._graph.add(triple)
 
@@ -584,7 +585,7 @@ class QueryEngine:
         filters = []
         bindings: dict[str, Any] = {}  # user values, bound rather than spliced in
         wheres = [
-            "?item kb:id ?id .",
+            "?item kb:id ?id . FILTER(isIRI(?item))",  # never a blank node (#395)
             "?item kb:status ?status .",
             "?item kb:numericId ?numId .",
         ]
