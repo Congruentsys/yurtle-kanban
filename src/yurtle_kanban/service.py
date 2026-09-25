@@ -2862,6 +2862,10 @@ class KanbanService:
             out = eol.apply(text)
         path.write_bytes(out.encode("utf-8"))
 
+    # a keep-chomping block scalar header: `|+`, `>+`, `|2+`, `|+2`, then an
+    # optional comment
+    _KEEP_BLOCK = re.compile(r"[|>](?:\d?\+|\+\d)[ \t]*(?:#.*)?$")
+
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
 
@@ -2893,8 +2897,13 @@ class KanbanService:
             # the closing `---` stay where they are (#188)
             body = frontmatter.rstrip()
             gap = frontmatter[len(body) :].split("\n", 1)[1] if body else ""
-            gap = gap if not gap.strip() else ""
-            frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n" + gap
+            last_key = re.findall(r"^[^\s#-][^:\n]*:[ \t]*(.*)$", body, flags=re.MULTILINE)
+            if last_key and self._KEEP_BLOCK.match(last_key[-1]):
+                # a `|+` / `>+` last value owns its trailing blank lines: the key
+                # goes after them, or the value would lose them (#211)
+                frontmatter = body + "\n" + gap + f"{field}: {value}\n"
+            else:
+                frontmatter = (body + "\n" if body else "") + f"{field}: {value}\n" + gap
 
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
