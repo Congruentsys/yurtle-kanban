@@ -98,6 +98,22 @@ _turtle_unescape = turtle_unescape
 
 
 
+def git_toplevel(cwd: Path) -> Path | None:
+    """`git rev-parse --show-toplevel` from `cwd`, or None when git can't say
+    (not a repo, or no git on PATH). One helper for the service and `init` (#198)."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    return Path(out) if out else None
+
+
 class LineEndings:
     """A text file's original line endings, so an edit can keep them (#128, #151).
 
@@ -239,7 +255,9 @@ class KanbanService:
 
     def __init__(self, config: KanbanConfig, repo_root: Path, hooks_config: Path | None = None):
         self.config = config
-        self.repo_root = repo_root
+        # absolute: git runs with cwd=repo_root, so a relative root would double
+        # every path handed to `git add` (#198); `.absolute()` keeps symlinks as given
+        self.repo_root = Path(repo_root).absolute()
         self._items: dict[str, WorkItem] = {}
         # Files that look like items (start with `---`) but don't parse, with a
         # reason; the CLI reports them instead of dropping them silently (#139)
@@ -383,17 +401,7 @@ class KanbanService:
         """The git work tree holding the repo root; `.kanban/` may sit in a
         subdirectory of it. Falls back to the repo root when git can't say."""
         if self._git_top is None:
-            try:
-                out = subprocess.run(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout.strip()
-                self._git_top = Path(out) if out else self.repo_root
-            except (subprocess.CalledProcessError, OSError):
-                self._git_top = self.repo_root
+            self._git_top = git_toplevel(self.repo_root) or self.repo_root
         return self._git_top
 
     def _ignore_key(self, path: Path) -> str:

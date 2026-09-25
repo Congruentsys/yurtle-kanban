@@ -237,6 +237,12 @@ kanban:
     - "**/_TEMPLATE*"
 ```
 
+`ignore` patterns match a file's path relative to the repo. For a board root **outside the
+repo** (an absolute path, or one reached with `../`), items aren't under the repo, so patterns
+match the file's **absolute** path instead: write them as `**/archive/**`-style globs (or as
+absolute paths), not `../other/archive/*`. Such a board isn't git-tracked either: `create`,
+`move` and `comment` skip git with a warning.
+
 Each directory gets a `_TEMPLATE.md` with the correct frontmatter and type-specific sections (e.g., bugs get "Steps to Reproduce", features get "Acceptance Criteria").
 
 ## Themes
