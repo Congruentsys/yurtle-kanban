@@ -359,7 +359,10 @@ class KanbanService:
     """
 
     def __init__(
-        self, config: KanbanConfig, repo_root: Path | str, hooks_config: Path | None = None
+        self,
+        config: KanbanConfig,
+        repo_root: Path | str,
+        hooks_config: Path | str | None = None,
     ):
         self.config = config
         # absolute: git runs with cwd=repo_root, so a relative root would double
@@ -994,7 +997,8 @@ class KanbanService:
                 logger.warning(f"Board '{board_name}' not found, falling back to default")
                 board_config = self.config.get_default_board()
         else:
-            # Try to detect from current working directory
+            # the board you're standing in: deliberately the process cwd, so running
+            # a command inside a board's folder picks that board (#348)
             cwd = Path.cwd()
             board_config = self.config.get_board_for_path(cwd, self.repo_root)
             if not board_config:
