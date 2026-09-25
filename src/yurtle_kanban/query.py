@@ -325,7 +325,14 @@ class EmbeddingIndex:
 
     def search(self, query: str, top_k: int = 10) -> list[EmbeddingHit]:
         """Search for items semantically similar to the query."""
-        import numpy as np
+        try:
+            import numpy as np
+        except ImportError as e:
+            # installed but broken: say how to fix it, like a missing extra (#358)
+            raise ImportError(
+                f"numpy could not be imported ({e}): semantic search needs the search "
+                "extra. Install with: pip install yurtle-kanban[search]"
+            ) from e
 
         self._ensure_embeddings()
         self._load_model()
@@ -654,7 +661,17 @@ class QueryEngine:
             ]
 
         # Phase 2: semantic ranking within graph results
-        semantic_hits = self._emb.search(parsed.semantic_query, top_k=len(graph_items))
+        try:
+            semantic_hits = self._emb.search(parsed.semantic_query, top_k=len(graph_items))
+        except ImportError as e:
+            # the search extra passed the probe but won't import (e.g. torch
+            # missing): graph-only from here on, as if it weren't installed (#358)
+            logger.info(f"semantic search disabled: {e}")
+            self._emb = None
+            return [
+                QueryResult(item=item, graph_match=True, combined_score=1.0)
+                for item in graph_items
+            ]
         score_map = {hit.item_id: hit.score for hit in semantic_hits}
 
         # Combine: items must pass graph filter, ranked by semantic score
