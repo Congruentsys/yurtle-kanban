@@ -64,3 +64,5 @@ Multiple Claude Code agents may work on this project. Each machine has its own `
 - **nusy-product-team** — Primary consumer of yurtle-kanban
 - **noesis-ship** — Uses yurtle-kanban for work tracking
 - **carclaw** — Uses yurtle-kanban for work tracking (software theme, TASK-XXX)
+- **noesis-ships-comm** — Uses yurtle-kanban for work tracking
+- **rachael-lab** — Uses yurtle-kanban for work tracking
