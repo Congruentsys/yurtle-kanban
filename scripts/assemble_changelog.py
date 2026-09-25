@@ -27,7 +27,7 @@ UNRELEASED = "## [Unreleased]"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # fences may be indented (a code block inside a list item): wider than CommonMark's
 # 3 spaces, on purpose. A closing fence is the run alone, same character, as long.
-FENCE = re.compile(r"[ \t]*(```+|~~~+)")
+FENCE = re.compile(r"[ \t]*(```+|~~~+)(.*)")
 FENCE_CLOSE = re.compile(r"[ \t]*(```+|~~~+)[ \t]*\n?")
 
 
@@ -42,7 +42,7 @@ def read_fragments(directory: Path) -> list[tuple[int, str, str, Path]]:
         m = FRAGMENT_NAME.fullmatch(path.name)
         if not m or not path.is_file():
             continue
-        first, _, rest = path.read_text().replace("\r\n", "\n").partition("\n")
+        first, _, rest = path.read_text().partition("\n")  # universal newlines
         head = SECTION_LINE.fullmatch(first.strip())
         if not head or head.group(1) not in SECTIONS:
             raise FragmentError(
@@ -50,6 +50,10 @@ def read_fragments(directory: Path) -> list[tuple[int, str, str, Path]]:
             )
         if not rest.strip():
             raise FragmentError(f"{path}: no entry below the section line")
+        try:
+            headings(rest, "\0")  # only its fence check: one left open breaks every release
+        except ValueError as e:
+            raise FragmentError(f"{path}: {e}") from None
         found.append((int(m.group(1)), head.group(1), rest.rstrip(), path))
     # `12.md` before `12-b.md`: the plain fragment first, then the rest by name
     return sorted(found, key=lambda f: (f[0], f[3].name != f"{f[0]}.md", f[3].name))
@@ -64,14 +68,16 @@ def headings(text: str, prefix: str) -> list[tuple[int, int]]:
             m = FENCE_CLOSE.fullmatch(line)
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = ""
-        elif m := FENCE.match(line):
+        elif (m := FENCE.match(line)) and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            # a backtick fence's info string can't hold a backtick (CommonMark):
+            # "```x``` inline" is text, not an opener (#223)
             fence = m.group(1)
         elif line.startswith(prefix):
             found.append((pos, pos + len(line.rstrip("\n"))))
         pos += len(line)
     if fence:
         # an unclosed fence would hide every heading after it: refuse, don't guess
-        raise ValueError(f"unclosed code fence ({fence}) in the CHANGELOG")
+        raise ValueError(f"unclosed code fence ({fence})")
     return found
 
 
@@ -93,7 +99,10 @@ def split_sections(body: str) -> tuple[str, dict[str, str]]:
 def assemble(changelog: str, fragments: list[tuple[int, str, str, Path]], version: str,
              date: str) -> str | None:
     """The new CHANGELOG text (LF), or None when there is nothing to release."""
-    releases = headings(changelog, "## [")
+    try:
+        releases = headings(changelog, "## [")
+    except ValueError as e:
+        raise ValueError(f"{e} in the CHANGELOG") from None
     if any(changelog[s:e].startswith(f"## [{version}]") for s, e in releases):
         raise ValueError(f"CHANGELOG already has a ## [{version}] section")
     unreleased = next((h for h in releases if changelog[h[0]:h[1]].startswith(UNRELEASED)), None)
@@ -151,8 +160,19 @@ def main(argv: list[str] | None = None) -> int:
             new = new.replace("\n", "\r\n")
         # the CHANGELOG first: a failed write leaves every fragment in place
         args.changelog.write_bytes(new.encode("utf-8"))
+        left = []
         for *_, path in fragments:
-            path.unlink()
+            try:
+                path.unlink()
+            except OSError:
+                left.append(str(path))
+        if left:
+            print(
+                f"error: the CHANGELOG was already written for {args.version}, but these "
+                f"fragments could not be deleted; delete them by hand: {', '.join(left)}",
+                file=sys.stderr,
+            )
+            return 1
     except (ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
