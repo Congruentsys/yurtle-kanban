@@ -11,20 +11,23 @@ fall through with one warning, but:
 - an empty file warns "is not a mapping (NoneType)" rather than "is empty";
 - a dangling-symlink override is skipped silently (``exists()`` is False).
 
-Decided behaviour ([steer] bucket 2; the known sections are ``theme``,
-``item_types``, ``columns``, ``transitions``, ``id_formats``, ``status_mappings``,
-``status_aliases``):
+Decided behaviour ([steer] bucket 2, refined: a theme counts as missing only when
+it is EMPTY after the non-mapping sections — ``theme``, ``item_types``,
+``columns``, ``transitions``, ``id_formats``, ``status_mappings``,
+``status_aliases`` — are dropped):
 
 1. A repo-local ``software.yaml`` that is ``{}`` or an empty file falls through to
    the built-in with one warning naming the file; for the empty file it says
    "is empty", not "not a mapping (NoneType)".
 2. A repo-local ``software.yaml`` whose known sections were all dropped also falls
    through to the built-in, with the warnings.
-3. A custom ``mytheme.yaml`` that is ``{}`` or has no known sections: the loader
-   returns None, ``_available_themes`` doesn't list it, and ``board-add --preset
-   mytheme`` refuses it as an unknown preset.
-4. A theme that keeps at least one known section still loads (including a spec-like
-   theme with top-level ``name``/``description`` plus ``columns``).
+3. A custom ``mytheme.yaml`` that is empty after its non-mapping sections are
+   dropped: the loader returns None, ``_available_themes`` doesn't list it, and
+   ``board-add --preset mytheme`` refuses it as an unknown preset.
+4. A theme that keeps ANY top-level key still loads, as today (refined [steer]):
+   a known section, a spec-like theme (``name``/``description`` plus ``columns``),
+   and a name-only ``name: Acme`` (pinned by test_338/351/352), even when a bad
+   section was dropped next to it.
 5. A dangling-symlink ``software.yaml`` warns once naming it, then falls through.
 6. Warn once per file per process.
 7. Controls: the built-ins load with no warnings; a valid override still wins.
@@ -68,16 +71,14 @@ DROPPED_SECTIONS = {
     "columns_and_item_types": ("columns", "item_types"),
 }
 
-# Custom themes with no known section at all.
-NO_SECTIONS = {
-    **EMPTY,
-    **ALL_DROPPED,
+# Custom themes that are empty after the bad sections are dropped.
+NO_SECTIONS = {**EMPTY, **ALL_DROPPED}
+
+# Themes that keep at least one top-level key (a section or not).
+KEEPS_SECTION = {
     "name_only": "name: Acme\n",
     "name_and_description": "name: Acme\ndescription: A theme\n",
-}
-
-# Themes that keep at least one known section.
-KEEPS_SECTION = {
+    "name_and_dropped_section": "name: Acme\ncolumns: 5\n",
     "columns_only": "columns:\n  todo:\n    name: Todo\n",
     "spec_like": (
         "name: Acme Spec\ndescription: |\n  A spec-like theme.\n"
@@ -352,7 +353,7 @@ class TestAllSectionsDroppedOverride:
 
 
 # ---------------------------------------------------------------------------
-# 3. A custom theme with no known sections: None, unlisted, refused by board-add
+# 3. A custom theme empty after the drop: None, unlisted, refused by board-add
 # ---------------------------------------------------------------------------
 
 
@@ -408,7 +409,7 @@ class TestCustomWithoutSections:
 
 
 # ---------------------------------------------------------------------------
-# 4. A theme that keeps at least one known section still loads
+# 4. A theme that keeps any top-level key still loads (refined [steer])
 # ---------------------------------------------------------------------------
 
 
@@ -439,6 +440,37 @@ class TestKeepsASection:
         monkeypatch.chdir(repo)
         assert config_mod._load_builtin_theme(CUSTOM, repo) == yaml.safe_load(text)
 
+    @pytest.mark.parametrize("kind", ["name_only", "name_and_description"])
+    def test_name_only_loads_as_is_without_warnings(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        kind: str,
+        warnings_log: pytest.LogCaptureFixture,
+    ) -> None:
+        text = KEEPS_SECTION[kind]
+        repo = _repo(tmp_path / "repo", {CUSTOM: text}, SINGLE_CFG.format(theme=CUSTOM))
+        monkeypatch.chdir(repo)
+        assert config_mod._load_builtin_theme(CUSTOM, repo) == yaml.safe_load(text)
+        config = KanbanConfig.load(repo / ".kanban" / "config.yaml")
+        assert config.get_theme() == yaml.safe_load(text)
+        assert not _warnings(warnings_log), _warnings(warnings_log)
+
+    def test_name_beside_dropped_section_loads_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _repo(tmp_path / "repo", {CUSTOM: KEEPS_SECTION["name_and_dropped_section"]})
+        monkeypatch.chdir(repo)
+        assert config_mod._load_builtin_theme(CUSTOM, repo) == {"name": "Acme"}
+
+    def test_name_only_override_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A name-only software.yaml keeps a key, so it still shadows the built-in."""
+        repo = _repo(tmp_path / "repo", {BUILTIN: KEEPS_SECTION["name_only"]})
+        monkeypatch.chdir(repo)
+        assert config_mod._load_builtin_theme(BUILTIN, repo) == {"name": "Acme"}
+
     def test_surviving_section_override_wins(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -449,7 +481,7 @@ class TestKeepsASection:
             "item_types": {"task": {"id_prefix": "T"}}
         }
 
-    @pytest.mark.parametrize("kind", ["columns_only", "spec_like"])
+    @pytest.mark.parametrize("kind", ["columns_only", "spec_like", "name_only"])
     def test_board_add_accepts_preset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
     ) -> None:
