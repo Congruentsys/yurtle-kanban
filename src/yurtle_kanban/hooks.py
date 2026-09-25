@@ -117,9 +117,10 @@ class HookContext:
 
 
 def _path_safe(value: str) -> str:
-    """One substituted value, safe inside a path: no separators, never `.`/`..` (#357)."""
-    value = value.replace("/", "_").replace("\\", "_")
-    return "_" if value in (".", "..") else value
+    """One substituted value, safe inside a path: no separators, never `.`/`..`
+    (#357), no `:` (a Windows drive), never empty (a vanished segment) (#369)."""
+    value = value.replace("/", "_").replace("\\", "_").replace(":", "_")
+    return "_" if value in ("", ".", "..") else value
 
 
 # ─── Engine ────────────────────────────────────────────────────────────────
