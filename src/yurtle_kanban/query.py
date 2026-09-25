@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
+from ._graph_iri import self_iri
 from ._logging import get_logger
 from .models import WorkItem
 
@@ -154,7 +155,7 @@ class UnifiedGraph:
             # recorded when the file was parsed; a graph built elsewhere falls back
             # to the cwd now (#413)
             phantom = URIRef(
-                getattr(item.graph, "yurtle_self_iri", None) or Path.cwd().as_uri() + "/"
+                self_iri(item.graph) or Path.cwd().as_uri() + "/"
             )
             for s, p, o in item.graph:
                 s = item_uri if s == phantom else s

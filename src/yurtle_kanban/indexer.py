@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rdflib import RDF, BNode, Graph, Namespace, URIRef
 
+from yurtle_kanban._graph_iri import set_self_iri
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 
@@ -66,6 +67,7 @@ class WorkItemIndexer:
             # Try to parse as Yurtle
             g = Graph()
             g.parse(file_path, format="yurtle")
+            set_self_iri(g, Path.cwd().as_uri() + "/")  # what `<>` meant (#421)
 
             # The item is the (non-blank) subject typed `a kb:<Type>`: only rdf:type
             # decides the type, never `kb:related kb:Feature` (#416), and a blank node

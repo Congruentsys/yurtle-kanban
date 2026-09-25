@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
+from ._graph_iri import set_self_iri
 from ._logging import get_logger
 from .config import KanbanConfig
 from .hooks import HookContext, HookEngine, HookEvent
@@ -872,9 +873,10 @@ class KanbanService:
             rdflib_logger.setLevel(logging.ERROR)
             try:
                 doc = yurtle_rdflib.parse_yurtle(content)
-                # the IRI `<>` got here (the parser resolves it against the cwd):
-                # kept with the graph so a later merge maps the right one (#404, #413)
-                doc.graph.yurtle_self_iri = Path.cwd().as_uri() + "/"
+                # the IRI `<>` got here (the parser resolves it against the cwd),
+                # recorded for the graph so a later merge maps the right one; a graph
+                # grown by `+=` keeps this parse-time IRI (#404, #413, #421)
+                set_self_iri(doc.graph, Path.cwd().as_uri() + "/")
             finally:
                 rdflib_logger.setLevel(old_level)
             return doc.graph
