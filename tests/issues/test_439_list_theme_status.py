@@ -242,6 +242,8 @@ def test_hdd_single_board_other_statuses_listed_by_theme_name(
     _invoke(runner, ["init", "--theme", "hdd"])
     item_id = _created_id(runner, wide, ["create", "idea", "A real item"])
     _invoke(runner, ["move", item_id, native, "--force", "--skip-gates", "--no-commit"])
+    # single-board `move` writes the theme's name, as multi-board does (#439)
+    assert _file_status(repo, item_id) == native
 
     assert _list_statuses(runner, wide, [])[item_id] == native
     # machine contract: canonical
@@ -440,8 +442,8 @@ def test_hdd_round_trip_create_move_list(
     for i, (native, canonical) in enumerate(steps):
         if i:
             _invoke(runner, ["move", item_id, native, "--force", "--skip-gates", "--no-commit"])
-        # the file says either name for the status; it scans back to the same canonical
-        assert _file_status(repo, item_id) in {native, canonical}
+        # create and move write the theme's name on both layouts; it scans back canonical
+        assert _file_status(repo, item_id) == native
         assert _list_statuses(runner, wide, list_args)[item_id] == native
         shown = _json(runner, ["show", item_id, "--json"])
         assert shown["status"] == canonical  # type: ignore[index]
