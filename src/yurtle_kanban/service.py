@@ -530,22 +530,23 @@ class KanbanService:
             if not isinstance(frontmatter, dict) or not frontmatter:
                 self._note_unparseable(file_path, content)
                 return None
-            dropped: list[str] = []
+            too_large: list[Any] = []  # keys the graph parser must not re-expand either
             for key in list(frontmatter):
                 value = frontmatter[key]
                 if _is_cyclic(value):
                     # a YAML anchor that contains itself (`tags: &a [x, *a]`) can't be
-                    # serialised or rendered: drop the field, keep the item (#262)
+                    # serialised or rendered: drop the field, keep the item (#262). The
+                    # graph parser copes with cycles on its own, so its text is left as is
                     why = "is cyclic (a YAML anchor that contains itself)"
                 elif _expanded_size(value, _MAX_FIELD_NODES) > _MAX_FIELD_NODES:
                     # shared aliases nested a few levels deep (a "billion laughs") expand
                     # to more than any rendering or export can hold (#277)
                     why = f"is too large (over {_MAX_FIELD_NODES:,} values once aliases expand)"
+                    too_large.append(key)
                 else:
                     continue
                 logger.warning(f"{file_path}: frontmatter field `{key}` {why}; ignored")
                 del frontmatter[key]
-                dropped.append(key)
 
             # Get required fields
             item_id = frontmatter.get("id")
@@ -656,11 +657,15 @@ class KanbanService:
             metadata["_original_status"] = status_str
 
             # Parse RDF graph from frontmatter + fenced blocks. The graph parser reads
-            # the text again: blank the dropped fields there too, or it re-expands them
-            graph_text = content
-            for key in dropped:
-                graph_text = self._add_or_update_frontmatter_field(graph_text, key, "[]")
-            graph = self._parse_graph(graph_text)
+            # the text again, so a too-large field is blanked there too or it would be
+            # re-expanded; one under a non-text key (`5:`, `true:`) can't be located in
+            # the text, so the item goes without a graph instead (#277)
+            graph: Graph | None = None
+            if all(isinstance(key, str) for key in too_large):
+                graph_text = content
+                for key in too_large:
+                    graph_text = self._add_or_update_frontmatter_field(graph_text, key, "[]")
+                graph = self._parse_graph(graph_text)
 
             return WorkItem(
                 id=item_id,
