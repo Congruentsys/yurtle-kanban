@@ -72,6 +72,20 @@ if [ "$verdict" != "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then
 fi
 
 # the local branch can't be deleted while a worktree has it checked out
+# a worktree in the middle of a rebase of the branch has a detached HEAD, so the
+# branch lookup below misses it; its rebase state still names the branch (#247)
+while IFS= read -r path; do
+  gd=$(git -C "$path" rev-parse --git-dir 2>/dev/null) || continue
+  case $gd in /*) ;; *) gd="$path/$gd" ;; esac
+  for state in rebase-merge rebase-apply; do
+    if [ "$(cat "$gd/$state/head-name" 2>/dev/null)" = "refs/heads/$branch" ]; then
+      echo "NOT MERGING #$PR: worktree $path is in the middle of a rebase of $branch"\
+        "(finish or abort it first)"
+      exit 1
+    fi
+  done
+done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+
 wt=$(git worktree list --porcelain | awk -v b="refs/heads/$branch" '
   /^worktree / { path = substr($0, 10) } $0 == "branch " b { print path }')
 if [ -n "$wt" ]; then
@@ -84,6 +98,19 @@ if [ -n "$wt" ]; then
     dirty=$(git -C "$wt" status --porcelain --untracked-files=normal \
       --ignore-submodules=none 2>/dev/null) || {
       echo "NOT MERGING #$PR: could not read the status of worktree $wt"; exit 1; }
+  fi
+  # skip-worktree / assume-unchanged files hide their edits from status (#247)
+  hidden=""
+  if [ -d "$wt" ]; then
+    hidden=$(git -C "$wt" ls-files -v 2>/dev/null | awk '
+      /^s / { print "skip-worktree + assume-unchanged: " substr($0, 3); next }
+      /^S / { print "skip-worktree: " substr($0, 3); next }
+      /^[a-z] / { print "assume-unchanged: " substr($0, 3) }')
+  fi
+  if [ -n "$hidden" ]; then
+    echo "NOT MERGING #$PR: worktree $wt has files whose edits git hides (clear the flag):"
+    printf '%s\n' "$hidden" | sed 's/^/  /'
+    exit 1
   fi
   if [ -n "$dirty" ]; then
     echo "NOT MERGING #$PR: worktree $wt has uncommitted changes (commit or remove them):"

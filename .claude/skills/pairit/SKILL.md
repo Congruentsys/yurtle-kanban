@@ -103,7 +103,9 @@ bash .claude/skills/pairit/safe_merge.sh <P>  # waits for CI; reads the PR head 
                                               # verdict (from a member) is approve at that
                                               # head; removes the PR's worktree; merges with
                                               # --match-head-commit <head>; refuses while
-                                              # the PR's worktree has uncommitted changes
+                                              # the PR's worktree has uncommitted changes,
+                                              # skip-worktree/assume-unchanged files, or
+                                              # a rebase of the branch in progress
 git checkout -q main && git pull -q
 gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
