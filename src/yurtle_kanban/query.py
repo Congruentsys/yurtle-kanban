@@ -43,6 +43,15 @@ ITEM = Namespace("https://yurtle.dev/kanban/item/")
 _ITEM_ID_RE = re.compile(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*")  # used with fullmatch (#183)
 
 
+# characters rdflib refuses in an IRI (it logs "does not look like a valid URI"):
+# a status/type value holding one can never match, so it is skipped unbuilt (#367)
+_IRI_UNSAFE = frozenset(' <>"{}|\\^`')
+
+
+def _iri_safe(value: str) -> bool:
+    return not any(ch in _IRI_UNSAFE for ch in value)
+
+
 class UnifiedGraph:
     """Merge all per-file WorkItem graphs into a single queryable RDF graph.
 
@@ -574,25 +583,30 @@ class QueryEngine:
         # does for literals); a value that isn't a real status/type just matches nothing
         def iri_list(prefix: str, values: list[str]) -> str:
             names = []
-            for i, value in enumerate(values):
+            for i, value in enumerate(v for v in values if _iri_safe(v)):
                 bindings[f"{prefix}{i}"] = URIRef(str(KB) + value)
                 names.append(f"?{prefix}{i}")
-            return ", ".join(names)  # IN needs commas (#64)
+            # IN needs commas (#64); with every value skipped, nothing can match
+            # (via `FILTER(1 = 0)`: rdflib 7 lets `FILTER(false)` through)
+            return ", ".join(names) if names else ""
 
-        # Status exclusions
-        for i, status in enumerate(parsed.status_filter):
+        # Status exclusions (a value that can't be an IRI excludes nothing, #367)
+        for i, status in enumerate(s for s in parsed.status_filter if _iri_safe(s)):
             bindings[f"statusOut{i}"] = URIRef(str(KB) + status)
             filters.append(f"FILTER(?status != ?statusOut{i})")
 
         # Status inclusions
         if parsed.status_include:
             values = iri_list("statusIn", parsed.status_include)
-            filters.append(f"FILTER(?status IN ({values}))")
+            filters.append(f"FILTER(?status IN ({values}))" if values else "FILTER(1 = 0)")
 
         # Type filters
         if parsed.type_filter:
             type_values = iri_list("type", [t.title() for t in parsed.type_filter])
-            wheres.append(f"?item a ?type . FILTER(?type IN ({type_values}))")
+            wheres.append(
+                f"?item a ?type . FILTER(?type IN ({type_values}))"
+                if type_values else "FILTER(1 = 0)"
+            )
 
         # ID range
         if parsed.id_min is not None:
