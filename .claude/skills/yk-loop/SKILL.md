@@ -12,7 +12,8 @@ repeat:
   1. PICK    python3 .claude/skills/yk-next/yk_next.py
   2. STOP?   "NOTHING READY", "ERROR: …", or the same item picked a third time without progress → stop,
              report one line
-  3. TRIAGE  (issues only) is this a fix, or a decision? → a decision is commented + held, never built
+  3. TRIAGE  (issues only) fix, or decision? → /steer classifier: bucket 1–2 → record [steer] + build;
+             bucket 3 → comment + hold
   4. LAND    through pairit: a PR resumes at the step its state names; an issue starts at step 0
   5. CARRY   a finding that BLOCKS this item is filed and landed first; every other finding is FILED
              (`gh issue create --label bug`), unassigned
@@ -25,16 +26,16 @@ branch through pairit before anything else. If `.venv` is missing, run
 `python3.11 -m venv .venv && .venv/bin/pip install -q -e ".[dev]"`.
 
 **3. Triage.** Land an issue only if it has ONE evident correct outcome: a bug with a repro and an Expected
-section, or a small change whose shape the issue already fixes. Hold it instead when any of these is true:
+section, or a small change whose shape the issue already fixes. These are candidates for a hold, not holds by themselves:
 - it's a feature that needs a design (a new command, a new workflow, a new theme type, a transport);
 - a reasonable maintainer could want two different behaviours, or the fix changes documented behaviour
   someone may rely on;
 - it touches the release, versioning or publishing path;
 - it would take more than about 400 changed lines, or it can't be tested offline.
 
-Before holding anything, run `/steer`'s classifier on it. If a measurement (a read-only fleet scan), the
+For the "someone may rely on" candidate, measure the reliance first with a read-only scan of the fleet repos: no consumer uses it → bucket 1, decide it; a consumer uses it → bucket 3, naming that consumer as the trigger. Before holding anything, run `/steer`'s classifier on it. If a measurement (a read-only fleet scan), the
 goals or an existing user ruling settle it — bucket 1 or 2 — decide it: comment `[steer] bucket-N: …` with
-the basis, and build it; list it in your report as open to veto. Hold (`needs-decision`) only a bucket 3
+the basis, assign it to yourself (`gh issue edit <N> --add-assignee @me`), and build it; list it in your report as open to veto. Hold (`needs-decision`) only a bucket 3
 item: one that changes a feature or goal or needs human authority, with that trigger named.
 
 To hold it: post one comment (what you found, the options, the named bucket-3 trigger, your recommended
@@ -45,7 +46,7 @@ default, and the question to answer), then `gh issue edit <N> --add-label needs-
 `Agent`) and the reviewer (a distinct `claude -p` session), writes the code or delegates it to an
 implementer sub-agent, and merges.
 
-**Report through GitHub.** The PR, its verdict comment and the closed issue are the record. For each landed
+**Report through GitHub.** The final stop report lists every bucket-3 hold with its trigger and recommended default (the /steer batched escalation) and every `[steer]` decision as open to veto. The PR, its verdict comment and the closed issue are the record. For each landed
 item, give the Captain one line (`#N → PR #P merged: <what changed>`) and keep going.
 
 **One loop per GitHub account.** The picker knows you only by your `gh` login, so a second loop (or a

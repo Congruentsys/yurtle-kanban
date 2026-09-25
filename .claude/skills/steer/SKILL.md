@@ -41,8 +41,9 @@ yurtle-kanban is the work-tracking CLI the fleet runs on. In priority order:
 2. RULINGS   read each thread (gh issue view <N> --comments) — a user ruling already there makes it bucket 2
 3. CLASSIFY  bucket 1 → measure, then decide on the data; bucket 2 → decide; bucket 3 → collect
 4. RECORD    on every item you decide: a comment `[steer] bucket-N: <decision> — <goal/ruling/data basis>`,
-             then gh issue edit <N> --remove-label needs-decision, and (re)assign it so /yk-loop builds it
-5. ESCALATE  ONE batched message to the user listing only the bucket-3 items, each with its named trigger
+             then gh issue edit <N> --remove-label needs-decision --add-assignee @me so /yk-loop builds it;
+             comment every sibling issue the ruling changes, saying what it changes for that issue
+5. ESCALATE  ONE batched message to the user (under /yk-loop: its final stop report) listing only the bucket-3 items, each with its named trigger
              and a recommended default, so each answer is a quick confirm
 6. REPORT    list every bucket-1/2 decision as "decided — open to veto"; a decision is never silent
 ```
@@ -52,8 +53,8 @@ If there are zero bucket-3 items, escalate nothing and say the queue is clear; /
 ## Guardrails
 
 - **Decide aggressively in buckets 1–2**; over-escalation is the failure this loop exists to fix. But do not
-  launder a bucket-3 call as a decision: when genuinely unsure, anything touching data safety, the release path
-  or another repo is bucket 3.
+  launder a bucket-3 call as a decision: when genuinely unsure which option is safe for users' data, or when it
+  touches the release path or another repo, it is bucket 3. A data-loss bug with a clear fix is bucket 2 (G1).
 - **Every decision is recorded** on its issue (comment + basis) and reversible where possible; the user can veto
   any of them from the report.
 - **A decision is not a merge.** The work it unblocks still goes through /pairit: tests by a partner, a
