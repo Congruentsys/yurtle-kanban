@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
+from ._logging import get_logger
 from .config import KanbanConfig
 from .hooks import HookContext, HookEngine, HookEvent
 
@@ -46,7 +47,7 @@ from .models import (
 from .turtle_builder import PREFIXES
 from .workflow import WorkflowConfig, WorkflowParser
 
-logger = logging.getLogger("yurtle-kanban")
+logger = get_logger("yurtle-kanban")  # escapes control characters (#215)
 
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
 _HYP = Namespace(PREFIXES["hyp"])

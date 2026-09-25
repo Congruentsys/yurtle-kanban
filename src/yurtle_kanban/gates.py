@@ -15,14 +15,15 @@ Unknown expressions fail closed.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+from ._logging import get_logger
 
 if TYPE_CHECKING:
     from .models import WorkItem
 
-logger = logging.getLogger("yurtle-kanban.gates")
+logger = get_logger("yurtle-kanban.gates")  # escapes control characters (#215)
 
 
 # ── Data classes ────────────────────────────────────────────────────────

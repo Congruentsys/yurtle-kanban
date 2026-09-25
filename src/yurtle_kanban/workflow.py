@@ -16,7 +16,6 @@ Usage:
     valid, message = parser.validate_transition(item, new_status)
 """
 
-import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,9 +34,10 @@ except ImportError:
     Literal = None
     RDF = None
 
+from ._logging import get_logger
 from .models import WorkItem, WorkItemStatus
 
-logger = logging.getLogger("yurtle-kanban.workflow")
+logger = get_logger("yurtle-kanban.workflow")  # escapes control characters (#215)
 
 
 # Namespaces for workflow configuration

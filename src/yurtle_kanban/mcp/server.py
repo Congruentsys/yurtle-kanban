@@ -17,11 +17,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .._logging import get_logger
 from ..config import KanbanConfig
 from ..models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
 from ..service import KanbanService
 
-logger = logging.getLogger("yurtle-kanban-mcp")
+logger = get_logger("yurtle-kanban-mcp")  # escapes control characters (#215)
 
 
 class KanbanMCPServer:
