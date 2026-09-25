@@ -125,23 +125,39 @@ def _scalar_text(value: Any) -> Any:
 
 def _is_cyclic(value: Any) -> bool:
     """True when a YAML value contains itself: an anchor used inside its own
-    node. A node shared by several fields, or used twice, is not a cycle (#262)."""
+    node. A node shared by several fields, or used twice, is not a cycle (#262).
+    Iterative, so deep but finite nesting can't hit the recursion limit."""
     on_path: set[int] = set()
     done: set[int] = set()  # each shared node explored once (no billion-laughs blowup)
+    # (node, children iterator); a node leaves the path when its children run out
+    stack: list[tuple[Any, Any]] = []
 
-    def walk(node: Any) -> bool:
+    def enter(node: Any) -> bool:
+        """Push a container; True if it closes a cycle."""
         if not isinstance(node, (list, tuple, dict)) or id(node) in done:
             return False
         if id(node) in on_path:
             return True
         on_path.add(id(node))
-        children = list(node.keys()) + list(node.values()) if isinstance(node, dict) else node
-        found = any(walk(child) for child in children)
-        on_path.discard(id(node))
-        done.add(id(node))
-        return found
+        children = [*node.keys(), *node.values()] if isinstance(node, dict) else node
+        stack.append((node, iter(children)))
+        return False
 
-    return walk(value)
+    if enter(value):
+        return True
+    while stack:
+        node, children = stack[-1]
+        child = next(children, _DONE)
+        if child is _DONE:
+            stack.pop()
+            on_path.discard(id(node))
+            done.add(id(node))
+        elif enter(child):
+            return True
+    return False
+
+
+_DONE = object()  # sentinel: a node's children are exhausted
 
 
 class LineEndings:
