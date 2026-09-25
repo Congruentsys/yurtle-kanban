@@ -279,3 +279,119 @@ def test_software_single_item_control(
     text = _board_text(runner, wide, [])
     cols = {name: (count, ids) for name, count, ids in _parse_board(text)}
     assert cols["Backlog"] == (1, [item_id]), text
+
+
+# ---------------------------------------------------------------------------
+# 5. Round 2 — the other renderers of the same board (#438 review):
+#    `export --format markdown`, `export --format html`, and MCP `get_board`
+#    each grouped items with `WorkItemStatus.from_string(col.id)` alone, so a
+#    themed column (hdd draft/active/..., spec draft/proposed/...) came out empty
+#    while the statistics / counts saw the item.
+# ---------------------------------------------------------------------------
+
+# (theme, type to create, themed column the second item moves to, its name)
+THEMED_CASES = [
+    pytest.param("hdd", "idea", "active", "Active", id="hdd"),
+    pytest.param("spec", "task", "implementing", "Implementing", id="spec"),
+    pytest.param("software", "feature", "in_progress", "In Progress", id="software-control"),
+]
+FIRST_COLUMN = {"hdd": "Draft", "spec": "Draft", "software": "Backlog"}
+
+
+def _two_items(
+    runner: CliRunner, wide: io.StringIO, theme: str, item_type: str, moved_to: str
+) -> tuple[str, str]:
+    """Init the theme; one item left where `create` puts it, one moved to `moved_to`."""
+    _invoke(runner, ["init", "--theme", theme])
+    stays = _created_id(runner, wide, ["create", item_type, "Probe item"])
+    moves = _created_id(runner, wide, ["create", item_type, "Moved item"])
+    _invoke(runner, ["move", moves, moved_to, "--force", "--skip-gates", "--no-commit"])
+    return stays, moves
+
+
+def _export(runner: CliRunner, fmt: str, out: Path) -> str:
+    _invoke(runner, ["export", "--format", fmt, "--output", str(out)])
+    return out.read_text(encoding="utf-8")
+
+
+def _markdown_columns(text: str) -> dict[str, tuple[list[str], int]]:
+    """{column name: (IDs drawn in the board table, count in ## Statistics)}."""
+    board_part, stats_part = text.split("## Statistics", 1)
+    rows = [line for line in board_part.splitlines() if line.startswith("|")]
+    names = [c.strip() for c in rows[0].strip("|").split("|")]
+    drawn: dict[str, list[str]] = {name: [] for name in names}
+    for row in rows[2:]:
+        for name, cell in zip(names, row.strip().strip("|").split("|")):
+            drawn[name].extend(re.findall(r"\*\*(\S+?)\*\*", cell))
+    stats: dict[str, int] = {}
+    for line in stats_part.splitlines():
+        m = re.match(r"^\|\s*([^|*]+?)\s*\|\s*(\d+)\s*\|$", line)
+        if m:
+            stats[m.group(1)] = int(m.group(2))
+    return {name: (drawn[name], stats[name]) for name in names}
+
+
+@pytest.mark.parametrize(("theme", "item_type", "moved_to", "moved_name"), THEMED_CASES)
+def test_export_markdown_draws_what_statistics_count(
+    repo: Path, runner: CliRunner, wide: io.StringIO,
+    theme: str, item_type: str, moved_to: str, moved_name: str,
+) -> None:
+    stays, moves = _two_items(runner, wide, theme, item_type, moved_to)
+    text = _export(runner, "markdown", repo / "board.md")
+    cols = _markdown_columns(text)
+
+    assert cols[FIRST_COLUMN[theme]] == ([stays], 1), text
+    assert cols[moved_name] == ([moves], 1), text
+    mismatched = {n: v for n, v in cols.items() if len(v[0]) != v[1]}
+    assert not mismatched, f"drawn != statistics count: {mismatched}\n{text}"
+
+
+def _html_columns(text: str) -> dict[str, tuple[int, list[str], str]]:
+    """{column name: (header count, card IDs, wip badge text or '')}."""
+    cols: dict[str, tuple[int, list[str], str]] = {}
+    for chunk in re.split(r'<div class="column[^"]*">', text)[1:]:
+        m = re.search(r'<h2>(.*?) <span class="count">\((\d+)\)</span>\s*(.*?)</h2>', chunk, re.S)
+        assert m, chunk
+        badge = re.search(r'<span class="wip-badge">(.*?)</span>', m.group(3))
+        ids = [i.split()[-1] for i in re.findall(r'<div class="card-id">(.*?)</div>', chunk)]
+        cols[m.group(1)] = (int(m.group(2)), ids, badge.group(1) if badge else "")
+    assert cols, text
+    return cols
+
+
+@pytest.mark.parametrize(("theme", "item_type", "moved_to", "moved_name"), THEMED_CASES)
+def test_export_html_draws_the_item_in_its_column(
+    repo: Path, runner: CliRunner, wide: io.StringIO,
+    theme: str, item_type: str, moved_to: str, moved_name: str,
+) -> None:
+    stays, moves = _two_items(runner, wide, theme, item_type, moved_to)
+    text = _export(runner, "html", repo / "board.html")
+    cols = _html_columns(text)
+
+    count, ids, _ = cols[FIRST_COLUMN[theme]]
+    assert (count, ids) == (1, [stays]), text
+    count, ids, badge = cols[moved_name]
+    assert (count, ids) == (1, [moves]), text
+    # the per-column WIP badge counts the column's items too (hdd Active 5, spec
+    # Implementing 5, software In Progress 3)
+    assert badge.startswith("1/"), f"WIP badge {badge!r} for {moved_name}\n{text}"
+
+
+@pytest.mark.parametrize(("theme", "item_type", "moved_to", "moved_name"), THEMED_CASES)
+def test_mcp_get_board_lists_the_item_in_its_column(
+    repo: Path, runner: CliRunner, wide: io.StringIO,
+    theme: str, item_type: str, moved_to: str, moved_name: str,
+) -> None:
+    from yurtle_kanban.mcp.server import KanbanMCPServer
+
+    stays, moves = _two_items(runner, wide, theme, item_type, moved_to)
+    _clear_theme_cache()
+    board = KanbanMCPServer(repo)._get_board({})["board"]
+    cols = {c["name"]: c for c in board["columns"]}
+
+    assert board["total_items"] == 2, board
+    first = cols[FIRST_COLUMN[theme]]
+    assert (first["count"], [i["id"] for i in first["items"]]) == (1, [stays]), board
+    moved = cols[moved_name]
+    assert (moved["count"], [i["id"] for i in moved["items"]]) == (1, [moves]), board
+    assert sum(c["count"] for c in board["columns"]) == board["total_items"], board
