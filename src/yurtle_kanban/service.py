@@ -2929,7 +2929,8 @@ class KanbanService:
     # libyaml's loader when present: the layout check parses up to three times (#249)
     _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
     # a column-0 key whose value is a keep-chomping block scalar (`|+`, `>+`, `|2+`)
-    _KEEP_LAST = re.compile(r"^[^\s#-][^\n]*:[ \t]*[|>](?:\d?\+|\+\d)[ \t]*(?:#.*)?$")
+    # (the key may not contain `#`, so a `: |+` inside a comment doesn't count, #268)
+    _KEEP_LAST = re.compile(r"^[^\s#-][^#\n]*?:[ \t]*[|>](?:\d?\+|\+\d)[ \t]*(?:#.*)?$")
 
     @classmethod
     def _value_preserving(cls, original: str, body: str, gap: str, line: str) -> str:
@@ -2941,8 +2942,11 @@ class KanbanService:
         try:
             old = yaml.load(original, Loader=cls._YAML_LOADER)
         except yaml.YAMLError:
-            last = [ln for ln in body.splitlines() if ln[:1] not in ("", " ", "\t", "#", "-")]
-            return after if last and cls._KEEP_LAST.match(last[-1]) else before
+            # the last column-0 line decides: a `# comment` there ends any block
+            # scalar before the blank run (#268)
+            last = [ln for ln in body.splitlines() if ln[:1] not in ("", " ", "\t", "-")]
+            keep = last and not last[-1].startswith("#") and cls._KEEP_LAST.match(last[-1])
+            return after if keep else before
         if not isinstance(old, dict):
             return before
         for layout in (before, after):
