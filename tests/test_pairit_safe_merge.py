@@ -236,9 +236,13 @@ def _git(cwd: Path, *args: str) -> str:
 
 
 class Sandbox:
-    """A bare origin, a main checkout, and the PR branch checked out in its own worktree."""
+    """A bare origin, a main checkout, and the PR branch checked out in its own worktree.
 
-    def __init__(self, tmp_path: Path, *, conflict: bool) -> None:
+    With `pr_in_primary`, the PR branch is checked out in the PRIMARY checkout instead,
+    and the script runs from a linked worktree on main (`runner-main`) (#302, #315).
+    """
+
+    def __init__(self, tmp_path: Path, *, conflict: bool, pr_in_primary: bool = False) -> None:
         self.tmp = tmp_path
         self.origin = tmp_path / "origin.git"
         self.checkout = tmp_path / "checkout"
@@ -279,6 +283,14 @@ class Sandbox:
         _git(c, "add", "-A")
         _git(c, "commit", "-q", "-m", "main moves on")
         _git(c, "push", "-q", "origin", "main")
+
+        if pr_in_primary:
+            runner = tmp_path / "runner-main"
+            _git(c, "worktree", "remove", "--force", str(w))
+            _git(c, "checkout", "-q", BRANCH)
+            _git(c, "worktree", "add", "-q", str(runner), "main")
+            self.worktree = c
+            self.checkout = runner
 
         self.stub_dir.mkdir()
         stub = self.stub_dir / "gh"

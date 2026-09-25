@@ -25,15 +25,10 @@ from tests.issues import test_288_sparse_detection as t288
 @t288.needs_tools
 class TestPrimaryCheckoutRelativeGitPath:
     def test_root_only_cone_in_primary_checkout_gets_sparse_hint(self, tmp_path: Path) -> None:
-        sb = base.Sandbox(tmp_path, conflict=False)
-        primary = sb.checkout
-        runner = tmp_path / "runner-main"
-        # move the PR branch into the primary checkout; run the script from main elsewhere
-        base._git(primary, "worktree", "remove", "--force", str(sb.worktree))
-        base._git(primary, "checkout", "-q", base.BRANCH)
-        base._git(primary, "worktree", "add", "-q", str(runner), "main")
-        sb.worktree = primary
-        sb.checkout = runner
+        # the PR branch in the primary checkout; the script runs from main elsewhere
+        sb = base.Sandbox(tmp_path, conflict=False, pr_in_primary=True)
+        primary = sb.worktree
+        runner = sb.checkout
 
         t288._add_subdir_file(sb, "dir/notes.txt")
         base._git(primary, "sparse-checkout", "set", "--cone")
