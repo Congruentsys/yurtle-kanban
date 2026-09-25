@@ -1500,11 +1500,11 @@ def query(
         # Pure semantic mode
         try:
             emb = EmbeddingIndex.from_service(service)
+            hits = emb.search(semantic_query, top_k=top_k)
         except ImportError as e:
-            console.print(f"[red]{safe(e)}[/red]")
+            # missing, or installed but broken (#346, #358): one line, never wrapped
+            console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
             sys.exit(1)
-
-        hits = emb.search(semantic_query, top_k=top_k)
         if as_json:
             click.echo(json.dumps(
                 [
@@ -1542,14 +1542,6 @@ def query(
     # Hybrid NL query
     enable_semantic = not no_semantic
     engine = QueryEngine.from_service(service, enable_semantic=enable_semantic)
-    if enable_semantic and not engine.semantic_enabled:
-        # the search extra is missing: graph-only results, said once, on stderr so
-        # `--json` output stays pure JSON (#346)
-        Console(stderr=True).print(
-            "[dim]semantic search is off (sentence-transformers not installed; "
-            "pip install yurtle-kanban\\[search]); using graph-only mode[/dim]",
-            soft_wrap=True,
-        )
 
     if verbose:
         decomposer = NLDecomposer()
@@ -1574,9 +1566,21 @@ def query(
         console.print()
 
     results = engine.query(query_text, top_k=top_k)
+    if enable_semantic and not engine.semantic_enabled:
+        # the search extra is missing or broken: graph-only results, said once (after
+        # the query, which may find it broken, #358), on stderr so
+        # `--json` output stays pure JSON (#346)
+        Console(stderr=True).print(
+            "[dim]semantic search is off (sentence-transformers not installed; "
+            "pip install yurtle-kanban\\[search]); using graph-only mode[/dim]",
+            soft_wrap=True,
+        )
 
     if not results:
-        console.print("[dim]No results.[/dim]")
+        if as_json:
+            click.echo("[]")  # --json output is always JSON (#358)
+        else:
+            console.print("[dim]No results.[/dim]")
         return
 
     if as_json:
