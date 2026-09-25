@@ -79,7 +79,10 @@ if [ -n "$wt" ]; then
   # point (the head moved) would leave it gone for nothing: refuse first (#208)
   dirty=""
   if [ -d "$wt" ]; then   # a registered worktree whose directory is gone holds nothing
-    dirty=$(git -C "$wt" status --porcelain 2>/dev/null) || {
+    # explicit flags: a user's status.showUntrackedFiles=no or submodule settings
+    # must not hide work that --force would delete (#229)
+    dirty=$(git -C "$wt" status --porcelain --untracked-files=normal \
+      --ignore-submodules=none 2>/dev/null) || {
       echo "NOT MERGING #$PR: could not read the status of worktree $wt"; exit 1; }
   fi
   if [ -n "$dirty" ]; then
