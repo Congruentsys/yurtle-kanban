@@ -229,7 +229,9 @@ class WorkflowParser:
                 return {}
 
             if yaml:
-                return yaml.safe_load(content[3:end]) or {}
+                data = yaml.safe_load(content[3:end])
+                # a YAML list or scalar is no workflow config, like broken YAML (#321, #330)
+                return data if isinstance(data, dict) else {}
             else:
                 # Simple fallback
                 result = {}

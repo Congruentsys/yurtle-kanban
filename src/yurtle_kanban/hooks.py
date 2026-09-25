@@ -399,7 +399,9 @@ def _extract_frontmatter(content: str) -> dict[str, Any]:
         return {}
 
     try:
-        return yaml.safe_load(content[3:end]) or {}
+        data = yaml.safe_load(content[3:end])
     except Exception as e:
         logger.warning(f"Failed to parse hook frontmatter: {e}")
         return {}
+    # a YAML list or scalar is no hooks config, like broken YAML (#321, #330)
+    return data if isinstance(data, dict) else {}
