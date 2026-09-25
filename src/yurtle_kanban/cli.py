@@ -1543,8 +1543,9 @@ def query(
     enable_semantic = not no_semantic
     engine = QueryEngine.from_service(service, enable_semantic=enable_semantic)
     if enable_semantic and not engine.semantic_enabled:
-        # the search extra is missing: graph-only results, said once (#346)
-        console.print(
+        # the search extra is missing: graph-only results, said once, on stderr so
+        # `--json` output stays pure JSON (#346)
+        Console(stderr=True).print(
             "[dim]semantic search is off (sentence-transformers not installed; "
             "pip install yurtle-kanban\\[search]); using graph-only mode[/dim]",
             soft_wrap=True,
