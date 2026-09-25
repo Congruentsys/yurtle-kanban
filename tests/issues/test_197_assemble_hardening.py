@@ -41,6 +41,7 @@ OLD = (
     "### Added\n\n"
     "- Older feature.\n"
 )
+UNRELEASED = "## [Unreleased]\n\n### Fixed\n\n- **Existing** (#1).\n\n"
 README = "# changelog.d\n\nOne fragment per PR.\n"
 
 
@@ -134,6 +135,70 @@ class TestFenceAware:
         assert not (d / "5.md").exists()
 
 
+class TestFenceClosing:
+    """Only a bare fence run (same char, length >= opener) closes a fence (#197, PR #221)."""
+
+    INNER = {
+        # an info string makes it content, not a closer
+        "backticks-info-string": ("```", "```python", "```"),
+        "tildes-info-string": ("~~~", "~~~ sh", "~~~"),
+        # a shorter run of the same char doesn't close a longer opener
+        "four-open-three-inside": ("````", "```", "````"),
+        # the other fence char never closes
+        "tildes-inside-backticks": ("```", "~~~", "```"),
+    }
+
+    @pytest.mark.parametrize(("open_", "inner", "close"), INNER.values(), ids=INNER.keys())
+    def test_inner_fence_line_does_not_close(
+        self, tmp_path: Path, open_: str, inner: str, close: str
+    ) -> None:
+        block = f"{open_}\n### Fixed\n{inner}\n## [0.1] fake\n\n- Inside.\n{close}"
+        unreleased = (
+            "## [Unreleased]\n\n### Fixed\n\n- **E**:\n\n"
+            f"{block}\n\n- **After** (#1).\n\n"
+        )
+        cl, d = setup(tmp_path, HEADER + unreleased + OLD,
+                      {"5.md": frag("Fixed", "- **Five** (#5).")})
+        r = release(tmp_path)
+        assert r.returncode == 0, r.stderr
+        text = cl.read_text()
+        assert NEW in text, text
+        new = between(text, NEW, "## [1.0.0]")
+        assert block in new, f"fence not kept verbatim in the release:\n{text}"
+        assert new.index("**Five**") > new.index(block) + len(block), new
+        assert "**After**" in new, f"entry after the fence left the release:\n{text}"
+        assert between(text, "## [Unreleased]", NEW).strip() == "", text
+        assert text[text.index("## [1.0.0]"):] == OLD
+        assert text.count("## [0.1] fake") == 1
+        assert not (d / "5.md").exists()
+
+
+UNCLOSED = {
+    # the reviewer's repro: a bare fence under Unreleased, never closed
+    "under-unreleased": HEADER + (
+        "## [Unreleased]\n\n### Fixed\n\n- E:\n\n"
+        "```\n### Fixed\n## [0.1] fake\n\n- After.\n\n"
+    ) + OLD,
+    # a stray fence above ## [Unreleased]
+    "above-unreleased": HEADER + "```\n\n" + UNRELEASED + OLD,
+    "tildes-under-unreleased": HEADER + "## [Unreleased]\n\n### Fixed\n\n~~~\n- x.\n\n" + OLD,
+}
+
+
+class TestUnclosedFenceRefused:
+    """An unclosed fence is refused, not silently swallowing older releases (PR #221)."""
+
+    @pytest.mark.parametrize("changelog", UNCLOSED.values(), ids=UNCLOSED.keys())
+    def test_unclosed_fence_refused(self, tmp_path: Path, changelog: str) -> None:
+        setup(tmp_path, changelog, {"5.md": frag("Fixed", "- **Five** (#5).")})
+        before = snapshot(tmp_path)
+        r = release(tmp_path)
+        assert r.returncode != 0, f"unclosed fence accepted:\n{r.stdout}"
+        assert "unclosed" in r.stderr.lower(), r.stderr
+        assert "Traceback" not in r.stderr, r.stderr
+        assert snapshot(tmp_path) == before, "something changed on a refused release"
+
+
 # --- 2. CRLF -------------------------------------------------------------------------
 
 class TestCRLF:
@@ -155,6 +220,32 @@ class TestCRLF:
         assert out[out.index(b"## [1.0.0]"):] == old, "older sections are not byte-identical"
 
 
+CRLF_FRAG = "<!-- section: Fixed -->\r\n- **Five** (#5),\r\n  two lines.\r\n"
+
+
+class TestCRLFFragment:
+    """A CRLF fragment takes the CHANGELOG's line endings (#197, PR #221)."""
+
+    def test_crlf_fragment_in_lf_changelog(self, tmp_path: Path) -> None:
+        cl, _ = setup(tmp_path, HEADER + UNRELEASED + OLD, {"5.md": CRLF_FRAG})
+        r = release(tmp_path)
+        assert r.returncode == 0, r.stderr
+        out = cl.read_bytes()
+        assert b"- **Five** (#5),\n  two lines.\n" in out, out
+        assert b"\r" not in out, f"stray CR from a CRLF fragment: {out!r}"
+
+    def test_crlf_fragment_in_crlf_changelog(self, tmp_path: Path) -> None:
+        crlf = (HEADER + UNRELEASED + OLD).replace("\n", "\r\n").encode()
+        cl, _ = setup(tmp_path, crlf, {"5.md": CRLF_FRAG})
+        r = release(tmp_path)
+        assert r.returncode == 0, r.stderr
+        out = cl.read_bytes()
+        assert b"- **Five** (#5),\r\n  two lines.\r\n" in out, out
+        assert b"\r\r\n" not in out, f"doubled CR from a CRLF fragment: {out!r}"
+        bare = out.replace(b"\r\n", b"")
+        assert b"\n" not in bare and b"\r" not in bare, out
+
+
 # --- 3. empty fragments --------------------------------------------------------------
 
 EMPTY = {
@@ -162,7 +253,6 @@ EMPTY = {
     "no-newline": "<!-- section: Fixed -->",
     "whitespace-body": "<!-- section: Fixed -->\n   \n\t\n\n",
 }
-UNRELEASED = "## [Unreleased]\n\n### Fixed\n\n- **Existing** (#1).\n\n"
 
 
 class TestEmptyFragmentRefused:
@@ -212,7 +302,10 @@ class TestUnreleasedHeadingText:
 
 # --- 5. --date -----------------------------------------------------------------------
 
-BAD_DATES = ["yesterday", "2026-13-01", "2026-02-30", f"{DATE}\n## [x", "", " 2026-09-24"]
+BAD_DATES = [
+    "yesterday", "2026-13-01", "2026-02-30", f"{DATE}\n## [x", "", " 2026-09-24",
+    "20260924", "2026-W39-4",
+]
 
 
 class TestDateValidated:
