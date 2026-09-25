@@ -325,3 +325,57 @@ class TestSaveIsQuiet:
         warnings_log.clear()
         _save(_load(repo, monkeypatch), repo)
         assert len(_warnings(warnings_log)) == load_only, _warnings(warnings_log)
+
+
+# ---------------------------------------------------------------------------
+# 1b. Copies of a code-built board with DEFAULT (empty) or explicit-None limits
+#     (round 2: an `object()` sentinel is only visible where cleaning a foreign
+#     raw value gives `{}`, i.e. equals the default `wip_limits`)
+# ---------------------------------------------------------------------------
+
+
+def _default_board() -> BoardConfig:
+    return BoardConfig(name="d")
+
+
+def _none_board() -> BoardConfig:
+    return BoardConfig(name="n", wip_limits=None)
+
+
+class TestSentinelSurvivesCopyDefaultLimits:
+    @pytest.mark.parametrize("copier", COPIES)
+    def test_copied_default_board_omits_wip_limits(self, copier: Any) -> None:
+        data = copier(_default_board()).to_dict()
+        assert "wip_limits" not in data, data
+
+    @pytest.mark.parametrize("copier", COPIES)
+    def test_copied_default_board_safe_dumps(self, copier: Any) -> None:
+        text = yaml.safe_dump(copier(_default_board()).to_dict())
+        assert "wip_limits" not in yaml.safe_load(text)
+
+    @pytest.mark.parametrize("copier", COPIES)
+    def test_copied_none_board_keeps_none(self, copier: Any) -> None:
+        data = copier(_none_board()).to_dict()
+        assert "wip_limits" in data and data["wip_limits"] is None, data
+
+    @pytest.mark.parametrize("copier", COPIES)
+    def test_copied_none_board_safe_dumps(self, copier: Any) -> None:
+        text = yaml.safe_dump(copier(_none_board()).to_dict())
+        loaded = yaml.safe_load(text)
+        assert "wip_limits" in loaded and loaded["wip_limits"] is None
+
+    @pytest.mark.parametrize("copier", COPIES)
+    def test_copied_kanban_config_with_default_boards_saves_valid_yaml(
+        self, tmp_path: Path, copier: Any
+    ) -> None:
+        config = KanbanConfig(version="2.0", boards=[_default_board(), _none_board()])
+        path = tmp_path / ".kanban" / "config.yaml"
+        copier(config).save(path)
+        text = path.read_text()
+        assert "!!python" not in text, text
+        boards = {b["name"]: b for b in yaml.safe_load(text)["boards"]}
+        assert "wip_limits" not in boards["d"], boards
+        assert "wip_limits" in boards["n"] and boards["n"]["wip_limits"] is None
+        loaded = {b.name: b for b in KanbanConfig.load(path).boards}
+        assert loaded["d"].wip_limits == {}
+        assert loaded["n"].wip_limits is None
