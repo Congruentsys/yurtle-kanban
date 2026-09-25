@@ -425,13 +425,18 @@ def list_items(
 
     priority_filter = None
     if priority:
-        priority_filter = [p.strip().lower() for p in priority.split(",")]
+        # empty segments (`high,,low`, `high,`) are dropped (#238)
+        priority_filter = [p for p in (s.strip().lower() for s in priority.split(",")) if p]
+        if not priority_filter:
+            console.print(f"[red]No priority given; valid: {', '.join(PRIORITIES)}[/red]")
+            sys.exit(1)
         invalid = [p for p in priority_filter if p not in PRIORITIES]
-        if invalid:
+        # one message per value, each rendered like everywhere else (#190, #238)
+        for value in invalid:
             console.print(
-                f"[red]{escape(unknown_priority_message(', '.join(invalid)))}[/red]",
-                soft_wrap=True,
+                f"[red]{escape(unknown_priority_message(value))}[/red]", soft_wrap=True
             )
+        if invalid:
             sys.exit(1)
 
     items = service.get_items(
