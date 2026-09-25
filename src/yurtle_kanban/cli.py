@@ -136,7 +136,9 @@ class _Main(click.Group):
     """
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        for n, arg in enumerate(args, 1):
+        # shell completion parses resiliently and reads stdout as candidates:
+        # stay quiet there, the real run refuses (#193)
+        for n, arg in enumerate([] if ctx.resilient_parsing else args, 1):
             try:
                 check_encodable(f"argument {n}", arg)
             except ValueError as e:
