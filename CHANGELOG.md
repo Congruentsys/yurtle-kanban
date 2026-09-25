@@ -187,8 +187,8 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
   lines keep theirs, and changed lines use the file's majority ending. Epic
   linking and `update` now keep CRLF files CRLF, and `update` keeps the file's
   final newline.
-- **Query and `rank` escaping** (#162). The structured and NL query put
-  assignee and tag values into SPARQL literals raw, so a quote or backslash broke
+- **Query and `rank` escaping** (#162). The structured query API
+  (`QueryEngine.structured_query`) put assignee and tag values into SPARQL literals raw, so a quote or backslash broke
   the query and `zz") || contains("", "` matched every item. They're now escaped.
   `rank --summary` escaped only quotes, so a trailing backslash made the item
   vanish and `\b` or a newline was misread. It's now fully quoted.
