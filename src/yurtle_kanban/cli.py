@@ -118,7 +118,11 @@ def get_service() -> KanbanService:
             break
 
     if config_path:
-        config = KanbanConfig.load(config_path)
+        try:
+            config = KanbanConfig.load(config_path)
+        except ValueError as e:  # a config value of the wrong kind (#220)
+            console.print(f"[red]Invalid {escape(str(config_path))}: {escape(str(e))}[/red]")
+            sys.exit(1)
     else:
         config = KanbanConfig()  # Use defaults
 

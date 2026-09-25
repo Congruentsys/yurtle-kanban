@@ -12,6 +12,10 @@ from typing import Any
 
 import yaml
 
+from ._logging import get_logger
+
+logger = get_logger("yurtle-kanban")
+
 # Cache for loaded themes
 _theme_cache: dict[str, dict[str, Any]] = {}
 
@@ -68,7 +72,15 @@ def _ignore_list(data: dict[str, Any]) -> list[str]:
         return ["**/archive/**", "**/templates/**"]
     value = data["ignore"]
     # one pattern given as a string is that pattern, not its characters (#204)
-    return [value] if isinstance(value, str) else list(value or [])
+    if isinstance(value, str):
+        return [value]
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(
+            f"ignore: expected a list of glob patterns, got {type(value).__name__} {value!r}"
+        )
+    return list(value)
 
 
 @dataclass
@@ -131,9 +143,10 @@ class BoardConfig:
         # Preserve None (explicitly unlimited board)
         wip_limits = raw_wip if raw_wip is not None else None
         return cls(
-            name=data.get("name", "default"),
-            preset=data.get("preset", "software"),
-            path=data.get("path", "work/"),
+            # a bare scalar key means its default, like an absent one (#220)
+            name=data.get("name") or "default",
+            preset=data.get("preset") or "software",
+            path=data.get("path") or "work/",
             # a bare key (YAML null) means empty, never None (#194, #204)
             scan_paths=data.get("scan_paths") or [],
             wip_limits=wip_limits,
@@ -248,6 +261,12 @@ class KanbanConfig:
         # a bare `boards:` is the same as none: fall back to v1 (#204)
         if version == CONFIG_VERSION_MULTI and data.get("boards") is not None:
             return cls._load_v2(data)
+        dropped = [k for k in ("namespace", "default_board") if data.get(k) is not None]
+        if version == CONFIG_VERSION_MULTI and "boards" in data and dropped:
+            logger.warning(
+                f"config: `boards:` is empty, so this loads as a single-board config and "
+                f"ignores {', '.join(dropped)} (#220)"
+            )
 
         # Fall back to v1 single-board config
         return cls._load_v1(data)
@@ -260,7 +279,7 @@ class KanbanConfig:
 
         paths_data = kanban_data.get("paths") or {}
         paths = PathConfig(
-            root=paths_data.get("root", "work/"),
+            root=paths_data.get("root") or "work/",
             scan_paths=paths_data.get("scan_paths") or [],
             ignore=_ignore_list(paths_data),
             features=paths_data.get("features"),
@@ -271,7 +290,7 @@ class KanbanConfig:
 
         return cls(
             version=CONFIG_VERSION_SINGLE,
-            theme=kanban_data.get("theme", "software"),
+            theme=kanban_data.get("theme") or "software",
             paths=paths,
             workflows=kanban_data.get("workflows") or {},
             gates=kanban_data.get("gates") or {},
@@ -280,7 +299,8 @@ class KanbanConfig:
     @classmethod
     def _load_v2(cls, data: dict[str, Any]) -> "KanbanConfig":
         """Load v2 multi-board configuration."""
-        boards = [BoardConfig.from_dict(b) for b in data.get("boards", [])]
+        # a bare `- ` list entry is skipped, not a crash (#220)
+        boards = [BoardConfig.from_dict(b) for b in data.get("boards", []) if b is not None]
 
         # Aggregate scan_paths from all boards for Priority 3 fallback. Ignore
         # patterns stay per board: scan() applies each board's own (#124)
