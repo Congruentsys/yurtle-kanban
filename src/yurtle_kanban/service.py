@@ -123,6 +123,43 @@ def _scalar_text(value: Any) -> Any:
     return str(value) if isinstance(value, (int, float)) else value
 
 
+def _is_cyclic(value: Any) -> bool:
+    """True when a YAML value contains itself: an anchor used inside its own
+    node. A node shared by several fields, or used twice, is not a cycle (#262).
+    Iterative, so deep but finite nesting can't hit the recursion limit."""
+    on_path: set[int] = set()
+    done: set[int] = set()  # each shared node explored once (no billion-laughs blowup)
+    # (node, children iterator); a node leaves the path when its children run out
+    stack: list[tuple[Any, Any]] = []
+
+    def enter(node: Any) -> bool:
+        """Push a container; True if it closes a cycle."""
+        if not isinstance(node, (list, tuple, dict)) or id(node) in done:
+            return False
+        if id(node) in on_path:
+            return True
+        on_path.add(id(node))
+        children = [*node.keys(), *node.values()] if isinstance(node, dict) else node
+        stack.append((node, iter(children)))
+        return False
+
+    if enter(value):
+        return True
+    while stack:
+        node, children = stack[-1]
+        child = next(children, _DONE)
+        if child is _DONE:
+            stack.pop()
+            on_path.discard(id(node))
+            done.add(id(node))
+        elif enter(child):
+            return True
+    return False
+
+
+_DONE = object()  # sentinel: a node's children are exhausted
+
+
 class LineEndings:
     """A text file's original line endings, so an edit can keep them (#128, #151).
 
@@ -465,6 +502,14 @@ class KanbanService:
             if not isinstance(frontmatter, dict) or not frontmatter:
                 self._note_unparseable(file_path, content)
                 return None
+            for key in [k for k, v in frontmatter.items() if _is_cyclic(v)]:
+                # a YAML anchor that contains itself (`tags: &a [x, *a]`) can't be
+                # serialised or rendered: drop the field, keep the item (#262)
+                logger.warning(
+                    f"{file_path}: frontmatter field `{key}` is cyclic (a YAML anchor "
+                    "that contains itself); ignored"
+                )
+                del frontmatter[key]
 
             # Get required fields
             item_id = frontmatter.get("id")
@@ -2563,6 +2608,10 @@ class KanbanService:
         Returns a dict with ``item_id`` and ``file_path`` on success,
         or ``None`` on failure.
         """
+        if _is_cyclic(tags):
+            logger.warning("Hook create_item: `tags` is cyclic (a YAML anchor that "
+                           "contains itself); creating the item without tags (#262)")
+            tags = None
         try:
             wit = WorkItemType.from_string(item_type)
             item = self.create_item(

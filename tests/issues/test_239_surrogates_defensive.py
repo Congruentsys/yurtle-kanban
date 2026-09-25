@@ -381,7 +381,8 @@ import signal, sys, yaml
 from yurtle_kanban.models import InvalidText, check_encodable
 LONE = "a\\udcffb"
 {build}
-signal.alarm(1)
+if hasattr(signal, "alarm"):
+    signal.alarm(1)
 try:
     check_encodable("f", value)
 except InvalidText:
