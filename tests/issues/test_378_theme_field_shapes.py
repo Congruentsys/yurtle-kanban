@@ -278,8 +278,11 @@ def _pair(
 
 
 def _normalized(result, repo: Path) -> str:
-    out = result.output or ""
-    for p in {str(repo.resolve()), str(repo)}:
+    """The output with the repo's own root replaced by ``<repo>``. The console wraps
+    a long absolute path across lines, so the lines are joined first (both repos'
+    roots have the same length, so they wrap at the same places)."""
+    out = "".join((result.output or "").splitlines())
+    for p in sorted({str(repo.resolve()), str(repo)}, key=len, reverse=True):
         out = out.replace(p, "<repo>")
     return out
 
