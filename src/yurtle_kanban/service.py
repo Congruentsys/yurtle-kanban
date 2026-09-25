@@ -379,7 +379,8 @@ class KanbanService:
         self._workflow_parser = WorkflowParser(self.repo_root / ".kanban")
         self._workflows: dict[str, WorkflowConfig] = {}
         self._hook_engine = HookEngine(
-            hooks_config or (self.repo_root / ".kanban" / "hooks" / "kanban-hooks.yurtle.md")
+            hooks_config or (self.repo_root / ".kanban" / "hooks" / "kanban-hooks.yurtle.md"),
+            repo_root=self.repo_root,  # hook actions run in the repo, not the cwd (#347)
         )
         self._hook_engine.set_callback("create_item", self._hook_create_item)
 

@@ -64,6 +64,9 @@ class HookContext:
     forced: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default="", init=False)
+    # where relative paths and subprocesses resolve: the engine's repo, when it has
+    # one; None keeps the process cwd (#347). Not part of the payload.
+    repo_root: Path | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         self.timestamp = datetime.now(timezone.utc).isoformat()
@@ -115,7 +118,9 @@ class HookEngine:
 
     _MAX_HOOK_DEPTH = 3
 
-    def __init__(self, config_path: Path | None = None):
+    def __init__(self, config_path: Path | None = None, repo_root: Path | None = None):
+        # actions resolve relative paths and run subprocesses here, not in the cwd (#347)
+        self._repo_root = repo_root
         self._hooks_config: dict[str, list[dict]] = {}
         self._callbacks: dict[str, Callable] = {}
         self._depth: int = 0
@@ -167,6 +172,8 @@ class HookEngine:
 
         self._depth += 1
         try:
+            if context.repo_root is None:
+                context.repo_root = self._repo_root
             matched = self._matching_hooks(event, context)
             for hook_def in matched:
                 actions = hook_def.get("actions", [])
@@ -240,6 +247,7 @@ def _action_nats_publish(action: dict, context: HookContext) -> None:
     try:
         subprocess.run(
             ["nats", "pub", subject, payload],
+            cwd=context.repo_root,
             capture_output=True,
             text=True,
             timeout=10,
@@ -257,6 +265,8 @@ def _action_log(action: dict, context: HookContext) -> None:
     """Append a JSON line to a log file."""
     log_path = action.get("path", ".kanban/hooks.log")
     log_path = Path(context.render_template(log_path))
+    if context.repo_root is not None and not log_path.is_absolute():
+        log_path = context.repo_root / log_path
 
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -297,6 +307,7 @@ def _action_shell(action: dict, context: HookContext) -> None:
     try:
         result = subprocess.run(
             command,
+            cwd=context.repo_root,
             shell=True,
             capture_output=True,
             text=True,
@@ -373,6 +384,7 @@ def _action_notify(action: dict, context: HookContext) -> None:
     try:
         subprocess.run(
             ["nats", "pub", subject, payload],
+            cwd=context.repo_root,
             capture_output=True,
             text=True,
             timeout=10,
