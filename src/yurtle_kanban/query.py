@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from rdflib import RDF, Graph, Literal, Namespace
+from rdflib import RDF, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import XSD
 
 from ._logging import get_logger
@@ -460,7 +460,8 @@ class NLDecomposer:
         # Status inclusions
         for pattern, status in self._STATUS_INCLUDE_MAP.items():
             if pattern.search(remaining):
-                parsed.status_include.append(status)
+                if status not in parsed.status_include:  # "blocked and stranded" (#355)
+                    parsed.status_include.append(status)
                 remaining = pattern.sub("", remaining)
 
         # Type filters
@@ -559,18 +560,29 @@ class QueryEngine:
             "?item kb:numericId ?numId .",
         ]
 
+        # Statuses and types are bound as IRIs, never spliced into the query text:
+        # nothing in a ParsedQuery value can break or inject into it (#355, as #162
+        # does for literals); a value that isn't a real status/type just matches nothing
+        def iri_list(prefix: str, values: list[str]) -> str:
+            names = []
+            for i, value in enumerate(values):
+                bindings[f"{prefix}{i}"] = URIRef(str(KB) + value)
+                names.append(f"?{prefix}{i}")
+            return ", ".join(names)  # IN needs commas (#64)
+
         # Status exclusions
-        for status in parsed.status_filter:
-            filters.append(f"FILTER(?status != kb:{status})")
+        for i, status in enumerate(parsed.status_filter):
+            bindings[f"statusOut{i}"] = URIRef(str(KB) + status)
+            filters.append(f"FILTER(?status != ?statusOut{i})")
 
         # Status inclusions
         if parsed.status_include:
-            values = ", ".join(f"kb:{s}" for s in parsed.status_include)  # IN needs commas (#64)
+            values = iri_list("statusIn", parsed.status_include)
             filters.append(f"FILTER(?status IN ({values}))")
 
         # Type filters
         if parsed.type_filter:
-            type_values = ", ".join(f"kb:{t.title()}" for t in parsed.type_filter)
+            type_values = iri_list("type", [t.title() for t in parsed.type_filter])
             wheres.append(f"?item a ?type . FILTER(?type IN ({type_values}))")
 
         # ID range
