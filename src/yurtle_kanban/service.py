@@ -749,6 +749,8 @@ class KanbanService:
         else:
             try:
                 data = yaml.safe_load(split[0])
+            except RecursionError:
+                return "frontmatter nested too deeply to parse"  # as the scan says (#280, #297)
             except yaml.YAMLError as e:
                 reason = "YAML error: " + " ".join(str(e).split())[:120]
             else:
@@ -767,7 +769,7 @@ class KanbanService:
 
         try:
             return yaml.safe_load(split[0])
-        except yaml.YAMLError:
+        except (yaml.YAMLError, RecursionError):  # too deep counts as unparseable (#297)
             return None
 
     def _parse_graph(self, content: str) -> Graph | None:
