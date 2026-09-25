@@ -9,7 +9,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from yurtle_kanban.cli import main, _get_templates_dir, _get_skills_dir
+from yurtle_kanban.cli import _get_skills_dir, _get_templates_dir, main
 
 
 class TestSharedDataResolution:
@@ -411,7 +411,8 @@ class TestSkillsDoNotAssumeOneConsumersTree:
                 for fragment in self.FOREIGN_TREE_PATHS:
                     if fragment in line:
                         offenders.append(
-                            f"{path.relative_to(skills_dir)}:{lineno} contains {fragment!r} — {line.strip()[:90]}"
+                            f"{path.relative_to(skills_dir)}:{lineno} contains {fragment!r}"
+                            f" — {line.strip()[:90]}"
                         )
 
         assert not offenders, (
@@ -632,7 +633,9 @@ class TestInitWritesThemeRoot:
         """`create feature` lands at ./features/ exactly as before, not work/features/."""
         self._write_flat_theme(tmp_path)
         self._run(tmp_path, monkeypatch, "init", "--theme", "flat")
-        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), "non-vacuity: flat not scaffolded"
+        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), (
+            "non-vacuity: flat not scaffolded"
+        )
 
         self._run(tmp_path, monkeypatch, "create", "feature", "probe")
         found = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("FEAT-001*"))
@@ -803,11 +806,19 @@ class TestInitExplicitPathScaffolding:
     def _created_paths(root: Path) -> list[str]:
         """Every path init created, minus .git/, .claude/ and .kanban/templates/*."""
         out = []
-        for f in root.rglob("*"):
-            parts = f.relative_to(root).parts
-            if parts[0] in (".git", ".claude") or parts[:2] == (".kanban", "templates") and len(parts) > 2:
-                continue
-            out.append(f.relative_to(root).as_posix())
+        # os.walk, pruning the root .git: rglob would descend into .git/objects,
+        # which git may repack concurrently (#259).
+        for dirpath, dirs, names in os.walk(root):
+            if Path(dirpath) == root:
+                dirs[:] = [d for d in dirs if d != ".git"]
+            for name in dirs + names:
+                f = Path(dirpath) / name
+                parts = f.relative_to(root).parts
+                if parts[0] in (".git", ".claude") or (
+                    parts[:2] == (".kanban", "templates") and len(parts) > 2
+                ):
+                    continue
+                out.append(f.relative_to(root).as_posix())
         return sorted(out)
 
     # ---- the change ----------------------------------------------------
@@ -928,7 +939,9 @@ class TestInitExplicitPathScaffolding:
         """Round-2 follow-up A: init creates no unscanned root (no work/)."""
         self.H._write_flat_theme(tmp_path)
         self.H._run(tmp_path, monkeypatch, "init", "--theme", "flat")
-        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), "non-vacuity: flat not scaffolded"
+        assert (tmp_path / "features" / "_TEMPLATE.md").is_file(), (
+            "non-vacuity: flat not scaffolded"
+        )
         assert not (tmp_path / "work").exists(), (
             "init --theme flat created a work/ directory nothing scans"
         )

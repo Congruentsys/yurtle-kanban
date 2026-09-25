@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import files_outside_git
+
 MSG = "invalid UTF-8"
 BAD = b"a\xffb"  # undecodable argv bytes -> "a\udcffb" under surrogateescape
 GOOD = "café ☕"
@@ -69,12 +71,7 @@ def _run(repo: Path, *args: str | bytes) -> tuple[int, str]:
 
 def _snapshot(repo: Path) -> tuple[dict[str, bytes], str]:
     """Every file outside .git with its bytes, plus the commit count."""
-    files = {
-        str(p.relative_to(repo)): p.read_bytes()
-        for p in repo.rglob("*")
-        if p.is_file() and ".git" not in p.relative_to(repo).parts
-    }
-    return files, _git(repo, "rev-list", "--count", "HEAD").strip()
+    return files_outside_git(repo), _git(repo, "rev-list", "--count", "HEAD").strip()
 
 
 def _assert_refused(repo: Path, before: tuple[dict[str, bytes], str], code: int, out: str) -> None:
