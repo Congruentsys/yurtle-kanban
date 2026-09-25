@@ -21,7 +21,6 @@ Usage:
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -54,7 +53,7 @@ from .models import (
     check_encodable,
     unknown_priority_message,
 )
-from .service import KanbanService
+from .service import KanbanService, git_toplevel
 
 
 def _get_shared_data_dir(subdir: str) -> Path:
@@ -285,10 +284,7 @@ kanban:
     config_path.write_text(config_content)
 
     board_root = (repo_root / path).resolve()
-    top = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], cwd=repo_root, capture_output=True, text=True
-    ).stdout.strip()
-    git_root = Path(top).resolve() if top else repo_root.resolve()
+    git_root = (git_toplevel(repo_root) or repo_root).resolve()
     if not _within(board_root, git_root):
         # git commits nothing outside the repo; say so now, not at the first move (#174)
         console.print(
