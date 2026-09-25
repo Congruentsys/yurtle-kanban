@@ -136,9 +136,12 @@ class UnifiedGraph:
         # Numeric ID for range queries
         self._graph.add((item_uri, KB.numericId, Literal(item.numeric_id, datatype=XSD.integer)))
 
-        # Merge per-file RDF graph (fenced turtle/yurtle blocks)
+        # Merge per-file RDF graph (fenced turtle/yurtle blocks). The numeric ID is
+        # derived from the item's own ID above; a block can't redefine it (#385)
         if item.graph is not None:
             for triple in item.graph:
+                if triple[1] == KB.numericId:
+                    continue
                 self._graph.add(triple)
 
     def add_items(self, items: list[WorkItem]) -> None:
