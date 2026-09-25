@@ -196,7 +196,8 @@ if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
     sys.exit(0)
 
 if len(args) >= 2 and args[0] == "pr" and args[1] == "merge":
-    record({"MERGED": True, "worktree_exists_at_merge": bool(worktree) and os.path.exists(worktree)})
+    exists = bool(worktree) and os.path.exists(worktree)
+    record({"MERGED": True, "worktree_exists_at_merge": exists})
     print("MERGED")
     sys.exit(0)
 
@@ -508,7 +509,7 @@ class TestPairitSkillUsesSafeMerge:
 
     def test_overview_merge_line_points_at_safe_merge(self) -> None:
         text = SKILL_MD.read_text()
-        line = next(l for l in text.splitlines() if re.match(r"^\s*4\.\s+MERGE\b", l))
+        line = next(ln for ln in text.splitlines() if re.match(r"^\s*4\.\s+MERGE\b", ln))
         assert "gh pr merge`" not in line or "safe_merge" in line, (
             f"the step list still gives a bare `gh pr merge` as the merge: {line!r}"
         )
