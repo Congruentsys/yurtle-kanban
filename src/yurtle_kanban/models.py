@@ -33,18 +33,35 @@ def unknown_priority_message(value: object) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
+class InvalidText(ValueError):  # noqa: N818 — the name #239 specifies
+    """User text that can't be written as UTF-8: a refusal of the input, never a
+    bug, so a CLI command shows it as a one-line error (#239)."""
+
+
 def check_encodable(field: str, value: object) -> None:
     """Refuse text that can't be written as UTF-8: a lone surrogate, which is what
     Python's surrogateescape makes of undecodable argv bytes (#172). Checked before
-    anything is written, so a bad value never leaves a 0-byte item file behind."""
-    for text in value if isinstance(value, (list, tuple)) else [value]:
-        if isinstance(text, str):
+    anything is written, so a bad value never leaves a 0-byte item file behind.
+    Lists, tuples and dicts (keys and values) are checked all the way down (#239)."""
+    todo, seen = [value], set()  # seen: YAML anchors can make a container hold itself
+    while todo:
+        item = todo.pop()
+        if isinstance(item, (list, tuple, dict)):
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+        if isinstance(item, str):
             try:
-                text.encode("utf-8")
+                item.encode("utf-8")
             except UnicodeEncodeError:
-                raise ValueError(
-                    f"{field} contains invalid UTF-8 (undecodable bytes): {text!r}"
+                raise InvalidText(
+                    f"{field} contains invalid UTF-8 (undecodable bytes): {item!r}"
                 ) from None
+        elif isinstance(item, (list, tuple)):
+            todo.extend(item)
+        elif isinstance(item, dict):
+            todo.extend(item.keys())
+            todo.extend(item.values())
 
 
 # Turtle short-string escaping (ECHAR): the one escaper for every Turtle literal

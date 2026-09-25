@@ -1797,6 +1797,7 @@ class KanbanService:
         Returns:
             True if the parent was updated, False otherwise.
         """
+        self._check_text(child_id=child_id)  # before the parent is rewritten (#239)
         relation = self._INVERSE_RELATIONS.get(child_type)
         if relation is None:
             logger.debug(f"No inverse relation defined for child type: {child_type}")
@@ -2381,6 +2382,7 @@ class KanbanService:
             gate_context: Extra context for gate evaluation (e.g., CLI flags
                 like ``{"self_reviewed": True}``)
         """
+        self._check_text(assignee=assignee, message=message, closed_by=closed_by)  # (#239)
         item = self.get_item(item_id)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
@@ -3513,6 +3515,7 @@ class KanbanService:
             status: New status (e.g., "running", "complete", "failed")
             outcome: Optional outcome string (e.g., "VALIDATED", "REFUTED")
         """
+        self._check_text(status=status, outcome=outcome)  # before any write (#239)
         config_path = run_path / "config.yaml"
         if not config_path.exists():
             raise FileNotFoundError(f"No config.yaml in {run_path}")

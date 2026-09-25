@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from ._click import Group
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
 from .service import KanbanService
 from .template_engine import TemplateEngine
@@ -345,7 +346,7 @@ def _do_add(epic_id: str, item_id: str):
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def epic():
     """Manage epics — multi-item groupings of related work."""
     pass
@@ -385,7 +386,7 @@ def epic_add(epic_id: str, item_id: str):
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def voyage():
     """Manage voyages — nautical alias for 'epic'."""
     pass

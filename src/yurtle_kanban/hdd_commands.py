@@ -16,6 +16,7 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
+from ._click import Group
 from .models import PRIORITIES, WorkItemType
 from .template_engine import TemplateEngine
 from .turtle_builder import InvalidTurtleName
@@ -76,7 +77,7 @@ def _update_parent(
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def hdd():
     """Hypothesis-Driven Development — cross-type operations."""
     pass
@@ -543,7 +544,7 @@ def _render_critical_path(
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def idea():
     """Manage research/feature ideas (HDD)."""
     pass
@@ -621,7 +622,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def literature():
     """Manage literature reviews (HDD)."""
     pass
@@ -697,7 +698,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def paper():
     """Manage research papers (HDD)."""
     pass
@@ -779,7 +780,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def hypothesis():
     """Manage hypotheses (HDD)."""
     pass
@@ -952,7 +953,7 @@ def hypothesis_create(
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def experiment():
     """Manage experiments (HDD)."""
     pass
@@ -1223,7 +1224,7 @@ def experiment_status(expr_id: str, as_json: bool):
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+@click.group(cls=Group)
 def measure():
     """Manage metric definitions (HDD)."""
     pass

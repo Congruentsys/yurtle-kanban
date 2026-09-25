@@ -28,6 +28,7 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
+from ._click import Group
 from .board import (
     render_board,
     render_history,
@@ -129,7 +130,7 @@ def get_service() -> KanbanService:
     return KanbanService(config, repo_root)
 
 
-class _Main(click.Group):
+class _Main(Group):
     """The root group: refuses undecodable argv before any command runs (#193).
 
     Python decodes invalid UTF-8 in argv to lone surrogates, which can't be
