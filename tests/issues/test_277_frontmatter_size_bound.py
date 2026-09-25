@@ -235,3 +235,55 @@ class TestControls:
         proc, elapsed = _cli(sw, "list")
         _ok(proc, elapsed)
         assert not _too_large_lines(proc.stderr), proc.stderr[:4000]
+
+
+def _triples(repo: Path) -> int:
+    proc, elapsed = _cli(repo, "list", "--json")
+    _ok(proc, elapsed)
+    return _json_item(proc)["triple_count"]
+
+
+class TestNonStringKeys:
+    """Round 2 (review of PR #290): a dropped field under a non-str YAML key must
+    not make the item vanish (`re.escape(5)` -> TypeError -> file skipped)."""
+
+    def test_cyclic_under_int_key(self, sw: Path) -> None:
+        path = _add_frontmatter(sw, "5: &a [x, *a]\n")
+        proc, elapsed = _cli(sw, "list")
+        _ok(proc, elapsed)
+        assert "FEAT-001" in proc.stdout, proc.stdout[:2000] + proc.stderr[:2000]
+        assert "skipped" not in proc.stderr, proc.stderr[:4000]
+        assert "TypeError" not in proc.stderr, proc.stderr[:4000]
+        warned = [ln for ln in proc.stderr.splitlines() if "cyclic" in ln.lower()]
+        assert len(warned) == 1, proc.stderr[:4000]
+        assert "5" in warned[0], warned[0]
+        assert path.name in warned[0] or "FEAT-001" in warned[0], warned[0]
+
+    @pytest.mark.parametrize("key", ["5", "true"])
+    def test_huge_under_non_str_key(self, sw: Path, key: str) -> None:
+        path = _add_frontmatter(sw, f"{key}: {_laughs()}\n")
+        for args in (("list",), ("list", "--json")):
+            proc, elapsed = _cli(sw, *args)
+            _ok(proc, elapsed)
+            assert "FEAT-001" in proc.stdout, proc.stdout[:2000] + proc.stderr[:2000]
+            assert "skipped" not in proc.stderr, proc.stderr[:4000]
+            assert "TypeError" not in proc.stderr, proc.stderr[:4000]
+            warned = _too_large_lines(proc.stderr)
+            assert len(warned) == 1, proc.stderr[:4000]
+            assert path.name in warned[0] or "FEAT-001" in warned[0], warned[0]
+        assert _json_item(proc)["triple_count"] < 10_000
+
+
+class TestCyclicGraphUnchanged:
+    """Cyclic fields are not blanked in the graph text (main's yurtle_rdflib copes):
+    `tags: &a [x, *a]` keeps its triples, as on origin/main (9 there, 7 when blanked)."""
+
+    def test_cyclic_tags_keep_graph_triples(self, sw: Path) -> None:
+        _add_frontmatter(sw, "tags: [placeholder]\n")
+        twin = _triples(sw)  # same file, a plain one-value tags list
+        _add_frontmatter(sw, "tags: &a [x, *a]\n")
+        cyclic = _triples(sw)
+        _add_frontmatter(sw, "tags: []\n")
+        blank = _triples(sw)
+        assert cyclic > blank, (cyclic, blank, twin)
+        assert cyclic >= 9, (cyclic, blank, twin)
