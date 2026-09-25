@@ -9,14 +9,16 @@ Decided behaviour:
    the file, nothing changed, no fragment deleted.
 4. `## [Unreleased] - TBD`: the trailing text does not leak into the new section.
 5. `--date` must be YYYY-MM-DD (a real date) -> otherwise non-zero exit, nothing changed.
-6. Fragments are deleted only after the CHANGELOG write succeeded.
+6. Fragments are deleted only after the CHANGELOG write succeeded; a failed write
+   exits non-zero cleanly (no traceback).
 7. CONTRIBUTING says the assemble step replaces step 4 of skills/release/SKILL.md;
-   pairit's "Rebased after approval?" paragraph has no odd hard wrap and says
-   "unchanged" at most once.
+   pairit's "Rebased after approval?" paragraph has no line under 60 chars but the last,
+   and says only once that the PR's own patch is unchanged.
 """
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -250,6 +252,7 @@ class TestWriteOrder:
         finally:
             cl.chmod(0o644)
         assert r.returncode != 0, f"write to a read-only CHANGELOG reported success:\n{r.stdout}"
+        assert "Traceback" not in r.stderr, f"failed write crashed:\n{r.stderr}"
         assert (d / "5.md").exists() and (d / "6.md").exists(), "fragments deleted"
         assert snapshot(tmp_path) == before
 
@@ -278,9 +281,10 @@ class TestDocs:
     def test_pairit_rebased_paragraph_has_no_odd_wrap(self) -> None:
         para = rebased_paragraph()
         assert len(para) > 1
-        short = [ln for ln in para[:-1] if len(ln) < 40]
+        short = [ln for ln in para[:-1] if len(ln) < 60]
         assert not short, f"odd hard wrap in the Rebased paragraph: {short}"
 
-    def test_pairit_rebased_paragraph_says_unchanged_once(self) -> None:
+    def test_pairit_rebased_paragraph_says_patch_unchanged_once(self) -> None:
         text = " ".join(rebased_paragraph())
-        assert text.count("unchanged") <= 1, text
+        hits = re.findall(r"(?i)(no change to the PR's own patch|patch is unchanged)", text)
+        assert len(hits) <= 1, f"'patch unchanged' said {len(hits)} times: {hits}\n{text}"
