@@ -28,12 +28,15 @@ from __future__ import annotations
 import logging
 import subprocess
 from collections.abc import Iterator
+from io import StringIO
 from pathlib import Path
 
 import pytest
 import yaml
 from click.testing import CliRunner
+from rich.console import Console
 
+from yurtle_kanban import cli as cli_mod
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig
@@ -165,6 +168,31 @@ def test_cli_list_non_string_name_exits_one_cleanly(tmp_path, monkeypatch, key, 
     flat = " ".join(out.split())  # rich may wrap the long path
     assert "Invalid" in flat and "config.yaml" in flat, out
     assert key in flat and "string" in flat.lower(), out
+
+
+@pytest.mark.parametrize("key", ["theme", "preset"])
+def test_cli_invalid_config_line_never_wraps(tmp_path, monkeypatch, key):
+    """#291: the one-line check must not hinge on the tmp path length or terminal width.
+
+    A 40-column console and a 120+-char repo path: without ``soft_wrap=True`` rich
+    hard-wraps the ``Invalid …config.yaml: …`` message, every time, on every machine.
+    """
+    base = tmp_path / "nest"
+    while len(str(base / "repo" / ".kanban" / "config.yaml")) < 140:
+        base = base / "a_deliberately_long_directory_name"
+    base.mkdir(parents=True)
+    narrow = Console(width=40, file=StringIO(), force_terminal=False, color_system=None)
+    monkeypatch.setattr(cli_mod, "console", narrow)
+    result = _list(base, monkeypatch, BUILDERS[key]("5"))
+    assert result.exit_code == 1, result.output
+    out = narrow.file.getvalue()
+    cfg = str(base / "repo" / ".kanban" / "config.yaml")
+    assert len(cfg) >= 140 > 40, cfg  # far wider than the console: a wrap is certain
+    start = out.find("Invalid ")
+    assert start != -1, out
+    line = out[start:].split("\n", 1)[0]  # the whole message, up to the first newline
+    assert f"Invalid {cfg}: " in line, out  # full path, unbroken, on the Invalid line
+    assert key in line and "string" in line.lower(), out  # the reason on that line too
 
 
 # --- 2. an unknown name loads but warns once, listing what exists ---------------------
