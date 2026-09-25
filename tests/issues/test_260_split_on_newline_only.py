@@ -168,3 +168,35 @@ def test_heading_control_plain_file(tmp_path: Path, crlf: bool) -> None:
     text = f"# Changelog\n\n## [Unreleased]\n\n### Added\n\n- note\n\n{OLD}"
     setup(tmp_path, text.replace("\n", "\r\n") if crlf else text, {"101.md": FRAGMENT})
     assert released(tmp_path) == expected("- note", crlf)
+
+
+# --- a last line without a newline is still a line (PR #273 review) -----------------
+
+def test_release_heading_as_unterminated_last_line(tmp_path: Path) -> None:
+    last = "## [1.0.0] - 2026-01-01"  # no "\n": the file just ends
+    setup(tmp_path, f"# Changelog\n\n## [Unreleased]\n\n### Added\n\n- note\n\n{last}",
+          {"101.md": FRAGMENT})
+    new = released(tmp_path)
+    assert new == (
+        f"# Changelog\n\n## [Unreleased]\n\n{NEW}\n\n### Added\n\n- note\n"
+        f"- **Thing** (#101)\n\n{last}"
+    ), f"the new release should go before the last-line {last!r}:\n{new!r}"
+
+
+def test_changelog_unterminated_last_line_fence_opener(tmp_path: Path) -> None:
+    # line 7 is the opener, and the file's last line (no "\n")
+    setup(tmp_path, "# Changelog\n\n## [Unreleased]\n\n- a\n\n```python",
+          {"101.md": FRAGMENT})
+    before = snapshot(tmp_path)
+    r = release(tmp_path)
+    assert_refused(tmp_path, before, r, 7)
+    assert "CHANGELOG" in r.stderr, r.stderr
+
+
+def test_fragment_unterminated_last_line_fence_opener(tmp_path: Path) -> None:
+    # section line is line 1, the entry line 2, the opener line 3 and last (no "\n")
+    setup(tmp_path, GOOD_CHANGELOG, {"101-thing.md": "<!-- section: Fixed -->\n- a\n```"})
+    before = snapshot(tmp_path)
+    r = release(tmp_path)
+    assert_refused(tmp_path, before, r, 3)
+    assert "101-thing.md" in r.stderr, r.stderr
