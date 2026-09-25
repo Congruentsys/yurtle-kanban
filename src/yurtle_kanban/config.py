@@ -63,6 +63,18 @@ _THEME_SECTIONS = (
 )
 
 
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_int_or_none(value: Any) -> bool:
+    return value is None or _is_int(value)  # a null WIP limit means "no limit"
+
+
+def _is_str(value: Any) -> bool:
+    return isinstance(value, str)
+
+
 def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
     """`data` without any section that isn't a mapping: it is ignored, with one
     warning, as if it were absent (a `null` one too), so board/init/move fall back
@@ -85,6 +97,28 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
                 f"theme file {theme_path}: `{section}.{entry}` is not a mapping "
                 f"({type(value).__name__}); ignored"
             )
+    # column ids are text (they are titled, matched to statuses) (#378)
+    columns = data.get("columns", {})
+    for key in [k for k in columns if not isinstance(k, str)]:
+        columns.pop(key)
+        logger.warning(
+            f"theme file {theme_path}: `columns.{key}` has a non-text id "
+            f"({type(key).__name__}); ignored"
+        )
+    # and one level further: the fields consumers compare, sort or join (#378)
+    for section, key, ok, want in (
+        ("columns", "wip_limit", _is_int_or_none, "a whole number"),
+        ("columns", "order", _is_int, "a whole number"),
+        ("item_types", "path", _is_str, "text"),
+        ("item_types", "id_prefix", _is_str, "text"),
+    ):
+        for entry, definition in data.get(section, {}).items():
+            if key in definition and not ok(definition[key]):
+                value = definition.pop(key)
+                logger.warning(
+                    f"theme file {theme_path}: `{section}.{entry}.{key}` is not "
+                    f"{want} ({type(value).__name__}); ignored"
+                )
     # the theme's name is matched as text (epics look it up in a set) (#363)
     meta = data.get("theme", {})
     if "name" in meta and not isinstance(meta["name"], str):
