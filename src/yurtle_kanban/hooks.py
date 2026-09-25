@@ -15,7 +15,7 @@ import json
 import shlex
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -86,8 +86,18 @@ class HookContext:
             "timestamp": self.timestamp,
         }
 
-    def render_template(self, template: str) -> str:
-        """Replace {var} placeholders with context values."""
+    def render_path(self, template: str) -> str:
+        """`render_template` for a file path: each substituted value is made
+        path-safe (a `/` or `\\` becomes `_`, a whole `.` or `..` becomes `_`), so
+        item data can't add directories or climb out; the template's own structure,
+        `..` included, is the config author's and stays as written (#357)."""
+        return self.render_template(template, _path_safe)
+
+    def render_template(
+        self, template: str, transform: Callable[[str], str] | None = None
+    ) -> str:
+        """Replace {var} placeholders with context values (each passed through
+        `transform` when given)."""
         replacements = {
             "item_id": self.item_id,
             "item_type": self.item_type,
@@ -101,8 +111,15 @@ class HookContext:
         }
         result = template
         for key, value in replacements.items():
-            result = result.replace(f"{{{key}}}", str(value))
+            text = str(value)
+            result = result.replace(f"{{{key}}}", transform(text) if transform else text)
         return result
+
+
+def _path_safe(value: str) -> str:
+    """One substituted value, safe inside a path: no separators, never `.`/`..` (#357)."""
+    value = value.replace("/", "_").replace("\\", "_")
+    return "_" if value in (".", "..") else value
 
 
 # ─── Engine ────────────────────────────────────────────────────────────────
@@ -177,7 +194,9 @@ class HookEngine:
         self._depth += 1
         try:
             if context.repo_root is None:
-                context.repo_root = self._repo_root
+                # a copy: the caller's context is never changed, so one reused
+                # across engines runs in each engine's own repo (#357)
+                context = replace(context, repo_root=self._repo_root)
             matched = self._matching_hooks(event, context)
             for hook_def in matched:
                 actions = hook_def.get("actions", [])
@@ -268,7 +287,7 @@ def _action_nats_publish(action: dict, context: HookContext) -> None:
 def _action_log(action: dict, context: HookContext) -> None:
     """Append a JSON line to a log file."""
     log_path = action.get("path", ".kanban/hooks.log")
-    log_path = Path(context.render_template(log_path))
+    log_path = Path(context.render_path(log_path))
     if context.repo_root is not None and not log_path.is_absolute():
         log_path = context.repo_root / log_path
 
