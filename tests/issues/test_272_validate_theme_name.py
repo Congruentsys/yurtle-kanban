@@ -31,11 +31,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig
+from yurtle_kanban.service import KanbanService
 
 LOGGER = "yurtle-kanban"
 BOARD = "devboard"
@@ -59,6 +61,14 @@ def _multi(value: str) -> str:
 BUILDERS = {"theme": _single, "preset": _multi}
 
 # --- helpers --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_theme_cache() -> Iterator[None]:
+    """`_theme_cache` is keyed by name only: never let one test's hit leak into another."""
+    config_mod._theme_cache.clear()
+    yield
+    config_mod._theme_cache.clear()
 
 
 @pytest.fixture
@@ -238,3 +248,61 @@ def test_control_empty_name_only_256_warning(tmp_path, monkeypatch, warnings_log
     found = _warnings(warnings_log)
     assert len(found) == 1, found
     assert key in found[0] and "empty" in found[0].lower(), found[0]
+
+
+# --- round 2: the config's own repo is searched, whatever the cwd ---------------------
+#
+# Review of PR #284: the load-time check looked only in cwd/.kanban/themes, so from an
+# unrelated cwd a repo-only theme warned falsely, and a repo override of a built-in name
+# was shadowed: the built-in got cached at load, and the service then got it too.
+
+MARKER = "repo-override-272"
+
+
+def _repo_elsewhere(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str, theme_name: str, body: str
+) -> tuple[Path, Path]:
+    """A repo with ``.kanban/themes/<theme_name>.yaml``; cwd is an unrelated dir."""
+    repo = tmp_path / "repo"
+    cfg = _write_repo(repo, text)
+    (repo / ".kanban" / "themes").mkdir(exist_ok=True)
+    (repo / ".kanban" / "themes" / f"{theme_name}.yaml").write_text(body)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    return repo, cfg
+
+
+def _unknown_theme_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [m for m in _warnings(caplog) if "not a known theme" in m or "Available" in m]
+
+
+@pytest.mark.parametrize("key", ["theme", "preset"])
+def test_repo_only_theme_from_other_cwd_no_warning(tmp_path, monkeypatch, warnings_log, key):
+    body = "\n".join(["theme:", "  name: acme", "item_types:", "  task:", "    id_prefix: AC"])
+    _, cfg = _repo_elsewhere(tmp_path, monkeypatch, BUILDERS[key]("acme"), "acme", body + "\n")
+    config = KanbanConfig.load(cfg)
+    got = config.theme if key == "theme" else config.boards[0].preset
+    assert got == "acme"
+    assert _unknown_theme_warnings(warnings_log) == [], _warnings(warnings_log)
+    assert _warnings(warnings_log) == []
+
+
+def _override_body() -> str:
+    """The built-in nautical, plus a top-level key that only the repo's copy has."""
+    builtin = config_mod._load_builtin_theme("nautical")
+    assert builtin is not None and MARKER not in builtin  # the built-in exists, unmarked
+    config_mod._theme_cache.clear()
+    return yaml.safe_dump({**builtin, "override_marker": MARKER})
+
+
+def test_repo_override_of_builtin_wins_from_other_cwd(tmp_path, monkeypatch, warnings_log):
+    body = _override_body()
+    repo, cfg = _repo_elsewhere(tmp_path, monkeypatch, _multi("nautical"), "nautical", body)
+    config = KanbanConfig.load(cfg)
+    assert config.boards[0].preset == "nautical"
+    assert _warnings(warnings_log) == []
+    service = KanbanService(config, repo)
+    theme = service._load_board_theme(config.boards[0])
+    assert theme is not None
+    assert theme.get("override_marker") == MARKER, "service got the built-in, not the override"
