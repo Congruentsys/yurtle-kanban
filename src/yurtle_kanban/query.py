@@ -151,7 +151,11 @@ class UnifiedGraph:
             # `<>` in a block means this item, but the parser resolves it against the
             # process cwd (`file:///<cwd>/`), one node shared by every file: map it
             # to the item's own IRI (#404)
-            phantom = URIRef(Path.cwd().as_uri() + "/")
+            # recorded when the file was parsed; a graph built elsewhere falls back
+            # to the cwd now (#413)
+            phantom = URIRef(
+                getattr(item.graph, "yurtle_self_iri", None) or Path.cwd().as_uri() + "/"
+            )
             for s, p, o in item.graph:
                 s = item_uri if s == phantom else s
                 o = item_uri if o == phantom else o
