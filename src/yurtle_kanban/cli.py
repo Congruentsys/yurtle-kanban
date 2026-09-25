@@ -1439,6 +1439,17 @@ main.add_command(experiment)
 main.add_command(measure)
 
 
+def _cap_to_top(rows: list, top: int) -> list:
+    """The first `top` rows; when there were more (the caller asks for one extra),
+    say so on stderr, so a truncated `--json` is never silent (#397)."""
+    if len(rows) > top:
+        err_console.print(
+            f"[dim]showing the first {top} results; use --top for more[/dim]",
+            soft_wrap=True,
+        )
+    return rows[:top]
+
+
 @main.command()
 @click.argument("query_text", required=False)
 @click.option("--sparql", "sparql_query", help="Raw SPARQL SELECT query against the unified graph")
@@ -1483,7 +1494,7 @@ def query(
         except Exception as e:
             err_console.print(f"[red]SPARQL error:[/red] {safe(e)}", soft_wrap=True)
             sys.exit(1)
-        results = results[:top_k]  # --top applies to JSON too, like the table (#387)
+        results = _cap_to_top(results, top_k)  # JSON too, like the table (#387, #397)
 
         if as_json:
             click.echo(json.dumps(results, indent=2))
@@ -1506,7 +1517,7 @@ def query(
         # Pure semantic mode
         try:
             emb = EmbeddingIndex.from_service(service)
-            hits = emb.search(semantic_query, top_k=top_k)
+            hits = _cap_to_top(emb.search(semantic_query, top_k=top_k + 1), top_k)
         except ImportError as e:
             # missing, or installed but broken (#346, #358): one line, never wrapped,
             # on stderr so `--json` stdout stays empty (#371)
@@ -1574,7 +1585,7 @@ def query(
             out.print(f"  Semantic: \"{escape(str(parsed.semantic_query))}\"")
         out.print()
 
-    results = engine.query(query_text, top_k=top_k)
+    results = _cap_to_top(engine.query(query_text, top_k=top_k + 1), top_k)
     if enable_semantic and not engine.semantic_enabled:
         # the search extra is missing or broken: graph-only results, said once (after
         # the query, which may find it broken, #358), on stderr so

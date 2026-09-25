@@ -183,6 +183,10 @@ yurtle-kanban query "in progress items" --json
 yurtle-kanban query "all expeditions" --top 5
 ```
 
+Every mode, including `--json`, returns at most `--top` results (default 20). When more
+matched, a one-line note on stderr says so; stdout stays pure JSON. Raise `--top` to get
+them all.
+
 ## Architecture
 
 ```
