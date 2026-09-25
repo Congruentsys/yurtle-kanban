@@ -128,7 +128,26 @@ if args[:2] == ["auth", "status"]:
     record()
     sys.exit(0)
 
+def run_on_checks_hook():
+    """#186: STUB_GH_ON_CHECKS (a bash command) runs once, on the first `pr checks` call."""
+    hook = os.environ.get("STUB_GH_ON_CHECKS", "")
+    marker = log + ".on-checks-ran"
+    if hook and not os.path.exists(marker):
+        open(marker, "w").close()
+        subprocess.run(["bash", "-c", hook], check=True)
+
+
+def head_sha():
+    """The served headRefOid: STUB_GH_HEAD_FILE's content once it exists, else the env."""
+    path = os.environ.get("STUB_GH_HEAD_FILE", "")
+    if path and os.path.exists(path):
+        with open(path) as fh:
+            return fh.read().strip()
+    return os.environ.get("STUB_GH_HEAD_SHA", "")
+
+
 if len(args) >= 2 and args[0] == "pr" and args[1] == "checks":
+    run_on_checks_hook()
     rows = check_rows()
     watching = "--watch" in args
     record({"watch": watching})
@@ -156,7 +175,7 @@ if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
     emit({
         "number": int(os.environ.get("STUB_GH_PR", "0")),
         "headRefName": os.environ.get("STUB_GH_BRANCH", ""),
-        "headRefOid": os.environ.get("STUB_GH_HEAD_SHA", ""),
+        "headRefOid": head_sha(),
         "baseRefName": "main",
         "state": "OPEN",
         "isDraft": False,
@@ -165,7 +184,8 @@ if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
         "url": "https://example.invalid/pull/" + os.environ.get("STUB_GH_PR", "0"),
         "title": "stub PR",
         "comments": [
-            {"author": {"login": c.get("login", "reviewer")}, "authorAssociation": "MEMBER",
+            {"author": {"login": c.get("login", "reviewer")},
+             "authorAssociation": c.get("association", "MEMBER"),
              "body": c["body"], "createdAt": "2026-09-24T00:00:%02dZ" % i,
              "id": "IC_%d" % i, "includesEditsToPreviousComment": False,
              "isMinimized": False, "minimizedReason": "", "reactionGroups": [],
@@ -184,6 +204,7 @@ if args and args[0] == "api" and any("/comments" in a for a in args):
     record()
     emit([
         {"id": i, "body": c["body"], "user": {"login": c.get("login", "reviewer")},
+         "author_association": c.get("association", "MEMBER"),
          "created_at": "2026-09-24T00:00:%02dZ" % i,
          "html_url": "https://example.invalid/c/%d" % i}
         for i, c in enumerate(comments)
@@ -199,9 +220,12 @@ sys.exit(1)
 # --------------------------------------------------------------------------- git fixture
 
 
-def verdict(sha: str, word: str) -> dict[str, str]:
+def verdict(sha: str, word: str, association: str = "MEMBER") -> dict[str, str]:
     """A pairit review comment: `reviewed-at-sha: <sha>` then `verdict: <word>`."""
-    return {"body": f"reviewed-at-sha: {sha}\nverdict: {word}\n\nLooks {word}."}
+    return {
+        "body": f"reviewed-at-sha: {sha}\nverdict: {word}\n\nLooks {word}.",
+        "association": association,  # the commenter's authorAssociation (#186 round 2)
+    }
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -272,6 +296,7 @@ class Sandbox:
         *,
         head_sha: str | None = None,
         branch: str = BRANCH,
+        extra_env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run safe_merge.sh; `comments` defaults to an approve verdict at the head."""
         if comments is None:
@@ -291,6 +316,7 @@ class Sandbox:
             GIT_TERMINAL_PROMPT="0",
             GH_PROMPT_DISABLED="1",
         )
+        env.update(extra_env or {})
         for k in ("GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_REPO"):
             env.pop(k, None)
         return subprocess.run(

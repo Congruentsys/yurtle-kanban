@@ -222,3 +222,88 @@ class TestJqSkip:
         assert any(re.search(r"which\(\s*[\"']jq[\"']\s*\)", m) for m in marks), (
             "tests/test_pairit_safe_merge.py has no module-level skip when jq is missing"
         )
+
+
+# --------------------------------------------------------------------------- round 2 (PR #200)
+
+
+def _stage_late_commit(sb: Sandbox) -> str:
+    """Make a commit on the PR branch WITHOUT pushing it; the worktree goes back to the head."""
+    (sb.worktree / "late.txt").write_text("pushed while the checks were being read\n")
+    base._git(sb.worktree, "add", "-A")
+    base._git(sb.worktree, "commit", "-q", "-m", "late push")
+    new = base._git(sb.worktree, "rev-parse", "HEAD")
+    base._git(sb.worktree, "reset", "-q", "--hard", sb.head_sha)
+    return new
+
+
+@needs_tools
+class TestHeadReadBeforeChecks:
+    """Review of PR #200, blocking: the head must be read BEFORE the checks.
+
+    Here a commit lands on origin/<branch> while `gh pr checks` runs, and from then on
+    `gh pr view` serves the new sha, which even carries an approve. The checks that were
+    read belong to the OLD head, so nothing may merge at the new sha: pinning the merge
+    to the old sha, or refusing, are both fine.
+    """
+
+    def test_no_merge_at_a_head_that_landed_during_the_checks(self, tmp_path: Path) -> None:
+        sb = Sandbox(tmp_path, conflict=False)
+        old = sb.head_sha
+        new = _stage_late_commit(sb)
+        head_file = tmp_path / "served-head"
+        hook = (
+            f"git -C {sb.checkout} push -q origin {new}:refs/heads/{BRANCH}"
+            f" && echo {new} > {head_file}"
+        )
+        comments = [verdict(old, "approve"), verdict(new, "approve")]
+        r = sb.run(
+            GREEN,
+            comments,
+            extra_env={"STUB_GH_ON_CHECKS": hook, "STUB_GH_HEAD_FILE": str(head_file)},
+        )
+        assert head_file.exists(), f"the checks hook never ran: {sb.calls()}\n{_out(r)}"
+        for call in sb.merge_calls():
+            flat = " ".join(call["argv"])
+            assert new not in flat, f"merged at {new}, whose checks were never read: {flat}"
+            assert f"--match-head-commit {old}" in flat or f"--match-head-commit={old}" in flat, (
+                f"merge not pinned to the head whose checks were read ({old}): {flat}"
+            )
+
+
+@needs_tools
+class TestStaleTrackingRef:
+    """Review of PR #200: a branch deleted on origin must not resolve via a stale ref."""
+
+    def test_branch_gone_on_origin_but_tracking_ref_left_refuses(self, tmp_path: Path) -> None:
+        sb = Sandbox(tmp_path, conflict=False)
+        base._git(sb.origin, "update-ref", "-d", f"refs/heads/{BRANCH}")
+        stale = base._git(sb.checkout, "rev-parse", "--verify", f"refs/remotes/origin/{BRANCH}")
+        assert stale == sb.head_sha, "setup: the stale tracking ref should still be there"
+        r = sb.run(GREEN, sb.approve())
+        out = _out(r)
+        assert r.returncode != 0, f"merged a branch origin no longer has:\n{out}"
+        assert not sb.merge_calls(), sb.calls()
+        assert f"origin/{BRANCH} not found" in out, out
+
+
+@needs_tools
+class TestVerdictAuthor:
+    """Review of PR #200: the repo is public, so a stranger's verdict counts for nothing."""
+
+    @pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR"])
+    def test_strangers_approve_alone_refuses(self, tmp_path: Path, association: str) -> None:
+        sb = Sandbox(tmp_path, conflict=False)
+        r = sb.run(GREEN, [verdict(sb.head_sha, "approve", association)])
+        _refused_for_no_approve(sb, r)
+
+    @pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR"])
+    def test_strangers_approve_cannot_override_members_changes(
+        self, tmp_path: Path, association: str
+    ) -> None:
+        sb = Sandbox(tmp_path, conflict=False)
+        comments = [
+            verdict(sb.head_sha, "changes"),
+            verdict(sb.head_sha, "approve", association),
+        ]
+        _refused_for_no_approve(sb, sb.run(GREEN, comments))
