@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemType
@@ -26,8 +27,12 @@ NON_STRING_IDS = ["int", "float", "bool", "list"]
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True, check=True
+    )
     (tmp_path / ".kanban").mkdir()
     exp = tmp_path / "kanban-work" / "expeditions"
     exp.mkdir(parents=True)
@@ -45,7 +50,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 def _snapshot(root: Path) -> dict[Path, str]:
-    return {p: p.read_text() for p in root.rglob("*.md") if ".git" not in p.parts}
+    return {p: p.read_text() for p in paths_outside_git(root, ".md")}
 
 
 def _server(root: Path):

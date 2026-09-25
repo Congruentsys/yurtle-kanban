@@ -2,7 +2,6 @@
 
 import json
 import re
-import tempfile
 import time
 from pathlib import Path
 
@@ -10,6 +9,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemStatus, WorkItemType
@@ -679,7 +679,6 @@ class TestWorkItemGraph:
 
     def test_graph_includes_fenced_blocks(self, temp_repo, nautical_config):
         """WorkItem.graph should include triples from fenced turtle blocks."""
-        from rdflib import Namespace
 
         svc = KanbanService(nautical_config, temp_repo)
         item = svc.create_item(WorkItemType.EXPEDITION, "Graph Blocks")
@@ -1105,7 +1104,7 @@ class TestBuildExpectedGraph:
 
     def test_idea_graph(self, hdd_repo, hdd_svc_config):
         """Idea frontmatter produces idea:Idea type + rdfs:label triples."""
-        from rdflib import RDF, RDFS, Literal
+        from rdflib import RDFS
         svc = KanbanService(hdd_svc_config, hdd_repo)
         fm = {"id": "IDEA-R-001", "title": "Test Idea", "type": "idea"}
         g = svc._build_expected_graph("idea", fm)
@@ -1117,7 +1116,13 @@ class TestBuildExpectedGraph:
     def test_hypothesis_with_paper(self, hdd_repo, hdd_svc_config):
         """Hypothesis with paper field produces hyp:paper triple."""
         svc = KanbanService(hdd_svc_config, hdd_repo)
-        fm = {"id": "H130.1", "title": "Test Hyp", "type": "hypothesis", "paper": "Paper130", "target": ">=85%"}
+        fm = {
+            "id": "H130.1",
+            "title": "Test Hyp",
+            "type": "hypothesis",
+            "paper": "Paper130",
+            "target": ">=85%",
+        }
         g = svc._build_expected_graph("hypothesis", fm)
         # type + label + paper + target = 4 triples
         assert len(g) == 4
@@ -1156,9 +1161,14 @@ class TestBuildExpectedGraph:
 
     def test_measure_graph(self, hdd_repo, hdd_svc_config):
         """Measure with unit and category produces measure triples."""
-        from rdflib import Literal
         svc = KanbanService(hdd_svc_config, hdd_repo)
-        fm = {"id": "M-007", "title": "Accuracy", "type": "measure", "unit": "percent", "category": "accuracy"}
+        fm = {
+            "id": "M-007",
+            "title": "Accuracy",
+            "type": "measure",
+            "unit": "percent",
+            "category": "accuracy",
+        }
         g = svc._build_expected_graph("measure", fm)
         # type + label + unit + category = 4 triples
         assert len(g) == 4
@@ -1168,7 +1178,12 @@ class TestBuildExpectedGraph:
     def test_hypothesis_with_literature(self, hdd_repo, hdd_svc_config):
         """Hypothesis with literature field produces hyp:informedBy triples."""
         svc = KanbanService(hdd_svc_config, hdd_repo)
-        fm = {"id": "H50.1", "title": "Lit Hyp", "type": "hypothesis", "literature": ["LIT-001", "LIT-002"]}
+        fm = {
+            "id": "H50.1",
+            "title": "Lit Hyp",
+            "type": "hypothesis",
+            "literature": ["LIT-001", "LIT-002"],
+        }
         g = svc._build_expected_graph("hypothesis", fm)
         # type + label + 2 informedBy = 4 triples
         assert len(g) == 4
@@ -3806,7 +3821,7 @@ class TestAllFrontmatterValuesRoundTrip:
 
 
 def _item_md_files(root: Path) -> set[Path]:
-    return {p for p in root.rglob("*.md") if ".git" not in p.parts}
+    return set(paths_outside_git(root, ".md"))
 
 
 def _git_log(root: Path) -> str:

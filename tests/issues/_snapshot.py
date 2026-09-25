@@ -1,6 +1,6 @@
 """Tree snapshots that never walk into `.git` (#259).
 
-`Path.rglob("*")` descends into `.git/objects` before any filter runs, and git may
+`Path.rglob(...)` descends into `.git/objects` before any filter runs, and git may
 repack or remove object directories concurrently, so the walk can raise
 FileNotFoundError mid-way. Pruning `.git` from the walk itself avoids that.
 """
@@ -8,16 +8,30 @@ FileNotFoundError mid-way. Pruning `.git` from the walk itself avoids that.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
+
+
+def _raise(err: OSError) -> None:
+    # os.walk skips a directory it cannot scan unless told otherwise; a snapshot that
+    # silently omits a subtree would hide changes, so every non-.git scan error raises.
+    raise err
+
+
+def paths_outside_git(root: Path, suffix: str = "") -> Iterator[Path]:
+    """Every path under `root` (files and dirs) whose name ends with `suffix`, outside
+    any `.git` directory: `root.rglob(f"*{suffix}")` minus `.git`, without entering it."""
+    for dirpath, dirs, names in os.walk(root, onerror=_raise):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for name in dirs + names:
+            if name != ".git" and name.endswith(suffix):
+                yield Path(dirpath) / name
 
 
 def files_outside_git(repo: Path) -> dict[str, bytes]:
     """Every file under `repo` outside any `.git` directory, with its bytes."""
-    files: dict[str, bytes] = {}
-    for dirpath, dirs, names in os.walk(repo):
-        dirs[:] = [d for d in dirs if d != ".git"]
-        for name in names:
-            p = Path(dirpath) / name
-            if name != ".git" and p.is_file():
-                files[str(p.relative_to(repo))] = p.read_bytes()
-    return files
+    return {
+        str(p.relative_to(repo)): p.read_bytes()
+        for p in paths_outside_git(repo)
+        if p.is_file()
+    }

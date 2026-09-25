@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemStatus
@@ -17,8 +18,13 @@ from yurtle_kanban.service import KanbanService
 def temp_repo(tmp_path):
     """Create a minimal git repo with kanban config and items at various priorities."""
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=tmp_path, capture_output=True, check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True, check=True
+    )
 
     (tmp_path / ".kanban").mkdir()
     (tmp_path / "kanban-work" / "expeditions").mkdir(parents=True)
@@ -147,7 +153,7 @@ class TestPriorityFilterCLI:
 
 
 def _md_files(root: Path) -> set[Path]:
-    return {p for p in root.rglob("*.md") if ".git" not in p.parts}
+    return set(paths_outside_git(root, ".md"))
 
 
 def _new_item_files(root: Path, before: set[Path]) -> list[Path]:
