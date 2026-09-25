@@ -437,7 +437,7 @@ def _render_dev_blockers(blockers: list[dict]) -> None:
         console.print(
             f"  {i}. [bold]{escape(str(b['expedition_id']))}[/bold] — {escape(str(b['title']))}"
         )
-        console.print(f"     Status: {escape(str(b['status']))}  "
+        console.print(f"     Status: {safe(b['status'])}  "
             f"Assignee: {safe(b['assignee'] or 'unassigned')}")
         console.print(
             f"     [{impact_color}]Unblocks {b['impact']} experiment(s):[/{impact_color}] "
@@ -523,7 +523,7 @@ def _render_critical_path(
                     run_info += f", last: {exp['last_outcome']}"
                 elif exp.get("last_run_status"):
                     run_info += f", last: {exp['last_run_status']}"
-                console.print(f"    Runs: {escape(run_info)}")
+                console.print(f"    Runs: {safe(run_info)}")
 
             # Impact
             if exp.get("downstream_impact", 0) > 2:
@@ -1126,7 +1126,7 @@ def experiment_run(
     )
 
     console.print(f"[green]Created run for {escape(expr_id)}[/green]")
-    console.print(f"  Path: {escape(str(run_path))}")
+    console.print(f"  Path: {safe(run_path)}")
 
     if push:
         import subprocess
