@@ -33,6 +33,7 @@ import ast
 import importlib
 import io
 import logging
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -340,6 +341,7 @@ def _raise_syntax_error() -> None:
 
 @pytest.mark.parametrize("on_logger", [MCP_TRACEBACK], indirect=True)
 class TestExceptionExtras:
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="add_note is 3.11+")
     def test_note_escaped(self, on_logger: tuple[logging.Logger, io.StringIO]) -> None:
         logger, stream = on_logger
         try:
