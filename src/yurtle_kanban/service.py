@@ -366,8 +366,9 @@ class KanbanService:
         # every path handed to `git add` (#198); `.absolute()` keeps symlinks as given
         self.repo_root = Path(repo_root).absolute()
         if getattr(config, "repo_root", None) is None:
-            # a config built directly (not by KanbanConfig.load) resolves themes in
-            # this service's repo, not the cwd; a loaded one keeps its own (#287, #300)
+            # a config with no repo_root (built directly, or from load for a missing
+            # file) resolves themes in this service's repo, not the cwd; one loaded from
+            # a file keeps its own (#287, #300, #341)
             config.repo_root = self.repo_root
         self._items: dict[str, WorkItem] = {}
         # Files that look like items (start with `---`) but don't parse, with a
