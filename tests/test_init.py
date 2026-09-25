@@ -926,12 +926,12 @@ class TestInitExplicitPathScaffolding:
         items = {
             f.parent
             for f in glob_outside_git(tmp_path, "*-001-probe.md")
-            if rel(f).split("/")[0] not in (".git", ".claude", ".kanban")
+            if rel(f).split("/")[0] not in (".claude", ".kanban")
         }
         templates = {
             f.parent
             for f in glob_outside_git(tmp_path, "_TEMPLATE.md")
-            if rel(f).split("/")[0] not in (".git", ".claude", ".kanban")
+            if rel(f).split("/")[0] not in (".claude", ".kanban")
         }
         assert len(items) == len(type_ids), sorted(rel(p) for p in items)
         stray_items = sorted(rel(p) for p in items - templates)

@@ -2,17 +2,24 @@
 
 On Python 3.11 `Path.rglob(pattern)` scans every directory, `.git/objects` included,
 before matching, so it races with git repacking objects just like the #259 snapshots.
-`glob_outside_git` is the drop-in replacement: same Paths, same order, `.git` pruned.
+`glob_outside_git` is the drop-in replacement: same Paths (same order on 3.11), `.git`
+pruned. rglob's order and its use of `os.scandir` vary across CPython versions (3.12
+walks differently; 3.10 binds scandir at import), so order and the rglob-trips-the-fake
+control are asserted only on 3.11; the set, no-duplicates and pruning checks run everywhere.
 """
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 
 from tests.issues._snapshot import glob_outside_git
+
+PY311 = sys.version_info[:2] == (3, 11)
+only_311 = pytest.mark.skipif(not PY311, reason="rglob order/scandir use is 3.11-specific")
 
 PATTERNS = ["*.md", "FEAT-*.md", "FEAT-001*", "*", "_TEMPLATE.md", "*probe*", "nomatch-*"]
 
@@ -47,6 +54,14 @@ def _rglob_minus_git(root: Path, pattern: str) -> list[Path]:
     return [p for p in root.rglob(pattern) if ".git" not in p.relative_to(root).parts]
 
 
+def _assert_same_as_rglob(got: list[Path], expected: list[Path]) -> None:
+    """Same Paths as rglob-minus-.git on every version, no duplicates; same order on 3.11."""
+    assert len(got) == len(set(got)), got
+    assert sorted(got) == sorted(expected)
+    if PY311:
+        assert got == expected
+
+
 def _deny_git_scans(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Make os.scandir raise (as a mid-walk repack would) for any path inside `.git`."""
     real = os.scandir
@@ -63,9 +78,10 @@ def _deny_git_scans(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.mark.parametrize("pattern", PATTERNS)
-def test_same_paths_and_order_as_rglob_minus_git(tmp_path: Path, pattern: str) -> None:
+def test_same_paths_as_rglob_minus_git(tmp_path: Path, pattern: str) -> None:
+    """Same Paths as rglob minus .git; same order on 3.11."""
     root = _tree(tmp_path)
-    assert list(glob_outside_git(root, pattern)) == _rglob_minus_git(root, pattern)
+    _assert_same_as_rglob(list(glob_outside_git(root, pattern)), _rglob_minus_git(root, pattern))
 
 
 def test_non_vacuity_rglob_does_see_git(tmp_path: Path) -> None:
@@ -90,13 +106,15 @@ def test_never_enters_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, patte
     root = _tree(tmp_path)
     expected = _rglob_minus_git(root, pattern)
     scanned = _deny_git_scans(monkeypatch)
-    assert list(glob_outside_git(root, pattern)) == expected
+    _assert_same_as_rglob(list(glob_outside_git(root, pattern)), expected)
     assert scanned, "non-vacuity: the fake scandir was used"
     assert not [s for s in scanned if ".git" in Path(s).parts], scanned
 
 
+@only_311
 def test_rglob_itself_trips_the_fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Control: the fake would catch an unpruned walk."""
+    """Control: the fake would catch an unpruned walk. 3.11 only: 3.10 binds scandir at
+    import and 3.12 walks without it, so the patch never reaches their rglob."""
     root = _tree(tmp_path)
     _deny_git_scans(monkeypatch)
     with pytest.raises(FileNotFoundError, match="mid-walk"):
