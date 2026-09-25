@@ -122,7 +122,7 @@ def get_service() -> KanbanService:
         try:
             config = KanbanConfig.load(config_path)
         except ValueError as e:  # a config value of the wrong kind (#220)
-            console.print(f"[red]Invalid {escape(str(config_path))}: {safe(e)}[/red]")
+            console.print(f"[red]Invalid {safe(config_path)}: {safe(e)}[/red]")
             sys.exit(1)
     else:
         config = KanbanConfig()  # Use defaults
@@ -293,7 +293,7 @@ kanban:
     if not _within(board_root, git_root):
         # git commits nothing outside the repo; say so now, not at the first move (#174)
         console.print(
-            f"[yellow]Warning: {escape(str(board_root))} is outside this repository, so "
+            f"[yellow]Warning: {safe(board_root)} is outside this repository, so "
             "its items will not be git-tracked (no commits on create, move or comment)."
             "[/yellow]",
             soft_wrap=True,
@@ -413,7 +413,7 @@ def list_items(
         try:
             status_filter = WorkItemStatus.from_string(status)
         except ValueError:
-            console.print(f"[red]Unknown status: {escape(status)}[/red]")
+            console.print(f"[red]Unknown status: {safe(status)}[/red]")
             sys.exit(1)
 
     type_filter = None
@@ -421,7 +421,7 @@ def list_items(
         try:
             type_filter = WorkItemType.from_string(item_type)
         except ValueError:
-            console.print(f"[red]Unknown type: {escape(item_type)}[/red]")
+            console.print(f"[red]Unknown type: {safe(item_type)}[/red]")
             sys.exit(1)
 
     priority_filter = None
@@ -502,7 +502,7 @@ def create(
     try:
         work_type = WorkItemType.from_string(item_type)
     except ValueError:
-        console.print(f"[red]Unknown type: {escape(item_type)}[/red]")
+        console.print(f"[red]Unknown type: {safe(item_type)}[/red]")
         console.print(f"Valid types: {', '.join(t.value for t in WorkItemType)}")
         sys.exit(1)
 
@@ -549,7 +549,7 @@ def create(
                         "[/yellow]"
                     )
         else:
-            console.print(f"[red]Failed: {escape(str(result['message']))}[/red]")
+            console.print(f"[red]Failed: {safe(result['message'])}[/red]")
             sys.exit(1)
     else:
         item = service.create_item(
@@ -613,7 +613,7 @@ def move(
         if resolved:
             status = resolved
         else:
-            console.print(f"[red]Unknown status: {escape(new_status)}[/red]")
+            console.print(f"[red]Unknown status: {safe(new_status)}[/red]")
             valid = sorted({s.value for s in WorkItemStatus} | set(column_map.keys()))
             console.print(f"Valid statuses: {escape(', '.join(valid))}")
             sys.exit(1)
@@ -683,7 +683,7 @@ def show(item_id: str, as_json: bool):
                 # escape: a YAML error quotes the bad line, and `[...]` in it would
                 # otherwise be read as Rich markup (crash or swallowed text)
                 console.print(
-                    f"  found {escape(str(shown))}, but it doesn't parse: {escape(reason)}",
+                    f"  found {safe(shown)}, but it doesn't parse: {safe(reason)}",
                     soft_wrap=True,
                 )
         sys.exit(1)
@@ -827,7 +827,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     # Validate preset exists
     if not _load_builtin_theme(preset, repo_root):
         available = ["software", "nautical", "spec", "hdd"]
-        console.print(f"[red]Unknown preset: {escape(preset)}[/red]")
+        console.print(f"[red]Unknown preset: {safe(preset)}[/red]")
         console.print(f"[dim]Available presets: {', '.join(available)}[/dim]")
         sys.exit(1)
 
@@ -839,7 +839,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             try:
                 wip_limits[status] = int(limit)
             except ValueError:
-                console.print(f"[red]Invalid WIP limit: {escape(wip)}[/red]")
+                console.print(f"[red]Invalid WIP limit: {safe(wip)}[/red]")
                 sys.exit(1)
 
     # Upgrading to multi-board turns the single-board config into ONE board that
@@ -861,7 +861,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             # soft_wrap: never hard-wrap inside a path, or it can't be copied (#147)
             console.print(
                 "[red]Can't upgrade to multi-board: a board scans one path, and no "
-                f"single path covers these scan paths: {escape(', '.join(uncovered))}[/red]",
+                f"single path covers these scan paths: {safe(', '.join(uncovered))}[/red]",
                 soft_wrap=True,
             )
             console.print(
@@ -873,7 +873,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
 
     # Check if board already exists
     if config.is_multi_board and config.get_board(name):
-        console.print(f"[red]Board '{escape(name)}' already exists[/red]")
+        console.print(f"[red]Board '{safe(name)}' already exists[/red]")
         sys.exit(1)
 
     # Create the new board config
@@ -962,7 +962,7 @@ def roadmap(
             type_filter = WorkItemType.from_string(item_type)
             items = [i for i in items if i.item_type == type_filter]
         except ValueError:
-            console.print(f"[red]Unknown type: {escape(item_type)}[/red]")
+            console.print(f"[red]Unknown type: {safe(item_type)}[/red]")
             sys.exit(1)
 
     if as_json:
@@ -1065,7 +1065,7 @@ def history(
         try:
             cutoff = datetime.fromisoformat(since)
         except ValueError:
-            console.print(f"[red]Invalid date format: {escape(since)} (use YYYY-MM-DD)[/red]")
+            console.print(f"[red]Invalid date format: {safe(since)} (use YYYY-MM-DD)[/red]")
             sys.exit(1)
 
     if cutoff:
@@ -1153,7 +1153,7 @@ def metrics(item_id: str | None, as_json: bool):
         metrics_data = service.get_flow_metrics(item_id.upper())
 
         if "error" in metrics_data:
-            console.print(f"[yellow]{escape(str(metrics_data['error']))}[/yellow]")
+            console.print(f"[yellow]{safe(metrics_data['error'])}[/yellow]")
             console.print("[dim]Status history is recorded when items move between statuses.[/dim]")
             return
 
@@ -1256,7 +1256,7 @@ def export_cmd(fmt: str, output: str | None, min_id: int, board_name: str | None
     elif fmt == "research-index":
         content = export_research_index(board)
     else:
-        console.print(f"[red]Unknown format: {escape(fmt)}[/red]")
+        console.print(f"[red]Unknown format: {safe(fmt)}[/red]")
         sys.exit(1)
 
     if output:
@@ -1303,7 +1303,7 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             if not no_sync:
                 console.print("[dim]  (committed and pushed to remote)[/dim]")
         else:
-            console.print(f"[red]Failed to allocate ID: {escape(str(result['message']))}[/red]")
+            console.print(f"[red]Failed to allocate ID: {safe(result['message'])}[/red]")
             sys.exit(1)
 
 
@@ -1379,13 +1379,13 @@ def validate(fix: bool, as_json: bool):
 
     for issue in issues:
         if issue["type"] == "duplicate_id":
-            console.print(f"[red]DUPLICATE ID:[/red] {escape(issue['id'])}")
+            console.print(f"[red]DUPLICATE ID:[/red] {safe(issue['id'])}")
             console.print(f"  File 1: {escape(issue['file'])}")
             console.print(f"  File 2: {escape(issue['other_file'])}")
         elif issue["type"] == "filename_mismatch":
-            console.print(f"[yellow]FILENAME MISMATCH:[/yellow] {escape(issue['id'])}")
+            console.print(f"[yellow]FILENAME MISMATCH:[/yellow] {safe(issue['id'])}")
             console.print(f"  File: {escape(issue['file'])}")
-            console.print(f"  Expected prefix: {escape(issue['expected_prefix'])}")
+            console.print(f"  Expected prefix: {safe(issue['expected_prefix'])}")
 
         console.print()
 

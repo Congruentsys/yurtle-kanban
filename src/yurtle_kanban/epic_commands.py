@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from ._click import Group
+from ._click import Group, safe
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
 from .service import KanbanService
 from .template_engine import TemplateEngine
@@ -106,7 +106,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         service.scan()
     item = service._items.get(item_id)
     if item is None:
-        console.print(f"[yellow]Warning: Item {escape(item_id)} not found[/yellow]")
+        console.print(f"[yellow]Warning: Item {safe(item_id)} not found[/yellow]")
         return False
 
     # keep the item file's own line endings (#151)
@@ -117,11 +117,11 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     if not isinstance(fm, dict):
         reason = service._unparseable_reason(item.file_path, content)
         if reason is None:
-            console.print(f"[yellow]Warning: No frontmatter in {escape(item_id)}[/yellow]")
+            console.print(f"[yellow]Warning: No frontmatter in {safe(item_id)}[/yellow]")
         else:  # it's there but broken: say why, as the scan does (#139, #188)
             console.print(
-                f"[yellow]Warning: {escape(item_id)}'s frontmatter doesn't parse "
-                f"({escape(reason)}); not linked[/yellow]",
+                f"[yellow]Warning: {safe(item_id)}'s frontmatter doesn't parse "
+                f"({safe(reason)}); not linked[/yellow]",
                 soft_wrap=True,
             )
         return False
@@ -133,7 +133,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         # a mapping or a number isn't a list of IDs; writing it back as
         # `["{...}"]` would corrupt it (#188)
         console.print(
-            f"[yellow]Warning: {escape(item_id)}'s `related:` is a "
+            f"[yellow]Warning: {safe(item_id)}'s `related:` is a "
             f"{type(related).__name__}, not a list of IDs; not linked[/yellow]",
             soft_wrap=True,
         )

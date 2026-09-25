@@ -67,7 +67,7 @@ def _update_parent(
             console.print(f"  [dim]Updated {escape(str(parent_id))} with inverse reference[/dim]")
     except Exception as e:
         console.print(
-            f"  [yellow]Warning: could not update {escape(str(parent_id))}: "
+            f"  [yellow]Warning: could not update {safe(parent_id)}: "
             f"{safe(e)}[/yellow]"
         )
 
@@ -316,13 +316,13 @@ def hdd_validate(strict: bool, as_json: bool):
         console.print(f"  [yellow]!![/yellow] {s['hypotheses']} hypotheses")
         for w in hyp_warns:
             console.print(
-                f"    [yellow]Warning:[/yellow] {escape(str(w['id']))}: "
-                f"{escape(str(w['issue']))}"
+                f"    [yellow]Warning:[/yellow] {safe(w['id'])}: "
+                f"{safe(w['issue'])}"
             )
         for e in hyp_errs:
             console.print(
-                f"    [red]Error:[/red] {escape(str(e['id']))}: "
-                f"{escape(str(e['issue']))}"
+                f"    [red]Error:[/red] {safe(e['id'])}: "
+                f"{safe(e['issue'])}"
             )
 
     # Experiments
@@ -335,13 +335,13 @@ def hdd_validate(strict: bool, as_json: bool):
         console.print(f"  [yellow]!![/yellow] {s['experiments']} experiments")
         for w in exp_warns:
             console.print(
-                f"    [yellow]Warning:[/yellow] {escape(str(w['id']))}: "
-                f"{escape(str(w['issue']))}"
+                f"    [yellow]Warning:[/yellow] {safe(w['id'])}: "
+                f"{safe(w['issue'])}"
             )
         for e in exp_errs:
             console.print(
-                f"    [red]Error:[/red] {escape(str(e['id']))}: "
-                f"{escape(str(e['issue']))}"
+                f"    [red]Error:[/red] {safe(e['id'])}: "
+                f"{safe(e['issue'])}"
             )
 
     # Measures
@@ -357,8 +357,8 @@ def hdd_validate(strict: bool, as_json: bool):
         )
         for w in measure_warns:
             console.print(
-                f"    [yellow]Warning:[/yellow] {escape(str(w['id']))}: "
-                f"{escape(str(w['issue']))}"
+                f"    [yellow]Warning:[/yellow] {safe(w['id'])}: "
+                f"{safe(w['issue'])}"
             )
 
     console.print()
