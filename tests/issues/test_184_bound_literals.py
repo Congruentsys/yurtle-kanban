@@ -28,10 +28,16 @@ from yurtle_kanban.query import ParsedQuery, QueryEngine, UnifiedGraph
 
 _CHANGELOG = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
 
-# Literal backslash text (raw strings): NOT the characters they would encode.
-_BIG_U_QUOTE = r"\U00000022"  # 10 chars: backslash, U, 0000 0022
-_SMALL_U_A = r"A"  # 6 chars: backslash, u, 0041
-_A_SMALL_U_A_B = r"aAb"  # 8 chars
+# Literal backslash text, built by concatenation so no editor or writer can
+# decode the escape: these are NOT the characters they would encode.
+_BACKSLASH = "\\"
+_BIG_U_QUOTE = _BACKSLASH + "U00000022"  # 10 chars: backslash, U, 0000 0022
+_SMALL_U_A = _BACKSLASH + "u0041"  # 6 chars: backslash, u, 0041
+_A_SMALL_U_A_B = "a" + _SMALL_U_A + "b"  # 8 chars
+assert len(_BACKSLASH) == 1
+assert len(_BIG_U_QUOTE) == 10
+assert len(_SMALL_U_A) == 6
+assert len(_A_SMALL_U_A_B) == 8
 
 
 def _item(item_id: str, field: str, value: str | None) -> WorkItem:
