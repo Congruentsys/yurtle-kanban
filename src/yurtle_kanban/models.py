@@ -43,9 +43,13 @@ def check_encodable(field: str, value: object) -> None:
     Python's surrogateescape makes of undecodable argv bytes (#172). Checked before
     anything is written, so a bad value never leaves a 0-byte item file behind.
     Lists, tuples and dicts (keys and values) are checked all the way down (#239)."""
-    todo = [value]
+    todo, seen = [value], set()  # seen: YAML anchors can make a container hold itself
     while todo:
         item = todo.pop()
+        if isinstance(item, (list, tuple, dict)):
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
         if isinstance(item, str):
             try:
                 item.encode("utf-8")
