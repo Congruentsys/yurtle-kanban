@@ -1383,11 +1383,11 @@ def validate(fix: bool, as_json: bool):
     for issue in issues:
         if issue["type"] == "duplicate_id":
             console.print(f"[red]DUPLICATE ID:[/red] {safe(issue['id'])}")
-            console.print(f"  File 1: {escape(issue['file'])}")
-            console.print(f"  File 2: {escape(issue['other_file'])}")
+            console.print(f"  File 1: {safe(issue['file'])}")
+            console.print(f"  File 2: {safe(issue['other_file'])}")
         elif issue["type"] == "filename_mismatch":
             console.print(f"[yellow]FILENAME MISMATCH:[/yellow] {safe(issue['id'])}")
-            console.print(f"  File: {escape(issue['file'])}")
+            console.print(f"  File: {safe(issue['file'])}")
             console.print(f"  Expected prefix: {safe(issue['expected_prefix'])}")
 
         console.print()

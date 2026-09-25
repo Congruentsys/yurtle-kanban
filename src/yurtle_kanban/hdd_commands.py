@@ -64,7 +64,7 @@ def _update_parent(
             parent_id, child_type, child_id, push=push,
         )
         if updated:
-            console.print(f"  [dim]Updated {escape(str(parent_id))} with inverse reference[/dim]")
+            console.print(f"  [dim]Updated {safe(parent_id)} with inverse reference[/dim]")
     except Exception as e:
         console.print(
             f"  [yellow]Warning: could not update {safe(parent_id)}: "
@@ -438,7 +438,7 @@ def _render_dev_blockers(blockers: list[dict]) -> None:
             f"  {i}. [bold]{escape(str(b['expedition_id']))}[/bold] — {escape(str(b['title']))}"
         )
         console.print(f"     Status: {escape(str(b['status']))}  "
-            f"Assignee: {escape(str(b['assignee'] or 'unassigned'))}")
+            f"Assignee: {safe(b['assignee'] or 'unassigned')}")
         console.print(
             f"     [{impact_color}]Unblocks {b['impact']} experiment(s):[/{impact_color}] "
             + escape(", ".join(str(x) for x in b["unblocks_experiments"]))
@@ -505,7 +505,7 @@ def _render_critical_path(
             if exp.get("paper_id"):
                 chain_parts.append(exp["paper_id"])
             if chain_parts:
-                console.print(f"    Chain: {escape(' → '.join(str(c) for c in chain_parts))}")
+                console.print(f"    Chain: {safe(' → '.join(str(c) for c in chain_parts))}")
 
             # Implements (dev board links)
             if exp.get("implements"):
@@ -513,7 +513,7 @@ def _render_critical_path(
                 for eid in exp["implements"]:
                     status = exp["implements_status"].get(eid, "?")
                     mark = "[green]✓[/green]" if status == "done" else "[red]✗[/red]"
-                    impl_strs.append(f"{escape(str(eid))} {mark} ({escape(str(status))})")
+                    impl_strs.append(f"{safe(eid)} {mark} ({safe(status)})")
                 console.print(f"    Implements: {', '.join(impl_strs)}")
 
             # Runs info
@@ -534,7 +534,7 @@ def _render_critical_path(
 
             # Assignee
             if exp.get("assignee"):
-                console.print(f"    Assignee: {escape(str(exp['assignee']))}")
+                console.print(f"    Assignee: {safe(exp['assignee'])}")
 
             console.print()
 
@@ -602,7 +602,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
                 f"[green]Created{pushed} {escape(str(result['id']))}: "
                 f"{escape(title)}[/green]"
             )
-            console.print(f"  File: {escape(str(result['item'].file_path))}")
+            console.print(f"  File: {safe(result['item'].file_path)}")
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -614,7 +614,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
             item_id=item_id,
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
-        console.print(f"  File: {escape(str(item.file_path))}")
+        console.print(f"  File: {safe(item.file_path)}")
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +674,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
                 f"[green]Created{pushed} {escape(str(result['id']))}: "
                 f"{escape(title)}[/green]"
             )
-            console.print(f"  File: {escape(str(result['item'].file_path))}")
+            console.print(f"  File: {safe(result['item'].file_path)}")
             if source_idea:
                 _update_parent(service, source_idea, "literature", result["id"], push=True)
         else:
@@ -688,7 +688,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             item_id=item_id,
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
-        console.print(f"  File: {escape(str(item.file_path))}")
+        console.print(f"  File: {safe(item.file_path)}")
         if source_idea:
             _update_parent(service, source_idea, "literature", item.id, push=False)
 
@@ -760,7 +760,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
                 f"[green]Created{pushed} {escape(str(result['id']))}: "
                 f"{escape(title)}[/green]"
             )
-            console.print(f"  File: {escape(str(result['item'].file_path))}")
+            console.print(f"  File: {safe(result['item'].file_path)}")
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -772,7 +772,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
             item_id=item_id,
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
-        console.print(f"  File: {escape(str(item.file_path))}")
+        console.print(f"  File: {safe(item.file_path)}")
 
 
 # ---------------------------------------------------------------------------
@@ -927,7 +927,7 @@ def hypothesis_create(
                 f"[green]Created{pushed} {escape(str(result['id']))}: "
                 f"{escape(statement)}[/green]"
             )
-            console.print(f"  File: {escape(str(result['item'].file_path))}")
+            console.print(f"  File: {safe(result['item'].file_path)}")
             # No paper -> no parent to back-reference. Guarding here rather than
             # inside _update_parent keeps the 'PAPER-None' string from ever existing.
             if paper_num is not None:
@@ -943,7 +943,7 @@ def hypothesis_create(
             item_id=hyp_id,
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(statement)}[/green]")
-        console.print(f"  File: {escape(str(item.file_path))}")
+        console.print(f"  File: {safe(item.file_path)}")
         if paper_num is not None:
             _update_parent(service, f"PAPER-{paper_num}", "hypothesis", item.id, push=False)
 
@@ -1060,7 +1060,7 @@ def experiment_create(
                 f"[green]Created{pushed} {escape(str(result['id']))}: "
                 f"{escape(title)}[/green]"
             )
-            console.print(f"  File: {escape(str(result['item'].file_path))}")
+            console.print(f"  File: {safe(result['item'].file_path)}")
             # No hypothesis -> no parent to back-reference.
             if hyp_id:
                 _update_parent(service, hyp_id, "experiment", result["id"], push=True)
@@ -1075,7 +1075,7 @@ def experiment_create(
             item_id=expr_id,
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
-        console.print(f"  File: {escape(str(item.file_path))}")
+        console.print(f"  File: {safe(item.file_path)}")
         if hyp_id:
             _update_parent(service, hyp_id, "experiment", item.id, push=False)
 
@@ -1301,7 +1301,7 @@ def measure_create(
                 f"[green]Created{pushed} {escape(str(result['id']))}: "
                 f"{escape(title)}[/green]"
             )
-            console.print(f"  File: {escape(str(result['item'].file_path))}")
+            console.print(f"  File: {safe(result['item'].file_path)}")
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1313,4 +1313,4 @@ def measure_create(
             item_id=measure_id,
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
-        console.print(f"  File: {escape(str(item.file_path))}")
+        console.print(f"  File: {safe(item.file_path)}")
