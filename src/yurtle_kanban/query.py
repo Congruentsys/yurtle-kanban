@@ -631,7 +631,13 @@ class QueryEngine:
 
         results = self._ug.sparql(sparql_query, bindings)
         items = []
+        seen: set[str] = set()
         for row in results:
+            # DISTINCT still leaves one row per numericId when an item's block adds a
+            # second one: keep the first (highest) row per id (#373)
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
             item = self._ug.get_item(row["id"])
             if item:
                 items.append(item)
