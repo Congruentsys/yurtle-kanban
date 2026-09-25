@@ -16,19 +16,30 @@ Decided behaviour:
 4. Controls: DEBUG/INFO untouched; printable warnings unchanged; a printable
    traceback keeps its usual multi-line structure (only the exception MESSAGE's
    control characters are escaped, not the newlines between frames).
+
+Round 2 (review of PR #248):
+
+5. `importlib.reload(yurtle_kanban._logging)` must not make the record factory call
+   itself: afterwards a package record is still escaped and a foreign logger's record
+   passes through unchanged, with no RecursionError.
+6. Exception notes (`add_note`) and a SyntaxError's `msg` / source `text` are escaped
+   in the traceback too.
+7. A bad %-format with `exc_info` still gets an escaped `record.exc_text`.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
 import io
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 
 import yurtle_kanban
+import yurtle_kanban._logging
 import yurtle_kanban.gates
 import yurtle_kanban.hooks
 import yurtle_kanban.query
@@ -240,3 +251,132 @@ class TestControls:
         logger, stream = on_logger
         logger.warning("plain café warning %s", 42)
         assert _message(stream) == "plain café warning 42"
+
+
+# --- 5. reloading _logging (round 2) --------------------------------------------
+
+
+class _Records(logging.Handler):
+    """Stores records unformatted, so a test can inspect what the factory built."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture
+def records() -> Iterator[Callable[[str], _Records]]:
+    """`attach(name)` puts a storing handler on a logger; all undone afterwards."""
+    attached: list[tuple[logging.Logger, _Records, int, bool]] = []
+
+    def attach(name: str) -> _Records:
+        logger = logging.getLogger(name)
+        handler = _Records()
+        attached.append((logger, handler, logger.level, logger.propagate))
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        return handler
+
+    try:
+        yield attach
+    finally:
+        for logger, handler, level, propagate in attached:
+            logger.removeHandler(handler)
+            logger.setLevel(level)
+            logger.propagate = propagate
+
+
+@pytest.fixture
+def reloaded_logging() -> Iterator[None]:
+    """Reload `_logging`; restore the record factory AND the module's globals after.
+
+    Restoring the globals matters: a reload rebinds them in place, and the factory
+    still installed looks names up there, so without this a broken reload would
+    leak into every later test.
+    """
+    module = yurtle_kanban._logging
+    saved_factory = logging.getLogRecordFactory()
+    saved_globals = dict(vars(module))
+    try:
+        importlib.reload(module)
+        yield
+    finally:
+        logging.setLogRecordFactory(saved_factory)
+        vars(module).clear()
+        vars(module).update(saved_globals)
+
+
+@pytest.mark.usefixtures("reloaded_logging")
+class TestReload:
+    def test_package_record_still_escaped(self, records: Callable[[str], _Records]) -> None:
+        store = records("yurtle-kanban.zz_reload")
+        logging.getLogger("yurtle-kanban.zz_reload").warning(PAYLOAD)
+        [record] = store.records
+        assert record.getMessage() == "x\\x1b[2J\\nFORGED"
+
+    def test_foreign_record_passes_through(self, records: Callable[[str], _Records]) -> None:
+        store = records("zz_foreign")
+        logging.getLogger("zz_foreign").warning(PAYLOAD)
+        [record] = store.records
+        assert record.getMessage() == PAYLOAD
+
+
+# --- 6. exception notes and SyntaxError fields (round 2) ------------------------
+
+
+def _raise_with_note() -> None:
+    error = ValueError("plain")
+    error.add_note("bad\x1b[2J\nFORGED")
+    raise error
+
+
+def _raise_syntax_error() -> None:
+    raise SyntaxError("bad\x1b[2J\nFORGED", ("f.py", 1, 1, "src\x1b[2Jline\n"))
+
+
+@pytest.mark.parametrize("on_logger", [MCP_TRACEBACK], indirect=True)
+class TestExceptionExtras:
+    def test_note_escaped(self, on_logger: tuple[logging.Logger, io.StringIO]) -> None:
+        logger, stream = on_logger
+        try:
+            _raise_with_note()
+        except ValueError:
+            logger.exception("failed")
+        text = stream.getvalue()
+        assert "\x1b" not in text, repr(text)
+        assert not any(line.startswith("FORGED") for line in text.splitlines()), repr(text)
+        assert "ValueError: plain" in text
+
+    def test_syntax_error_fields_escaped(
+        self, on_logger: tuple[logging.Logger, io.StringIO]
+    ) -> None:
+        logger, stream = on_logger
+        try:
+            _raise_syntax_error()
+        except SyntaxError:
+            logger.exception("failed")
+        text = stream.getvalue()
+        assert "\x1b" not in text, repr(text)
+        assert not any(line.startswith("FORGED") for line in text.splitlines()), repr(text)
+        assert "SyntaxError: bad" in text
+
+
+# --- 7. bad %-format with exc_info (round 2) ------------------------------------
+
+
+class TestBadFormatWithExcInfo:
+    def test_exc_text_escaped(self, records: Callable[[str], _Records]) -> None:
+        store = records("yurtle-kanban.zz_badfmt")
+        logger = logging.getLogger("yurtle-kanban.zz_badfmt")
+        try:
+            _raise("bad\x1b[2J\nFORGED")
+        except ValueError:
+            logger.warning("%d", "notanint", exc_info=True)
+        [record] = store.records
+        assert isinstance(record.exc_text, str), record.exc_text
+        assert "\x1b" not in record.exc_text, repr(record.exc_text)
+        assert "ValueError: bad\\x1b[2J\\nFORGED" in record.exc_text
