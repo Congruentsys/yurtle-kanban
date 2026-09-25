@@ -1517,12 +1517,13 @@ def query(
         # Pure semantic mode
         try:
             emb = EmbeddingIndex.from_service(service)
-            hits = _cap_to_top(emb.search(semantic_query, top_k=top_k + 1), top_k)
+            hits = emb.search(semantic_query, top_k=top_k + 1)
         except ImportError as e:
             # missing, or installed but broken (#346, #358): one line, never wrapped,
             # on stderr so `--json` stdout stays empty (#371)
             err_console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
             sys.exit(1)
+        hits = _cap_to_top(hits, top_k)  # the --top note (#397), outside the try (#405)
         if as_json:
             click.echo(json.dumps(
                 [
