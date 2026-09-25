@@ -10,7 +10,7 @@ board's own ``BoardConfig.ignore`` (#124, #129, #153).
 from collections.abc import Iterator
 from pathlib import Path
 
-from rdflib import Graph, Namespace
+from rdflib import BNode, Graph, Namespace
 
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
@@ -67,11 +67,16 @@ class WorkItemIndexer:
             g = Graph()
             g.parse(file_path, format="yurtle")
 
+            def own(pattern: tuple) -> list:
+                # a blank node (e.g. a `kb:statusChange [ kb:status … ]` history
+                # entry) is never the item: it can't decide its type, id or status
+                return [t for t in g.triples(pattern) if not isinstance(t[0], BNode)]
+
             # Get type
             item_type = None
             for type_name in WorkItemType:
                 type_uri = KB[type_name.value.title()]
-                if (None, None, type_uri) in g:
+                if own((None, None, type_uri)):  # (#407)
                     item_type = type_name
                     break
 
@@ -80,7 +85,7 @@ class WorkItemIndexer:
 
             # Get ID
             item_id = None
-            for _, _, obj in g.triples((None, KB.id, None)):
+            for _, _, obj in own((None, KB.id, None)):
                 item_id = str(obj)
                 break
 
@@ -90,7 +95,7 @@ class WorkItemIndexer:
 
             # Get status
             status = WorkItemStatus.BACKLOG
-            for _, _, obj in g.triples((None, KB.status, None)):
+            for _, _, obj in own((None, KB.status, None)):
                 status_str = str(obj).split("/")[-1]
                 try:
                     status = WorkItemStatus(status_str)

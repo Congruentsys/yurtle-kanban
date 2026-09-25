@@ -1478,7 +1478,7 @@ def query(
     \b
     Examples:
       yurtle-kanban query "not-done expeditions above 700 that improve brain"
-      yurtle-kanban query --sparql "SELECT ?id WHERE { ?item kb:id ?id . }"
+      yurtle-kanban query --sparql "SELECT ?id WHERE { ?item kb:id ?id . FILTER(isIRI(?item)) }"
       yurtle-kanban query --semantic "knowledge graph reasoning"
       yurtle-kanban query "blocked items" --no-semantic
     """

@@ -246,7 +246,10 @@ for r in results:
 
 # Direct SPARQL
 ug = UnifiedGraph.from_service(service)
-rows = ug.sparql("PREFIX kb: <https://yurtle.dev/kanban/> SELECT ?id WHERE { ?item kb:id ?id . }")
+rows = ug.sparql(
+    "PREFIX kb: <https://yurtle.dev/kanban/> "
+    "SELECT ?id WHERE { ?item kb:id ?id . FILTER(isIRI(?item)) }"
+)
 
 # Pure semantic search
 emb = EmbeddingIndex.from_service(service)
