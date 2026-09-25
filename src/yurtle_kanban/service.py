@@ -872,6 +872,9 @@ class KanbanService:
             rdflib_logger.setLevel(logging.ERROR)
             try:
                 doc = yurtle_rdflib.parse_yurtle(content)
+                # the IRI `<>` got here (the parser resolves it against the cwd):
+                # kept with the graph so a later merge maps the right one (#404, #413)
+                doc.graph.yurtle_self_iri = Path.cwd().as_uri() + "/"
             finally:
                 rdflib_logger.setLevel(old_level)
             return doc.graph
