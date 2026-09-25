@@ -81,7 +81,9 @@ The brief tells the reviewer to:
 - check every caller of each changed function for regressions, and confirm the check is green;
 - post ONE PR comment (`gh pr comment <P> --body-file …`) whose first line is `reviewed-at-sha: <SHA>` and
   second line `verdict: approve|changes`, followed by findings with `file:line` and a failure scenario.
-  Non-blocking findings are marked `(follow-up)`.
+  Non-blocking findings are marked `(follow-up)`. The comment's first bytes must be
+  `reviewed-at-sha:`, with no leading whitespace or BOM: `safe_merge.sh` reads only that first line,
+  and a verdict it can't read counts as no verdict.
 
 **At most two rounds.** After a `changes` verdict, fix the findings as a new commit (step 2), push and review
 again. A second `changes` stops the item. Comment why on the issue, then park both the issue and the PR:
@@ -100,7 +102,8 @@ bash .claude/skills/pairit/safe_merge.sh <P>  # waits for CI; reads the PR head 
                                               # cleanly with origin/main, and the latest
                                               # verdict (from a member) is approve at that
                                               # head; removes the PR's worktree; merges with
-                                              # --match-head-commit <head>
+                                              # --match-head-commit <head>; refuses while
+                                              # the PR's worktree has uncommitted changes
 git checkout -q main && git pull -q
 gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
