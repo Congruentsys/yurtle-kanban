@@ -423,11 +423,7 @@ class KanbanMCPServer:
 
         columns = []
         for col in board.columns:
-            try:
-                status = WorkItemStatus.from_string(col.id)
-                items = board.get_items_by_status(status)
-            except ValueError:
-                items = []
+            items = board.get_column_items(col.id)  # as the counts see it (#87)
 
             columns.append(
                 {
