@@ -2877,26 +2877,35 @@ class KanbanService:
             out = eol.apply(text)
         path.write_bytes(out.encode("utf-8"))
 
-    @staticmethod
-    def _value_preserving(original: str, *layouts: str) -> str:
-        """The first layout whose YAML keeps every value `original` had. A blank
-        run before `---` belongs to a `|+`/`>+` last value (any key form, any
-        nesting), so the key must go after it there and before it elsewhere
-        (#188, #211, #232); parsing decides, not a guess at the syntax."""
+    # libyaml's loader when present: the layout check parses up to three times (#249)
+    _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    # a column-0 key whose value is a keep-chomping block scalar (`|+`, `>+`, `|2+`)
+    _KEEP_LAST = re.compile(r"^[^\s#-][^\n]*:[ \t]*[|>](?:\d?\+|\+\d)[ \t]*(?:#.*)?$")
+
+    @classmethod
+    def _value_preserving(cls, original: str, body: str, gap: str, line: str) -> str:
+        """Place `line` before the trailing blank run (#188) or after it, where a
+        `|+`/`>+` last value owns that run (#211): the first layout whose YAML keeps
+        every value `original` had wins (#232). Frontmatter that doesn't parse falls
+        back to looking at the last column-0 key (#249)."""
+        before, after = body + line + gap, body + gap + line
         try:
-            old = yaml.safe_load(original)
+            old = yaml.load(original, Loader=cls._YAML_LOADER)
         except yaml.YAMLError:
-            return layouts[0]
+            last = [ln for ln in body.splitlines() if ln[:1] not in ("", " ", "\t", "#", "-")]
+            return after if last and cls._KEEP_LAST.match(last[-1]) else before
         if not isinstance(old, dict):
-            return layouts[0]
-        for layout in layouts:
+            return before
+        for layout in (before, after):
             try:
-                new = yaml.safe_load(layout)
+                new = yaml.load(layout, Loader=cls._YAML_LOADER)
             except yaml.YAMLError:
                 continue
-            if isinstance(new, dict) and all(k in new and new[k] == v for k, v in old.items()):
+            # one dict comparison: equal objects compare by identity first, so a
+            # `.nan` (one shared object in PyYAML) doesn't make every layout fail
+            if isinstance(new, dict) and {k: new.get(k) for k in old} == old:
                 return layout
-        return layouts[0]
+        return before
 
     def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
         """Add or update a field in the frontmatter.
@@ -2937,8 +2946,9 @@ class KanbanService:
             if body and not body.endswith("\n"):
                 body += "\n"
             line = f"{field}: {value}\n"
-            frontmatter = self._value_preserving(
-                frontmatter, body + line + gap, body + gap + line
+            # no blank run: both layouts are the same text, nothing to parse (#249)
+            frontmatter = (
+                self._value_preserving(frontmatter, body, gap, line) if gap else body + line
             )
 
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
