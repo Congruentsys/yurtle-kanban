@@ -66,7 +66,9 @@ def _ignore_list(data: dict[str, Any]) -> list[str]:
     `ignore:` (YAML null) → none, not a crash in the scan (#194)."""
     if "ignore" not in data:
         return ["**/archive/**", "**/templates/**"]
-    return list(data["ignore"] or [])
+    value = data["ignore"]
+    # one pattern given as a string is that pattern, not its characters (#204)
+    return [value] if isinstance(value, str) else list(value or [])
 
 
 @dataclass
@@ -132,10 +134,11 @@ class BoardConfig:
             name=data.get("name", "default"),
             preset=data.get("preset", "software"),
             path=data.get("path", "work/"),
-            scan_paths=data.get("scan_paths", []),
+            # a bare key (YAML null) means empty, never None (#194, #204)
+            scan_paths=data.get("scan_paths") or [],
             wip_limits=wip_limits,
-            wip_exempt_types=data.get("wip_exempt_types", []),
-            gates=data.get("gates", {}),
+            wip_exempt_types=data.get("wip_exempt_types") or [],
+            gates=data.get("gates") or {},
             ignore=_ignore_list(data),
         )
 
@@ -242,7 +245,8 @@ class KanbanConfig:
 
         # Check for v2 multi-board config
         version = data.get("version", CONFIG_VERSION_SINGLE)
-        if version == CONFIG_VERSION_MULTI and "boards" in data:
+        # a bare `boards:` is the same as none: fall back to v1 (#204)
+        if version == CONFIG_VERSION_MULTI and data.get("boards") is not None:
             return cls._load_v2(data)
 
         # Fall back to v1 single-board config
@@ -251,12 +255,13 @@ class KanbanConfig:
     @classmethod
     def _load_v1(cls, data: dict[str, Any]) -> "KanbanConfig":
         """Load v1 single-board configuration."""
-        kanban_data = data.get("kanban", data)
+        # a bare key (YAML null) means empty, never None (#194, #204)
+        kanban_data = data.get("kanban", data) or {}
 
-        paths_data = kanban_data.get("paths", {})
+        paths_data = kanban_data.get("paths") or {}
         paths = PathConfig(
             root=paths_data.get("root", "work/"),
-            scan_paths=paths_data.get("scan_paths", []),
+            scan_paths=paths_data.get("scan_paths") or [],
             ignore=_ignore_list(paths_data),
             features=paths_data.get("features"),
             bugs=paths_data.get("bugs"),
@@ -268,8 +273,8 @@ class KanbanConfig:
             version=CONFIG_VERSION_SINGLE,
             theme=kanban_data.get("theme", "software"),
             paths=paths,
-            workflows=kanban_data.get("workflows", {}),
-            gates=kanban_data.get("gates", {}),
+            workflows=kanban_data.get("workflows") or {},
+            gates=kanban_data.get("gates") or {},
         )
 
     @classmethod
