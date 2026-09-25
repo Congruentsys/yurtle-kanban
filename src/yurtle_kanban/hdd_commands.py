@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import click
 from rich.console import Console
-from rich.markup import escape
 
 from ._click import Group, safe
 from .models import PRIORITIES, WorkItemType
@@ -113,7 +112,7 @@ def hdd_backfill(dry_run):
         for r in backfilled:
             action_text = "would add" if dry_run else "added"
             table.add_row(
-                escape(str(r["id"])), escape(str(r["type"])), str(r["triples_added"]), action_text
+                safe(str(r["id"])), safe(str(r["type"])), str(r["triples_added"]), action_text
             )
         console.print(table)
 
@@ -435,13 +434,13 @@ def _render_dev_blockers(blockers: list[dict]) -> None:
     for i, b in enumerate(blockers, 1):
         impact_color = "red" if b["impact"] >= 3 else "yellow" if b["impact"] >= 2 else "white"
         console.print(
-            f"  {i}. [bold]{escape(str(b['expedition_id']))}[/bold] — {escape(str(b['title']))}"
+            f"  {i}. [bold]{safe(str(b['expedition_id']))}[/bold] — {safe(str(b['title']))}"
         )
         console.print(f"     Status: {safe(b['status'])}  "
             f"Assignee: {safe(b['assignee'] or 'unassigned')}")
         console.print(
             f"     [{impact_color}]Unblocks {b['impact']} experiment(s):[/{impact_color}] "
-            + escape(", ".join(str(x) for x in b["unblocks_experiments"]))
+            + safe(", ".join(str(x) for x in b["unblocks_experiments"]))
         )
         console.print()
 
@@ -494,8 +493,8 @@ def _render_critical_path(
             # Experiment header
             eid = exp['experiment_id']
             console.print(
-                f"  [{color}]●[/{color}] [bold]{escape(str(eid))}[/bold]"
-                f" — {escape(str(exp['title']))}"
+                f"  [{color}]●[/{color}] [bold]{safe(str(eid))}[/bold]"
+                f" — {safe(str(exp['title']))}"
             )
 
             # Chain: hypothesis → paper
@@ -599,8 +598,8 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(
-                f"[green]Created{pushed} {escape(str(result['id']))}: "
-                f"{escape(title)}[/green]"
+                f"[green]Created{pushed} {safe(str(result['id']))}: "
+                f"{safe(title)}[/green]"
             )
             console.print(f"  File: {safe(result['item'].file_path)}")
         else:
@@ -613,7 +612,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
             content=content,
             item_id=item_id,
         )
-        console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
+        console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
 
 
@@ -671,8 +670,8 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(
-                f"[green]Created{pushed} {escape(str(result['id']))}: "
-                f"{escape(title)}[/green]"
+                f"[green]Created{pushed} {safe(str(result['id']))}: "
+                f"{safe(title)}[/green]"
             )
             console.print(f"  File: {safe(result['item'].file_path)}")
             if source_idea:
@@ -687,7 +686,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             content=content,
             item_id=item_id,
         )
-        console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
+        console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
         if source_idea:
             _update_parent(service, source_idea, "literature", item.id, push=False)
@@ -757,8 +756,8 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(
-                f"[green]Created{pushed} {escape(str(result['id']))}: "
-                f"{escape(title)}[/green]"
+                f"[green]Created{pushed} {safe(str(result['id']))}: "
+                f"{safe(title)}[/green]"
             )
             console.print(f"  File: {safe(result['item'].file_path)}")
         else:
@@ -771,7 +770,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
             content=content,
             item_id=item_id,
         )
-        console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
+        console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
 
 
@@ -924,8 +923,8 @@ def hypothesis_create(
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(
-                f"[green]Created{pushed} {escape(str(result['id']))}: "
-                f"{escape(statement)}[/green]"
+                f"[green]Created{pushed} {safe(str(result['id']))}: "
+                f"{safe(statement)}[/green]"
             )
             console.print(f"  File: {safe(result['item'].file_path)}")
             # No paper -> no parent to back-reference. Guarding here rather than
@@ -942,7 +941,7 @@ def hypothesis_create(
             content=content,
             item_id=hyp_id,
         )
-        console.print(f"[green]Created {escape(item.id)}: {escape(statement)}[/green]")
+        console.print(f"[green]Created {safe(item.id)}: {safe(statement)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
         if paper_num is not None:
             _update_parent(service, f"PAPER-{paper_num}", "hypothesis", item.id, push=False)
@@ -1057,8 +1056,8 @@ def experiment_create(
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(
-                f"[green]Created{pushed} {escape(str(result['id']))}: "
-                f"{escape(title)}[/green]"
+                f"[green]Created{pushed} {safe(str(result['id']))}: "
+                f"{safe(title)}[/green]"
             )
             console.print(f"  File: {safe(result['item'].file_path)}")
             # No hypothesis -> no parent to back-reference.
@@ -1074,7 +1073,7 @@ def experiment_create(
             content=content,
             item_id=expr_id,
         )
-        console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
+        console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
         if hyp_id:
             _update_parent(service, hyp_id, "experiment", item.id, push=False)
@@ -1210,10 +1209,10 @@ def experiment_status(expr_id: str, as_json: bool):
             "failed": "red",
         }.get(run["status"], "dim")
         table.add_row(
-            escape(str(run["timestamp"])[:19]),
-            escape(str(run["being"])),
-            f"[{status_style}]{escape(str(run['status']))}[/{status_style}]",
-            escape(str(outcome or "")),
+            safe(str(run["timestamp"])[:19]),
+            safe(str(run["being"])),
+            f"[{status_style}]{safe(str(run['status']))}[/{status_style}]",
+            safe(str(outcome or "")),
         )
 
     console.print(table)
@@ -1298,8 +1297,8 @@ def measure_create(
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
             console.print(
-                f"[green]Created{pushed} {escape(str(result['id']))}: "
-                f"{escape(title)}[/green]"
+                f"[green]Created{pushed} {safe(str(result['id']))}: "
+                f"{safe(title)}[/green]"
             )
             console.print(f"  File: {safe(result['item'].file_path)}")
         else:
@@ -1312,5 +1311,5 @@ def measure_create(
             content=content,
             item_id=measure_id,
         )
-        console.print(f"[green]Created {escape(item.id)}: {escape(title)}[/green]")
+        console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
