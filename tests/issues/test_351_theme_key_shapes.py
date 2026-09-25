@@ -376,13 +376,33 @@ class TestStatusMappings:
     def test_board_with_bad_status_mappings(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, shape: str
     ) -> None:
-        text, _ = _bad_theme("status_mappings", shape)
+        text, without = _bad_theme("status_mappings", shape)
         repo = _repo(tmp_path / "repo", MULTI_CFG, text)
         _item(repo, "TASK-001", "task", "active")  # non-canonical status
         result = _invoke(repo, monkeypatch, ["board"])
         _no_crash(result)
         assert result.exit_code == 0, result.output
-        assert "TASK-001" in result.output, result.output
+        # the same repo whose theme simply lacks `status_mappings`
+        expected = self._board_without_status_mappings(tmp_path, monkeypatch, without)
+        assert result.output == expected, (result.output, expected)
+
+    @staticmethod
+    def _board_without_status_mappings(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, theme: dict[str, Any]
+    ) -> str:
+        repo = _repo(tmp_path / "absent", MULTI_CFG, yaml.safe_dump(theme, sort_keys=False))
+        _item(repo, "TASK-001", "task", "active")
+        result = _invoke(repo, monkeypatch, ["board"])
+        _no_crash(result)
+        assert result.exit_code == 0, result.output
+        return result.output
+
+    def test_control_board_theme_without_status_mappings(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        theme = {k: v for k, v in GOOD_THEME.items() if k != "status_mappings"}
+        out = self._board_without_status_mappings(tmp_path, monkeypatch, theme)
+        assert "Devboard Board" in out, out
 
     @pytest.mark.parametrize("shape", list(BAD_SHAPES))
     def test_move_with_bad_status_mappings(
