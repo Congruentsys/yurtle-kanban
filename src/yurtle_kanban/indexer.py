@@ -10,7 +10,7 @@ board's own ``BoardConfig.ignore`` (#124, #129, #153).
 from collections.abc import Iterator
 from pathlib import Path
 
-from rdflib import BNode, Graph, Namespace
+from rdflib import RDF, BNode, Graph, Namespace, URIRef
 
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
@@ -67,41 +67,38 @@ class WorkItemIndexer:
             g = Graph()
             g.parse(file_path, format="yurtle")
 
-            def own(pattern: tuple) -> list:
-                # a blank node (e.g. a `kb:statusChange [ kb:status … ]` history
-                # entry) is never the item: it can't decide its type, id or status
-                return [t for t in g.triples(pattern) if not isinstance(t[0], BNode)]
-
-            # Get type
+            # The item is the (non-blank) subject typed `a kb:<Type>`: only rdf:type
+            # decides the type, never `kb:related kb:Feature` (#416), and a blank node
+            # (e.g. a `kb:statusChange [ … ]` history entry) is never the item (#407).
+            # Its id and status come from that subject alone, not from another one in
+            # the file (#416). Type order follows WorkItemType; ties pick the
+            # smallest subject IRI, so the choice is stable.
             item_type = None
+            subject = None
             for type_name in WorkItemType:
-                type_uri = KB[type_name.value.title()]
-                if own((None, None, type_uri)):  # (#407)
-                    item_type = type_name
+                typed = sorted(
+                    str(s) for s in g.subjects(RDF.type, KB[type_name.value.title()])
+                    if not isinstance(s, BNode)
+                )
+                if typed:
+                    item_type, subject = type_name, URIRef(typed[0])
                     break
 
             if not item_type:
                 return None
 
-            # Get ID
-            item_id = None
-            for _, _, obj in own((None, KB.id, None)):
-                item_id = str(obj)
-                break
-
-            if not item_id:
-                # Generate ID from filename
-                item_id = file_path.stem.upper()
+            # Get ID (from the filename when the item has none)
+            own_id = g.value(subject, KB.id)
+            item_id = str(own_id) if own_id is not None else file_path.stem.upper()
 
             # Get status
             status = WorkItemStatus.BACKLOG
-            for _, _, obj in own((None, KB.status, None)):
-                status_str = str(obj).split("/")[-1]
+            own_status = g.value(subject, KB.status)
+            if own_status is not None:
                 try:
-                    status = WorkItemStatus(status_str)
+                    status = WorkItemStatus(str(own_status).split("/")[-1])
                 except ValueError:
                     pass
-                break
 
             # Get title from frontmatter or first heading
             title = file_path.stem.replace("-", " ").replace("_", " ").title()
