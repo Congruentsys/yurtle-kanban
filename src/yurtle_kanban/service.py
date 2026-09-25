@@ -373,10 +373,10 @@ class KanbanService:
         self.parse_warnings: list[tuple[Path, str]] = []
         self._git_top: Path | None = None  # `git rev-parse --show-toplevel`, cached
         self._board: Board | None = None
-        self._workflow_parser = WorkflowParser(repo_root / ".kanban")
+        self._workflow_parser = WorkflowParser(self.repo_root / ".kanban")
         self._workflows: dict[str, WorkflowConfig] = {}
         self._hook_engine = HookEngine(
-            hooks_config or (repo_root / ".kanban" / "hooks" / "kanban-hooks.yurtle.md")
+            hooks_config or (self.repo_root / ".kanban" / "hooks" / "kanban-hooks.yurtle.md")
         )
         self._hook_engine.set_callback("create_item", self._hook_create_item)
 
