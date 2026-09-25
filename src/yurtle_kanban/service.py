@@ -167,8 +167,9 @@ class LineEndings:
         return "".join(line + end for line, end in zip(new_lines, new_endings))
 
     # Past this many line pairs, a segment is split on lines unique to both sides
-    # (patience diff) instead of going to difflib, which is quadratic (#202)
-    _DIFFLIB_MAX_PAIRS = 250_000
+    # (patience diff) instead of going to difflib, which is quadratic (#202); kept
+    # small so many mid-sized segments stay cheap too (#213)
+    _DIFFLIB_MAX_PAIRS = 50_000
 
     def _match(
         self,
@@ -178,49 +179,57 @@ class LineEndings:
         b_lo: int,
         b_hi: int,
         keep: Any,
-        split: bool = True,
     ) -> None:
         """Call keep(i, j) for each old line i matched to new line j; the pairs
         increase in both i and j.
 
         An edit touches a few lines: the unchanged prefix and suffix map line for
-        line and only the changed middle is diffed (#181). A large middle is split
-        ONCE on anchors (lines that occur once on each side, longest increasing
-        run); a gap still too large for difflib, or a large middle with no anchors
-        (e.g. all identical lines), maps position for position. Recursion is at
-        most one level deep and the time linear beyond difflib's bound (#202).
+        line and only the changed middle is diffed (#181). A segment too large for
+        difflib is split on anchors (lines that occur once on each side, longest
+        increasing run), and so are the gaps between them, from a work stack, while
+        a budget of anchor scanning linear in the input lasts (#213). Past that, or
+        with no anchors (e.g. all identical lines), a segment maps position for
+        position. No recursion, and the time stays linear (#202).
         """
         old = self.lines
-        while a_lo < a_hi and b_lo < b_hi and old[a_lo] == new[b_lo]:
-            keep(a_lo, b_lo)
-            a_lo, b_lo = a_lo + 1, b_lo + 1
-        while a_lo < a_hi and b_lo < b_hi and old[a_hi - 1] == new[b_hi - 1]:
-            a_hi, b_hi = a_hi - 1, b_hi - 1
-            keep(a_hi, b_hi)
-        if a_lo == a_hi or b_lo == b_hi:
-            return
-        if (a_hi - a_lo) * (b_hi - b_lo) <= self._DIFFLIB_MAX_PAIRS:
-            import difflib
+        budget = 4 * ((a_hi - a_lo) + (b_hi - b_lo)) + 1000  # lines of anchor scanning
+        work = [(a_lo, a_hi, b_lo, b_hi)]
+        while work:
+            a_lo, a_hi, b_lo, b_hi = work.pop()
+            while a_lo < a_hi and b_lo < b_hi and old[a_lo] == new[b_lo]:
+                keep(a_lo, b_lo)
+                a_lo, b_lo = a_lo + 1, b_lo + 1
+            while a_lo < a_hi and b_lo < b_hi and old[a_hi - 1] == new[b_hi - 1]:
+                a_hi, b_hi = a_hi - 1, b_hi - 1
+                keep(a_hi, b_hi)
+            if a_lo == a_hi or b_lo == b_hi:
+                continue
+            if (a_hi - a_lo) * (b_hi - b_lo) <= self._DIFFLIB_MAX_PAIRS:
+                import difflib
 
-            matcher = difflib.SequenceMatcher(
-                a=old[a_lo:a_hi], b=new[b_lo:b_hi], autojunk=False
-            )
-            for tag, i1, i2, j1, _ in matcher.get_opcodes():
-                if tag == "equal":
-                    for k in range(i2 - i1):
-                        keep(a_lo + i1 + k, b_lo + j1 + k)
-            return
-        anchors = self._anchors(old, a_lo, a_hi, new, b_lo, b_hi) if split else []
-        if not anchors:
-            for k in range(min(a_hi - a_lo, b_hi - b_lo)):
-                if old[a_lo + k] == new[b_lo + k]:
-                    keep(a_lo + k, b_lo + k)
-            return
-        for i, j in anchors:
-            self._match(a_lo, i, new, b_lo, j, keep, split=False)
-            keep(i, j)
-            a_lo, b_lo = i + 1, j + 1
-        self._match(a_lo, a_hi, new, b_lo, b_hi, keep, split=False)
+                matcher = difflib.SequenceMatcher(
+                    a=old[a_lo:a_hi], b=new[b_lo:b_hi], autojunk=False
+                )
+                for tag, i1, i2, j1, _ in matcher.get_opcodes():
+                    if tag == "equal":
+                        for k in range(i2 - i1):
+                            keep(a_lo + i1 + k, b_lo + j1 + k)
+                continue
+            cost = (a_hi - a_lo) + (b_hi - b_lo)
+            anchors: list[tuple[int, int]] = []
+            if budget >= cost:
+                budget -= cost
+                anchors = self._anchors(old, a_lo, a_hi, new, b_lo, b_hi)
+            if not anchors:
+                for k in range(min(a_hi - a_lo, b_hi - b_lo)):
+                    if old[a_lo + k] == new[b_lo + k]:
+                        keep(a_lo + k, b_lo + k)
+                continue
+            for i, j in anchors:
+                work.append((a_lo, i, b_lo, j))
+                keep(i, j)
+                a_lo, b_lo = i + 1, j + 1
+            work.append((a_lo, a_hi, b_lo, b_hi))
 
     @staticmethod
     def _anchors(
