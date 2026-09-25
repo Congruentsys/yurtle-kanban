@@ -32,8 +32,14 @@ section, or a small change whose shape the issue already fixes. Hold it instead 
 - it touches the release, versioning or publishing path;
 - it would take more than about 400 changed lines, or it can't be tested offline.
 
-To hold it: post one comment (what you found, the options, your recommendation, and the question to
-answer), then `gh issue edit <N> --add-label needs-decision --remove-assignee @me`, and pick again.
+Before holding anything, run `/steer`'s classifier on it. If a measurement (a read-only fleet scan), the
+goals or an existing user ruling settle it — bucket 1 or 2 — decide it: comment `[steer] bucket-N: …` with
+the basis, and build it; list it in your report as open to veto. Hold (`needs-decision`) only a bucket 3
+item: one that changes a feature or goal or needs human authority, with that trigger named.
+
+To hold it: post one comment (what you found, the options, the named bucket-3 trigger, your recommended
+default, and the question to answer), then `gh issue edit <N> --add-label needs-decision --remove-assignee
+@me`, and pick again.
 
 **One item = one context.** This session stays thin. It picks, triages, spawns the test partner (a fresh
 `Agent`) and the reviewer (a distinct `claude -p` session), writes the code or delegates it to an
