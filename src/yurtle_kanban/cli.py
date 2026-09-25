@@ -1483,6 +1483,7 @@ def query(
         except Exception as e:
             err_console.print(f"[red]SPARQL error:[/red] {safe(e)}", soft_wrap=True)
             sys.exit(1)
+        results = results[:top_k]  # --top applies to JSON too, like the table (#387)
 
         if as_json:
             click.echo(json.dumps(results, indent=2))
@@ -1496,7 +1497,7 @@ def query(
             table = Table(title="SPARQL Results")
             for h in headers:
                 table.add_column(escape(str(h)))
-            for row in results[:top_k]:
+            for row in results:
                 table.add_row(*[escape(str(row.get(h, ""))) for h in headers])
             console.print(table)
         return
