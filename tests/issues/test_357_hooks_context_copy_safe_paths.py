@@ -19,6 +19,7 @@ Helpers are reused from the #347 tests.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -257,3 +258,78 @@ def test_shell_template_output_unchanged(
     assert out.is_file()
     assert out.read_text(encoding="utf-8") == "a/b|../../escape; echo hi"
     _assert_cwd_untouched(elsewhere)
+
+
+# --- round 2: the copy keeps the caller's timestamp (and every other field) --------
+
+FIXED_TS = "2020-01-02T03:04:05.000006+00:00"
+
+
+def _fixed_ctx(**kwargs: str) -> HookContext:
+    ctx = _ctx(**kwargs)
+    ctx.timestamp = FIXED_TS
+    return ctx
+
+
+def _log_entries(log: Path) -> list[dict]:
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_logged_timestamp_is_callers_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, engine = _engine(tmp_path, "repo")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    ctx = _fixed_ctx(title="T", assignee="mini")
+    ctx.metadata["extra"] = "kept"
+    engine.trigger(HookEvent.ITEM_CREATED, ctx)
+    (entry,) = _log_entries(root / ".kanban" / "hooks.log")
+    assert entry["timestamp"] == FIXED_TS, "the action saw a new timestamp, not ctx's"
+    assert entry == ctx.to_dict(), "the action saw a context that differs from ctx"
+    assert ctx.timestamp == FIXED_TS and ctx.repo_root is None
+
+
+def test_two_engines_log_the_same_callers_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_a, engine_a = _engine(tmp_path, "repo-a")
+    root_b, engine_b = _engine(tmp_path, "repo-b")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    ctx = _ctx()
+    original = ctx.timestamp
+    time.sleep(0.01)  # a fresh timestamp taken at trigger time would differ
+    engine_a.trigger(HookEvent.ITEM_CREATED, ctx)
+    time.sleep(0.01)
+    engine_b.trigger(HookEvent.ITEM_CREATED, ctx)
+    (a,) = _log_entries(root_a / ".kanban" / "hooks.log")
+    (b,) = _log_entries(root_b / ".kanban" / "hooks.log")
+    assert a["timestamp"] == original, "engine A logged a trigger-time timestamp"
+    assert b["timestamp"] == original, "engine B logged a trigger-time timestamp"
+    assert ctx.timestamp == original and ctx.repo_root is None
+
+
+def test_timestamp_placeholder_in_log_path_is_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, elsewhere, service = _log_service(tmp_path, "logs/{timestamp}.jsonl")
+    monkeypatch.chdir(elsewhere)
+    service._hook_engine.trigger(HookEvent.ITEM_CREATED, _fixed_ctx())
+    files = [p.name for p in (repo / "logs").iterdir()]
+    assert files == [f"{FIXED_TS}.jsonl"], files
+    _assert_cwd_untouched(elsewhere)
+
+
+def test_timestamp_placeholder_in_shell_is_callers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, elsewhere, _ = _setup(
+        tmp_path, "        - type: shell\n          command: printf '%s' {timestamp} > ts.txt\n"
+    )
+    service = KanbanService(KanbanConfig(), repo)
+    monkeypatch.chdir(elsewhere)
+    service._hook_engine.trigger(HookEvent.ITEM_CREATED, _fixed_ctx())
+    assert (repo / "ts.txt").read_text(encoding="utf-8") == FIXED_TS
