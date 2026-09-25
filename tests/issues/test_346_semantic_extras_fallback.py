@@ -21,6 +21,7 @@ even in a venv that has numpy installed.
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -144,11 +145,26 @@ def test_nl_query_without_extras_prints_one_install_hint(
     assert len(hints) == 1, f"expected exactly one install hint line:\n{result.output}"
 
 
-def test_nl_query_json_without_extras_does_not_crash(repo: Path, runner: CliRunner) -> None:
+def test_nl_query_json_without_extras_stdout_is_pure_json(
+    repo: Path, runner: CliRunner
+) -> None:
+    """With --json, stdout is exactly valid JSON; a hint, if any, goes to stderr.
+
+    click >= 8.2: `result.stdout` is stdout only, `result.output` is combined.
+    """
+    baseline = runner.invoke(main, ["query", "--json", "--no-semantic", SEMANTIC_PHRASE])
+    assert baseline.exit_code == 0, baseline.output
+    expected = {row["id"] for row in json.loads(baseline.stdout)}
+    assert expected == {"EXPR-001", "EXPR-002"}, baseline.stdout
+
     result = runner.invoke(main, ["query", "--json", SEMANTIC_PHRASE])
     _assert_clean(result)
     assert result.exit_code == 0, result.output
-    assert _ids(result.output) == {"EXPR-001", "EXPR-002"}, result.output
+    try:
+        rows = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise AssertionError(f"stdout is not valid JSON ({e}):\n{result.stdout}") from e
+    assert {row["id"] for row in rows} == expected, result.stdout
 
 
 # ---------------------------------------------------------------------------
