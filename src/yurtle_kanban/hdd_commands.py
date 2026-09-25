@@ -234,7 +234,7 @@ def hdd_registry(output_path: str | None, push: bool):
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines))
 
-    console.print(f"[green]Registry written to {escape(str(out))}[/green]")
+    console.print(f"[green]Registry written to {safe(out)}[/green]")
 
     total = (
         len(papers) + len(hypotheses) + len(experiments)
@@ -456,14 +456,14 @@ def _render_critical_path(
         if ready_only:
             console.print("[dim]No experiments ready for training.[/dim]")
         elif agent:
-            console.print(f"[dim]No experiments found for agent '{escape(agent)}'.[/dim]")
+            console.print(f"[dim]No experiments found for agent '{safe(agent)}'.[/dim]")
         else:
             console.print("[dim]No experiments with dev dependencies found.[/dim]")
         return
 
     title = "HDD Critical Path"
     if agent:
-        title += f" (Agent: {escape(agent)})"
+        title += f" (Agent: {safe(agent)})"
     console.print(f"[bold]{title}[/bold]")
     console.print("=" * 50)
 
@@ -1125,7 +1125,7 @@ def experiment_run(
         run_by=run_by,
     )
 
-    console.print(f"[green]Created run for {escape(expr_id)}[/green]")
+    console.print(f"[green]Created run for {safe(expr_id)}[/green]")
     console.print(f"  Path: {safe(run_path)}")
 
     if push:
@@ -1190,13 +1190,13 @@ def experiment_status(expr_id: str, as_json: bool):
     title = item.title if item else expr_id
 
     if not runs:
-        console.print(f"[dim]{escape(expr_id)}: {escape(str(title))}[/dim]")
+        console.print(f"[dim]{safe(expr_id)}: {safe(title)}[/dim]")
         console.print("  No runs found.")
         return
 
     from rich.table import Table
 
-    table = Table(title=f"{escape(expr_id)}: {escape(str(title))}")
+    table = Table(title=f"{safe(expr_id)}: {safe(title)}")
     table.add_column("Run", width=22)
     table.add_column("Being", width=28)
     table.add_column("Status", width=12)
