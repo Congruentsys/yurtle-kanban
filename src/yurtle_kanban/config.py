@@ -17,7 +17,7 @@ from ._logging import get_logger
 logger = get_logger("yurtle-kanban")
 
 # Cache for loaded themes
-_theme_cache: dict[str, dict[str, Any]] = {}
+_theme_cache: dict[str, dict[str, Any] | None] = {}  # None: not a mapping (#338)
 
 # Config version constants
 CONFIG_VERSION_SINGLE = "1.0"
@@ -69,7 +69,16 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
             key = str(theme_path.resolve())
             if key not in _theme_cache:
                 with open(theme_path) as f:
-                    _theme_cache[key] = yaml.safe_load(f)
+                    data = yaml.safe_load(f)
+                if not isinstance(data, dict):
+                    # a YAML list or scalar is no theme: treat it as missing, and
+                    # cache that so it is said once, not on every lookup (#338)
+                    logger.warning(
+                        f"theme file {theme_path} is not a mapping "
+                        f"({type(data).__name__}); ignored"
+                    )
+                    data = None
+                _theme_cache[key] = data
             return _theme_cache[key]
         except Exception:
             continue
@@ -303,6 +312,9 @@ class KanbanConfig:
 
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            # the CLI reports a ValueError as an invalid config, not a traceback (#338)
+            raise ValueError(f"the config must be a mapping, got {type(data).__name__}")
         # themes are looked up in the config's own repo first (`<repo>/.kanban/…`),
         # whatever the cwd, as the service does (#272)
         repo_root = config_path.absolute().parent.parent  # as given, like the service
