@@ -29,6 +29,7 @@ from typing import Any
 
 import pytest
 
+from tests.issues._snapshot import files_outside_git
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItemType, check_encodable
 from yurtle_kanban.service import KanbanService
@@ -71,12 +72,7 @@ def _cli(repo: Path, *args: str) -> None:
 
 def _snapshot(repo: Path) -> Snapshot:
     """Every file outside .git with its bytes, plus the commit count."""
-    files = {
-        str(p.relative_to(repo)): p.read_bytes()
-        for p in repo.rglob("*")
-        if p.is_file() and ".git" not in p.relative_to(repo).parts
-    }
-    return files, _git(repo, "rev-list", "--count", "HEAD").strip()
+    return files_outside_git(repo), _git(repo, "rev-list", "--count", "HEAD").strip()
 
 
 def _assert_unchanged(repo: Path, before: Snapshot) -> None:
