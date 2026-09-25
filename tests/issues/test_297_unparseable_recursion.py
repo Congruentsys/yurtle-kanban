@@ -8,7 +8,7 @@ Decided behaviour:
   file was overwritten with too-deep frontmatter after the scan, as #188's tests do —
   prints a warning saying "nested too deeply", links nothing, leaves the file alone,
   and no Traceback / RecursionError text escapes.
-- Controls: plain broken YAML still gives "YAML error: …"; valid frontmatter → None.
+- Controls: plain broken YAML still gives "YAML error: …"; a valid item still links.
 
 Everything runs in a subprocess: the real stack depth is what matters.
 """
@@ -117,9 +117,6 @@ class TestUnparseableReason:
         reason = _reason(tmp_path, BROKEN_DOC)
         assert reason is not None and reason.startswith("YAML error: "), reason
         assert "nested too deeply" not in reason, reason
-
-    def test_control_valid_frontmatter_is_none(self, tmp_path: Path) -> None:
-        assert _reason(tmp_path, VALID_DOC) is None
 
 
 # ---------------------------------------------------------------------------
