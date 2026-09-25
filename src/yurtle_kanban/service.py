@@ -655,7 +655,14 @@ class KanbanService:
             except OSError:
                 looks_like_item = False
             if looks_like_item and not file_path.name.startswith("_TEMPLATE"):
-                self.parse_warnings.append((file_path, f"{type(e).__name__}: {e}"))
+                # a RecursionError is YAML nested past what the parser can walk: say
+                # that, not Python's internals (#280)
+                reason = (
+                    "frontmatter nested too deeply to parse"
+                    if isinstance(e, RecursionError)
+                    else f"{type(e).__name__}: {e}"
+                )
+                self.parse_warnings.append((file_path, reason))
             return None
 
     def _split_frontmatter(self, content: str) -> tuple[str, str] | None:
