@@ -57,8 +57,10 @@ npm run lint
 
 ### Releasing (maintainers)
 
-Before following the release steps in `skills/release/SKILL.md`, assemble the
-changelog fragments into the new version's section:
+Follow the release steps in `skills/release/SKILL.md`, except for its step 4
+("Update CHANGELOG.md"): for this repo, assembling the changelog fragments into
+the new version's section replaces that step, so do this instead of writing the
+entry by hand:
 
 ```bash
 python scripts/assemble_changelog.py X.Y.Z   # --date YYYY-MM-DD to override today
