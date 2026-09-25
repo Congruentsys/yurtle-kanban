@@ -549,6 +549,9 @@ class KanbanService:
             if not isinstance(frontmatter, dict) or not frontmatter:
                 self._note_unparseable(file_path, content)
                 return None
+            # the graph guard below reuses this parse and its verdicts (#311)
+            parsed = dict(frontmatter)
+            too_large: list[Any] = []
             for key in list(frontmatter):
                 value = frontmatter[key]
                 if _is_cyclic(value):
@@ -560,6 +563,7 @@ class KanbanService:
                     # shared aliases nested a few levels deep (a "billion laughs") expand
                     # to more than any rendering or export can hold (#277)
                     why = f"is too large (over {_MAX_FIELD_NODES:,} values once aliases expand)"
+                    too_large.append(key)
                 else:
                     continue
                 logger.warning(f"{file_path}: frontmatter field `{key}` {why}; ignored")
@@ -676,7 +680,7 @@ class KanbanService:
             # Parse RDF graph from frontmatter + fenced blocks. The graph parser reads
             # the text again; _parse_graph blanks too-large fields there itself (#277,
             # #296), or skips the graph when one sits under a non-text key
-            graph = self._parse_graph(content)
+            graph = self._parse_graph(content, (parsed, too_large))
 
             return WorkItem(
                 id=item_id,
@@ -783,20 +787,35 @@ class KanbanService:
         except (yaml.YAMLError, RecursionError):  # too deep counts as unparseable (#297)
             return None
 
-    def _graph_safe_text(self, content: str) -> str | None:
+    def _graph_safe_text(
+        self, content: str, guarded: tuple[dict, list] | None = None
+    ) -> str | None:
         """`content` with every frontmatter field the graph parser must not expand
         blanked to `[]`: a too-large one (#277), and any field that aliases an anchor
         defined inside one, which would otherwise be left undefined (#296). None when
         such a field has a key that can't be located in the text (`5:`, `true:`).
-        Every caller of the graph parser gets this, not just the scan (#296)."""
-        frontmatter = self._parse_frontmatter(content)
-        if not isinstance(frontmatter, dict):
-            return content
-        blank = [
-            key for key, value in frontmatter.items()
-            if not _is_cyclic(value)
-            and _expanded_size(value, _MAX_FIELD_NODES) > _MAX_FIELD_NODES
-        ]
+        Every caller of the graph parser gets this, not just the scan (#296).
+
+        `guarded` is the scan's own (frontmatter, too-large keys) for this content, so
+        the scan parses and sizes each file once (#311); without it, this checks itself.
+
+        Known limits, both only costing triples, never an item (#311): a kept field
+        sharing a container with a dropped one only through an anchor defined outside
+        the dropped field is blanked too; and an alias of a *scalar* anchor inside a
+        dropped field (`tags: [&s foo, ...]`, `owner: *s`) isn't tracked, so the graph
+        parser meets an undefined alias and that item gets no graph."""
+        if guarded is not None:
+            frontmatter, too_large = guarded
+            blank = list(too_large)
+        else:
+            frontmatter = self._parse_frontmatter(content)
+            if not isinstance(frontmatter, dict):
+                return content
+            blank = [
+                key for key, value in frontmatter.items()
+                if not _is_cyclic(value)
+                and _expanded_size(value, _MAX_FIELD_NODES) > _MAX_FIELD_NODES
+            ]
         if not blank:
             return content
         # the containers inside the dropped values (each walked once) ...
@@ -813,14 +832,16 @@ class KanbanService:
             content = self._add_or_update_frontmatter_field(content, key, "[]")
         return content
 
-    def _parse_graph(self, content: str) -> Graph | None:
+    def _parse_graph(
+        self, content: str, guarded: tuple[dict, list] | None = None
+    ) -> Graph | None:
         """Parse RDF graph from file content using yurtle-rdflib.
 
         Returns an rdflib.Graph with triples from both YAML/Turtle frontmatter
         and fenced ```turtle/```yurtle blocks in the markdown body.
         Returns None if parsing fails.
         """
-        safe_text = self._graph_safe_text(content)
+        safe_text = self._graph_safe_text(content, guarded)
         if safe_text is None:
             return None
         content = safe_text
