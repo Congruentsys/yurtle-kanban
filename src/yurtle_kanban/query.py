@@ -609,7 +609,9 @@ class QueryEngine:
             "PREFIX kb: <https://yurtle.dev/kanban/>\n"
             "PREFIX item: <https://yurtle.dev/kanban/item/>\n"
             "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n"
-            "SELECT ?id WHERE {\n  "
+            # DISTINCT: an item matching through two types/tags/assignees is one row
+            # (#349); ?numId is projected so ORDER BY still orders the distinct rows
+            "SELECT DISTINCT ?id ?numId WHERE {\n  "
             + "\n  ".join(wheres)
             + "\n  "
             + "\n  ".join(filters)
