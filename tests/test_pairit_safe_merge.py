@@ -39,7 +39,10 @@ SKILL_MD = PAIRIT_DIR / "SKILL.md"
 PR = "4242"
 BRANCH = "fix/4242-thing"
 
-pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+pytestmark = pytest.mark.skipif(
+    shutil.which("git") is None or shutil.which("jq") is None,
+    reason="needs git and jq (the stub gh pipes --jq through jq)",
+)
 
 
 # --------------------------------------------------------------------------- stub gh
@@ -52,6 +55,7 @@ args = sys.argv[1:]
 log = os.environ["STUB_GH_LOG"]
 checks = json.loads(os.environ.get("STUB_GH_CHECKS", "[]"))
 worktree = os.environ.get("STUB_GH_WORKTREE", "")
+comments = json.loads(os.environ.get("STUB_GH_COMMENTS", "[]"))
 
 
 def record(extra=None):
@@ -160,12 +164,30 @@ if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
         "mergeStateStatus": "DIRTY" if conflict else "CLEAN",
         "url": "https://example.invalid/pull/" + os.environ.get("STUB_GH_PR", "0"),
         "title": "stub PR",
+        "comments": [
+            {"author": {"login": c.get("login", "reviewer")}, "authorAssociation": "MEMBER",
+             "body": c["body"], "createdAt": "2026-09-24T00:00:%02dZ" % i,
+             "id": "IC_%d" % i, "includesEditsToPreviousComment": False,
+             "isMinimized": False, "minimizedReason": "", "reactionGroups": [],
+             "url": "https://example.invalid/c/%d" % i, "viewerDidAuthor": False}
+            for i, c in enumerate(comments)
+        ],
     })
     sys.exit(0)
 
 if len(args) >= 2 and args[0] == "pr" and args[1] == "merge":
     record({"MERGED": True, "worktree_exists_at_merge": bool(worktree) and os.path.exists(worktree)})
     print("MERGED")
+    sys.exit(0)
+
+if args and args[0] == "api" and any("/comments" in a for a in args):
+    record()
+    emit([
+        {"id": i, "body": c["body"], "user": {"login": c.get("login", "reviewer")},
+         "created_at": "2026-09-24T00:00:%02dZ" % i,
+         "html_url": "https://example.invalid/c/%d" % i}
+        for i, c in enumerate(comments)
+    ])
     sys.exit(0)
 
 record({"unsupported": True})
@@ -175,6 +197,11 @@ sys.exit(1)
 
 
 # --------------------------------------------------------------------------- git fixture
+
+
+def verdict(sha: str, word: str) -> dict[str, str]:
+    """A pairit review comment: `reviewed-at-sha: <sha>` then `verdict: <word>`."""
+    return {"body": f"reviewed-at-sha: {sha}\nverdict: {word}\n\nLooks {word}."}
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -234,7 +261,21 @@ class Sandbox:
         stub.write_text(STUB_GH.replace("__PYTHON__", sys.executable))
         stub.chmod(0o755)
 
-    def run(self, checks: list[dict[str, str]]) -> subprocess.CompletedProcess[str]:
+    def approve(self) -> list[dict[str, str]]:
+        """An approve verdict at the head (#186: safe_merge needs one to merge)."""
+        return [verdict(self.head_sha, "approve")]
+
+    def run(
+        self,
+        checks: list[dict[str, str]],
+        comments: list[dict[str, str]] | None = None,
+        *,
+        head_sha: str | None = None,
+        branch: str = BRANCH,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run safe_merge.sh; `comments` defaults to an approve verdict at the head."""
+        if comments is None:
+            comments = self.approve()
         assert SCRIPT.is_file(), f"{SCRIPT.relative_to(REPO_ROOT)} does not exist (#167)"
         env = dict(os.environ)
         env.update(
@@ -242,8 +283,9 @@ class Sandbox:
             STUB_GH_LOG=str(self.log),
             STUB_GH_CHECKS=json.dumps(checks),
             STUB_GH_PR=PR,
-            STUB_GH_BRANCH=BRANCH,
-            STUB_GH_HEAD_SHA=self.head_sha,
+            STUB_GH_COMMENTS=json.dumps(comments),
+            STUB_GH_BRANCH=branch,
+            STUB_GH_HEAD_SHA=head_sha or self.head_sha,
             STUB_GH_WORKTREE=str(self.worktree),
             STUB_GH_CONFLICT="1" if self.conflict else "0",
             GIT_TERMINAL_PROMPT="0",
