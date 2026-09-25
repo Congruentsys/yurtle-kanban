@@ -194,11 +194,14 @@ class HookEngine:
 
         self._depth += 1
         try:
-            if context.repo_root is None:
+            root = context.repo_root
+            if root is None or not isinstance(root, Path):
                 # a copy: the caller's context is never changed, so one reused
-                # across engines runs in each engine's own repo (#357)
+                # across engines runs in each engine's own repo (#357); actions
+                # always see a Path, even for a str root set by the caller (#375)
+                root = self._repo_root if root is None else Path(root)
                 timestamp = context.timestamp
-                context = replace(context, repo_root=self._repo_root)
+                context = replace(context, repo_root=root)
                 # replace() re-runs __post_init__: keep the event's own time (#357)
                 context.timestamp = timestamp
             matched = self._matching_hooks(event, context)
