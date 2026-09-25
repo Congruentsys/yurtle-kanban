@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,12 +23,13 @@ from typing import TYPE_CHECKING, Any
 from rdflib import RDF, Graph, Literal, Namespace
 from rdflib.namespace import XSD
 
+from ._logging import get_logger
 from .models import WorkItem
 
 if TYPE_CHECKING:
     from .service import KanbanService
 
-logger = logging.getLogger("yurtle-kanban")
+logger = get_logger("yurtle-kanban")  # escapes control characters (#215)
 
 KB = Namespace("https://yurtle.dev/kanban/")
 ITEM = Namespace("https://yurtle.dev/kanban/item/")

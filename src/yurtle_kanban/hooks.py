@@ -12,7 +12,6 @@ kanban operation.
 from __future__ import annotations
 
 import json
-import logging
 import shlex
 import subprocess
 from collections.abc import Callable
@@ -24,7 +23,9 @@ from typing import Any
 
 import yaml
 
-logger = logging.getLogger("yurtle-kanban.hooks")
+from ._logging import get_logger
+
+logger = get_logger("yurtle-kanban.hooks")  # escapes control characters (#215)
 
 
 # ─── Events ────────────────────────────────────────────────────────────────
