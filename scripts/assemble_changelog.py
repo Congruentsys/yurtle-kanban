@@ -51,7 +51,9 @@ def read_fragments(directory: Path) -> list[tuple[int, str, str, Path]]:
         if not rest.strip():
             raise FragmentError(f"{path}: no entry below the section line")
         try:
-            headings(rest, "\0")  # only its fence check: one left open breaks every release
+            # only its fence check: one left open breaks every later release; the
+            # section line is line 1 of the file
+            headings(rest, "\0", first_line=2)
         except ValueError as e:
             raise FragmentError(f"{path}: {e}") from None
         found.append((int(m.group(1)), head.group(1), rest.rstrip(), path))
@@ -59,11 +61,11 @@ def read_fragments(directory: Path) -> list[tuple[int, str, str, Path]]:
     return sorted(found, key=lambda f: (f[0], f[3].name != f"{f[0]}.md", f[3].name))
 
 
-def headings(text: str, prefix: str) -> list[tuple[int, int]]:
+def headings(text: str, prefix: str, first_line: int = 1) -> list[tuple[int, int]]:
     """(start, end) of each line starting with `prefix`, outside fenced code
     blocks: a ``` or ~~~ block may quote a `### ` or `## [` line (#197)."""
-    found, pos, fence = [], 0, ""
-    for line in text.splitlines(keepends=True):
+    found, pos, fence, opened = [], 0, "", 0
+    for number, line in enumerate(text.splitlines(keepends=True), first_line):
         if fence:
             m = FENCE_CLOSE.fullmatch(line)
             if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
@@ -71,13 +73,13 @@ def headings(text: str, prefix: str) -> list[tuple[int, int]]:
         elif (m := FENCE.match(line)) and not (m.group(1)[0] == "`" and "`" in m.group(2)):
             # a backtick fence's info string can't hold a backtick (CommonMark):
             # "```x``` inline" is text, not an opener (#223)
-            fence = m.group(1)
+            fence, opened = m.group(1), number
         elif line.startswith(prefix):
             found.append((pos, pos + len(line.rstrip("\n"))))
         pos += len(line)
     if fence:
         # an unclosed fence would hide every heading after it: refuse, don't guess
-        raise ValueError(f"unclosed code fence ({fence})")
+        raise ValueError(f"unclosed code fence ({fence}) opened at line {opened}")
     return found
 
 
@@ -160,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             new = new.replace("\n", "\r\n")
         # the CHANGELOG first: a failed write leaves every fragment in place
         args.changelog.write_bytes(new.encode("utf-8"))
-        left = []
+        left: list[str] = []
         for *_, path in fragments:
             try:
                 path.unlink()
