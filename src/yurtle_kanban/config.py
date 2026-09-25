@@ -9,6 +9,7 @@ import copy
 import os
 from dataclasses import dataclass, field
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,13 @@ from ._logging import get_logger
 
 logger = get_logger("yurtle-kanban")
 
-_NO_RAW: Any = object()  # a BoardConfig not loaded from config.yaml (#420)
+class _Unset(Enum):
+    """A sentinel that stays itself through copy.deepcopy and pickle (#428)."""
+
+    NO_RAW = "no-raw"
+
+
+_NO_RAW: Any = _Unset.NO_RAW  # a BoardConfig not loaded from config.yaml (#420)
 
 # Cache for loaded themes
 _theme_cache: dict[str, dict[str, Any] | None] = {}  # None: not a mapping (#338)
@@ -345,7 +352,17 @@ class BoardConfig:
             result["scan_paths"] = self.scan_paths
         # Serialize wip_limits: None means "explicitly unlimited" (must be preserved),
         # empty dict {} means "no overrides" (omit for cleaner output)
-        wip_limits = self.wip_limits if self.raw_wip_limits is _NO_RAW else self.raw_wip_limits
+        # the user's own text while it still describes the board; once code changed
+        # the limits, the change itself (#420, #428)
+        wip_limits = self.wip_limits
+        raw = self.raw_wip_limits
+        if raw is not _NO_RAW:
+            unchanged = (
+                self.wip_limits is None if raw is None
+                else _clean_wip_limits(raw, "", quiet=True) == self.wip_limits
+            )
+            if unchanged:
+                wip_limits = raw
         if wip_limits is None or wip_limits:
             result["wip_limits"] = wip_limits
         if self.wip_exempt_types:
@@ -651,7 +668,9 @@ class KanbanConfig:
 WIP_NS = "https://yurtle.dev/kanban/wip/"
 
 
-def _wip_limit_value(value: Any, where: str) -> tuple[bool, int | None]:
+def _wip_limit_value(
+    value: Any, where: str, quiet: bool = False
+) -> tuple[bool, int | None]:
     """(keep, limit) for one board WIP limit: null is "unlimited", a whole number
     0 or more is kept (`3.0` read as 3, 0 is "no limit"); anything else (negative,
     fractional, text, a list, a bool) is dropped with one warning (#402, #411)."""
@@ -663,13 +682,14 @@ def _wip_limit_value(value: Any, where: str) -> tuple[bool, int | None]:
         value = int(value)  # an RDF xsd:decimal `4.0` (wip-policy.md)
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return True, value
-    logger.warning(
-        f"{where}: WIP limit {value!r} is not a whole number, 0 or more; ignored"
-    )
+    if not quiet:
+        logger.warning(
+            f"{where}: WIP limit {value!r} is not a whole number, 0 or more; ignored"
+        )
     return False, None
 
 
-def _clean_wip_limits(raw: Any, where: str) -> dict[str, Any]:
+def _clean_wip_limits(raw: Any, where: str, quiet: bool = False) -> dict[str, Any]:
     """A board's `wip_limits` with every bad limit dropped (#411)."""
     if not isinstance(raw, dict):
         return {}
@@ -679,14 +699,14 @@ def _clean_wip_limits(raw: Any, where: str) -> dict[str, Any]:
             per_type = {}
             for item_type, type_limit in limit.items():
                 keep, value = _wip_limit_value(
-                    type_limit, f"{where} wip_limits.{column}.{item_type}"
+                    type_limit, f"{where} wip_limits.{column}.{item_type}", quiet
                 )
                 if keep:
                     per_type[item_type] = value
             if per_type or not limit:  # all dropped: no override, the theme's applies (#420)
                 cleaned[column] = per_type
         else:
-            keep, value = _wip_limit_value(limit, f"{where} wip_limits.{column}")
+            keep, value = _wip_limit_value(limit, f"{where} wip_limits.{column}", quiet)
             if keep:
                 cleaned[column] = value
     return cleaned
