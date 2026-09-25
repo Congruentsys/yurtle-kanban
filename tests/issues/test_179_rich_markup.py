@@ -335,3 +335,60 @@ def test_valid_scalar_fields_control(repo: Path) -> None:
     items = {i.id: i for i in svc.get_items()}
     assert items["FEAT-014"].status is WorkItemStatus.READY
     assert svc.parse_warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Round 2 (review of PR #201): numeric `id:` / `title:` must not crash output
+# ---------------------------------------------------------------------------
+
+NUMERIC_ID = "---\nid: 42\ntitle: Numeric id\ntype: feature\nstatus: backlog\n---\n\nBody\n"
+NUMERIC_TITLE = "---\nid: FEAT-021\ntitle: 2024\ntype: feature\nstatus: backlog\n---\n\nBody\n"
+
+
+@pytest.fixture
+def numeric_id(repo: Path) -> Path:
+    (repo / "kanban-work" / "features" / "FEAT-042-numeric-id.md").write_text(NUMERIC_ID)
+    return repo
+
+
+@pytest.fixture
+def numeric_title(repo: Path) -> Path:
+    (repo / "kanban-work" / "features" / "FEAT-021-numeric-title.md").write_text(NUMERIC_TITLE)
+    return repo
+
+
+def _assert_no_type_error(result: Result) -> None:
+    _assert_ok(result)
+    assert "TypeError" not in result.output, result.output
+
+
+@pytest.mark.parametrize("args", [["board"], ["show", "42"], ["list"]], ids=lambda a: a[0])
+def test_numeric_id_prints(numeric_id: Path, runner: CliRunner, args: list[str]) -> None:
+    result = runner.invoke(main, args)
+    _assert_no_type_error(result)
+    assert "42" in _dense(result.output)
+
+
+@pytest.mark.parametrize(
+    "args", [["show", "FEAT-021"], ["list"], ["board"]], ids=lambda a: a[0]
+)
+def test_numeric_title_prints(numeric_title: Path, runner: CliRunner, args: list[str]) -> None:
+    result = runner.invoke(main, args)
+    _assert_no_type_error(result)
+    assert "2024" in _dense(result.output)
+
+
+def test_numeric_id_and_title_scan_as_strings(repo: Path) -> None:
+    features = repo / "kanban-work" / "features"
+    (features / "FEAT-042-numeric-id.md").write_text(NUMERIC_ID)
+    (features / "FEAT-021-numeric-title.md").write_text(NUMERIC_TITLE)
+    svc = _service(repo)
+    items = svc.get_items()
+    by_title = {i.title: i for i in items}
+    by_id = {i.id: i for i in items}
+    assert "Numeric id" in by_title, [(i.id, i.title) for i in items]
+    assert by_title["Numeric id"].id == "42"
+    assert isinstance(by_title["Numeric id"].id, str)
+    assert "FEAT-021" in by_id, [(i.id, i.title) for i in items]
+    assert by_id["FEAT-021"].title == "2024"
+    assert isinstance(by_id["FEAT-021"].title, str)
