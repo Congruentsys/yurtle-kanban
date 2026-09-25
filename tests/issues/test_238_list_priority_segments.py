@@ -52,6 +52,10 @@ def run_list(value: str, *extra: str) -> Result:
     return CliRunner().invoke(main, ["list", "--priority", value, *extra])
 
 
+def collapsed(text: str) -> str:
+    return " ".join(text.split())
+
+
 def listed_ids(result: Result) -> set[str]:
     assert result.exit_code == 0, result.output
     return {d["id"] for d in json.loads(result.output)}
@@ -97,10 +101,18 @@ class TestEachInvalidValueReportedSeparately:
     def test_two_invalid_values_both_named(self, repo: Path) -> None:
         result = run_list("urgent,bogus")
         assert result.exit_code == 1, result.output
-        assert "urgent" in result.output
-        assert "bogus" in result.output
-        assert "'urgent, bogus'" not in result.output
-        assert VALID in result.output
+        out = collapsed(result.output)
+        assert f"Unknown priority: urgent; {VALID}" in out
+        assert f"Unknown priority: bogus; {VALID}" in out
+        assert "urgent, bogus" not in out
+
+    def test_control_char_value_gets_its_own_repr(self, repo: Path) -> None:
+        result = run_list("a\x1bb,urgent")
+        assert result.exit_code == 1, result.output
+        lines = [collapsed(line) for line in result.output.splitlines()]
+        assert f"Unknown priority: 'a\\x1bb'; {VALID}" in lines
+        assert f"Unknown priority: urgent; {VALID}" in lines
+        assert "\x1b" not in result.output
 
     def test_invalid_with_empty_segment_names_only_the_value(self, repo: Path) -> None:
         result = run_list("high,,urgent")
