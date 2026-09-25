@@ -105,11 +105,21 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
 
     A file that doesn't parse, or isn't a mapping, is skipped with one warning and
     the lookup falls through to the next dir (a broken override yields the built-in,
-    not no theme); it is cached as None so it is said once (#338, #352)."""
+    not no theme); it is cached as None so it is said once (#338, #352). So is one
+    that is empty, or left empty once its bad sections are dropped, and a dangling
+    symlink (#365)."""
     for theme_dir in _theme_dirs(repo_root):
         theme_path = theme_dir / f"{theme_name}.yaml"
         try:
             if not theme_path.exists():
+                if theme_path.is_symlink():  # an override pointing nowhere (#365)
+                    key = str(theme_path.absolute())
+                    if key not in _theme_cache:
+                        logger.warning(
+                            f"theme file {theme_path} is a symlink to a missing file; "
+                            "ignored"
+                        )
+                        _theme_cache[key] = None
                 continue
             key = str(theme_path.resolve())
         except OSError:
@@ -122,12 +132,18 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
                 problem = f"could not be read or parsed ({type(e).__name__})"
                 data = None
             else:
-                problem = f"is not a mapping ({type(data).__name__})"
-            if not isinstance(data, dict):
+                problem = (
+                    "is empty" if data is None or data == {}
+                    else f"is not a mapping ({type(data).__name__})"
+                )
+            if isinstance(data, dict) and data:
+                data = _drop_bad_sections(data, theme_path)  # (#351)
+                if not data:
+                    problem = "has nothing left once its bad sections are ignored"
+            if not isinstance(data, dict) or not data:
+                # nothing usable: the next dir's theme (e.g. the built-in) wins (#365)
                 logger.warning(f"theme file {theme_path} {problem}; ignored")
                 data = None
-            else:
-                data = _drop_bad_sections(data, theme_path)  # (#351)
             _theme_cache[key] = data
         if _theme_cache[key] is not None:
             return _theme_cache[key]
