@@ -126,7 +126,28 @@ def get_service() -> KanbanService:
     return KanbanService(config, repo_root)
 
 
-@click.group()
+class _Main(click.Group):
+    """The root group: refuses undecodable argv before any command runs (#193).
+
+    Python decodes invalid UTF-8 in argv to lone surrogates, which can't be
+    written: without this, a title, `--summary`, `--authors`, a `next-id` prefix
+    or an `experiment run --being` value crashed after a partial write, or was
+    saved escaped. One check here covers every command and option.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        # shell completion parses resiliently and reads stdout as candidates:
+        # stay quiet there, the real run refuses (#193)
+        for n, arg in enumerate([] if ctx.resilient_parsing else args, 1):
+            try:
+                check_encodable(f"argument {n}", arg)
+            except ValueError as e:
+                console.print(f"[red]{escape(str(e))}[/red]", soft_wrap=True)
+                ctx.exit(1)
+        return super().parse_args(ctx, args)
+
+
+@click.group(cls=_Main)
 @click.version_option(package_name="yurtle-kanban")
 def main():
     """File-based kanban using Yurtle. Git is your database."""
