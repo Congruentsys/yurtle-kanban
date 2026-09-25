@@ -2,7 +2,6 @@
 
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -11,10 +10,9 @@ from click.testing import CliRunner
 
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
-from yurtle_kanban.models import WorkItemStatus, WorkItemType
+from yurtle_kanban.models import WorkItemType
 from yurtle_kanban.service import KanbanService
 from yurtle_kanban.template_engine import TemplateEngine
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

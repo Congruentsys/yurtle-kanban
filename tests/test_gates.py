@@ -13,7 +13,6 @@ from yurtle_kanban.gates import GateEvaluator
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 from yurtle_kanban.service import KanbanService
 
-
 # ── Fixtures ───────────────────────────────────────────────────────────
 
 

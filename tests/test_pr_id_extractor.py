@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-
 from yurtle_kanban.pr_id_extractor import (
     extract_all,
     extract_id_from_branch,
     extract_ids_from_text,
 )
-
 
 # ---------------------------------------------------------------------------
 # extract_ids_from_text

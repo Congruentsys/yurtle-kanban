@@ -2,16 +2,13 @@
 
 import json
 import subprocess
-from datetime import date, datetime, timedelta
-from pathlib import Path
+from datetime import date, timedelta
 
 import pytest
 from click.testing import CliRunner
 
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
-from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
-from yurtle_kanban.service import KanbanService
 
 
 @pytest.fixture
@@ -29,7 +26,7 @@ def populated_repo(tmp_path):
 
     # Init kanban with nautical theme
     runner = CliRunner()
-    with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+    with runner.isolated_filesystem(temp_dir=tmp_path):
         pass  # just to ensure isolation
 
     # Set up dirs and config manually for precision

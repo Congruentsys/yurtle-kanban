@@ -12,16 +12,14 @@ from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 from yurtle_kanban.research_interlinks import (
-    has_research_items,
-    render_research_interlinks,
+    EXPR,
+    HYP,
+    MEASURE,
     _first_triple,
     _obj_id,
-    HYP,
-    EXPR,
-    MEASURE,
+    has_research_items,
+    render_research_interlinks,
 )
-from yurtle_kanban.service import KanbanService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

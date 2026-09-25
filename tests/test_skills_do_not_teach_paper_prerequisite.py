@@ -1,4 +1,4 @@
-"""No shipped skill may present a paper as a PREREQUISITE of a slash command.
+r"""No shipped skill may present a paper as a PREREQUISITE of a slash command.
 
 PR #90 corrected `/hypothesis PAPER-XXX "claim"` to `/hypothesis "claim"`:
 a paper is optional across the HDD family, and the CLI has never required one. That

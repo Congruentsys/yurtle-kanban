@@ -8,14 +8,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 from click.testing import CliRunner
 
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 from yurtle_kanban.service import KanbanService
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

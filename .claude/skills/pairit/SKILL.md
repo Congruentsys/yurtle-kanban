@@ -13,7 +13,7 @@ Tests written first by another context, from the issue, do not.
 
 **The check** is what CI runs; run it from the worktree:
 ```bash
-.venv/bin/python -m pytest -q && .venv/bin/ruff check src/
+.venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/
 ```
 pytest's `pythonpath = ["src"]` means a worktree's tests import that worktree's `src`, even with the shared
 `.venv`. To run the CLI from a worktree, use `PYTHONPATH=/tmp/yk-<N>/src .venv/bin/yurtle-kanban …`.

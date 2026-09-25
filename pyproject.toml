@@ -97,6 +97,11 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# test data lines (fixtures, argv lists, regexes) and names that shout a decision
+# (`..._IS_still_orphaned`) read better as they are (#333)
+"tests/**" = ["E501", "N802"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

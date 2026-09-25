@@ -37,7 +37,7 @@ jobs:
       - name: Run linting
         run: |
           pip install ruff
-          ruff check src/
+          ruff check src/ tests/
 
       - name: Run tests
         run: |
