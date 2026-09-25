@@ -25,7 +25,10 @@ FRAGMENT_NAME = re.compile(r"(\d+)(?:-.*)?\.md")
 SECTION_LINE = re.compile(r"<!-- section: (\w+) -->")
 UNRELEASED = "## [Unreleased]"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# fences may be indented (a code block inside a list item): wider than CommonMark's
+# 3 spaces, on purpose. A closing fence is the run alone, same character, as long.
 FENCE = re.compile(r"[ \t]*(```+|~~~+)")
+FENCE_CLOSE = re.compile(r"[ \t]*(```+|~~~+)[ \t]*\n?")
 
 
 class FragmentError(ValueError):
@@ -57,12 +60,18 @@ def headings(text: str, prefix: str) -> list[tuple[int, int]]:
     blocks: a ``` or ~~~ block may quote a `### ` or `## [` line (#197)."""
     found, pos, fence = [], 0, ""
     for line in text.splitlines(keepends=True):
-        m = FENCE.match(line)
-        if m and (not fence or m.group(1).startswith(fence)):
-            fence = "" if fence else m.group(1)
-        elif not fence and line.startswith(prefix):
+        if fence:
+            m = FENCE_CLOSE.fullmatch(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = ""
+        elif m := FENCE.match(line):
+            fence = m.group(1)
+        elif line.startswith(prefix):
             found.append((pos, pos + len(line.rstrip("\n"))))
         pos += len(line)
+    if fence:
+        # an unclosed fence would hide every heading after it: refuse, don't guess
+        raise ValueError(f"unclosed code fence ({fence}) in the CHANGELOG")
     return found
 
 
