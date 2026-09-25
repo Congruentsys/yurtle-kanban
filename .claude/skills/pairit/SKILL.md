@@ -94,9 +94,13 @@ proves nothing.
 
 **4. Merge** (from the main checkout):
 ```bash
-bash .claude/skills/pairit/safe_merge.sh <P>  # waits for CI; refuses unless EVERY check is SUCCESS
-                                              # or SKIPPED and the head merges cleanly with
-                                              # origin/main; removes the PR's worktree; merges
+bash .claude/skills/pairit/safe_merge.sh <P>  # waits for CI; reads the PR head ONCE; refuses
+                                              # unless EVERY check is SUCCESS or SKIPPED,
+                                              # origin/<branch> is that head, it merges
+                                              # cleanly with origin/main, and the latest
+                                              # verdict (from a member) is approve at that
+                                              # head; removes the PR's worktree; merges with
+                                              # --match-head-commit <head>
 git checkout -q main && git pull -q
 gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
