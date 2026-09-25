@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban.config import (
     CONFIG_VERSION_MULTI,
     CONFIG_VERSION_SINGLE,
@@ -1796,7 +1797,7 @@ class TestCreateHonoursDefaultBoard:
         item_id = m_id.group(1)
         # Rich wraps the "File:" line, so find the new file by its id instead.
         matches = [
-            f for f in repo.rglob(f"{item_id}*.md") if ".kanban" not in f.parts
+            f for f in glob_outside_git(repo, f"{item_id}*.md") if ".kanban" not in f.parts
         ]
         assert len(matches) == 1, f"expected one file for {item_id}: {matches}\n{out}"
         rel = matches[0].resolve().relative_to(repo.resolve()).as_posix()
