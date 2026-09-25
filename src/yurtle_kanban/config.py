@@ -24,35 +24,44 @@ CONFIG_VERSION_SINGLE = "1.0"
 CONFIG_VERSION_MULTI = "2.0"
 
 
+def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
+    """Where themes are looked up, first match wins: the repo's .kanban/themes/,
+    the cwd's, the pip-installed share directory, then the source tree."""
+    import sys
+
+    dirs = []
+    if repo_root:
+        dirs.append(repo_root / ".kanban" / "themes")
+    dirs.append(Path.cwd() / ".kanban" / "themes")
+    dirs.append(Path(sys.prefix) / "share" / "yurtle-kanban" / "themes")
+    try:
+        import yurtle_kanban
+
+        dirs.append(Path(yurtle_kanban.__file__).parent.parent.parent / "themes")
+    except Exception:
+        pass
+    dirs.append(Path(__file__).parent.parent.parent / "themes")
+    return dirs
+
+
+def _available_themes(repo_root: Path | None = None) -> list[str]:
+    """Every theme name a config could use (#272)."""
+    names = set()
+    for d in _theme_dirs(repo_root):
+        try:
+            names.update(p.stem for p in d.glob("*.yaml"))
+        except OSError:
+            continue
+    return sorted(names)
+
+
 def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[str, Any] | None:
     """Load a theme from local .kanban/themes/ or package resources."""
     if theme_name in _theme_cache:
         return _theme_cache[theme_name]
 
-    # Priority 1: Local .kanban/themes/ folder
-    search_paths = []
-    if repo_root:
-        search_paths.append(repo_root / ".kanban" / "themes" / f"{theme_name}.yaml")
-    search_paths.append(Path.cwd() / ".kanban" / "themes" / f"{theme_name}.yaml")
-
-    # Priority 2: sys.prefix share directory (pip installed via Hatchling)
-    import sys
-
-    share_path = Path(sys.prefix) / "share" / "yurtle-kanban" / "themes" / f"{theme_name}.yaml"
-    search_paths.append(share_path)
-
-    # Priority 3: Source directory (development)
-    try:
-        import yurtle_kanban
-
-        package_dir = Path(yurtle_kanban.__file__).parent.parent.parent
-        search_paths.append(package_dir / "themes" / f"{theme_name}.yaml")
-    except Exception:
-        pass
-    search_paths.append(Path(__file__).parent.parent.parent / "themes" / f"{theme_name}.yaml")
-
-    # Try each path
-    for theme_path in search_paths:
+    for theme_dir in _theme_dirs(repo_root):
+        theme_path = theme_dir / f"{theme_name}.yaml"
         try:
             if theme_path.exists():
                 with open(theme_path) as f:
@@ -76,10 +85,20 @@ def _theme_name(data: dict[str, Any], key: str, where: str) -> Any:
     """A theme/preset name: null means the default (#220), an explicit value is
     kept (#241), but an empty or blank one is never a theme, so say so (#256)."""
     value = _or_default(data, key, "software")
-    if isinstance(value, str) and not value.strip():
+    if not isinstance(value, str):
+        # a list or mapping crashed the theme lookup; a number loaded nothing (#272)
+        raise ValueError(
+            f"`{key}`{where} must be a string theme name, got {type(value).__name__} {value!r}"
+        )
+    if not value.strip():
         logger.warning(
             f"config: `{key}` is empty{where}; no theme is loaded "
             "(no WIP limits or workflows). Remove the key for the default."
+        )
+    elif _load_builtin_theme(value) is None:
+        logger.warning(
+            f"config: `{key}`{where} is {value!r}, which is not a known theme; no theme is "
+            f"loaded. Available: {', '.join(_available_themes())}"
         )
     return value
 
