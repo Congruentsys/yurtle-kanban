@@ -342,7 +342,12 @@ class BoardConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
+        """Convert to dictionary for serialization.
+
+        `wip_limits` is written as the user wrote it while that still describes the
+        board, else as changed in code (#420, #428). A raw value that cleans to the
+        same limits as an explicit in-code assignment keeps the raw text; that is
+        harmless, since it loads to the same limits."""
         result = {
             "name": self.name,
             "preset": self.preset,
