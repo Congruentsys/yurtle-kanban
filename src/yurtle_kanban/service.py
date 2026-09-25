@@ -2887,7 +2887,7 @@ class KanbanService:
             check_encodable(field, value)
 
     @staticmethod
-    def _normalize_priority(priority: str | None) -> str | None:
+    def _normalize_priority(priority: object) -> str | None:
         """Lowercase a priority and reject anything outside PRIORITIES (#125).
 
         Every write path (CLI, MCP, hooks, direct callers) goes through the
