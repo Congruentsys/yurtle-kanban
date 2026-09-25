@@ -123,6 +123,14 @@ def _path_safe(value: str) -> str:
     return "_" if value in ("", ".", "..") else value
 
 
+def _text(value: object) -> str:
+    """`str(value)`, or its type name when even that raises (#417)."""
+    try:
+        return str(value)
+    except Exception:
+        return f"<unprintable {type(value).__name__}>"
+
+
 def _describe(value: object) -> str:
     """`repr(value)`, or its type name when even that raises: a warning about a bad
     value must not itself crash (#408)."""
@@ -197,7 +205,7 @@ class HookEngine:
         if self._depth >= self._MAX_HOOK_DEPTH:
             logger.warning(
                 f"Hook depth limit ({self._MAX_HOOK_DEPTH}) reached "
-                f"— skipping {event.value} for {context.item_id}"
+                f"— skipping {event.value} for {_text(context.item_id)}"
             )
             return
 
@@ -229,12 +237,19 @@ class HookEngine:
             for hook_def in matched:
                 actions = hook_def.get("actions", [])
                 for action in actions:
+                    if not isinstance(action, dict):
+                        # a bare string or number in `actions:` isn't an action (#417)
+                        logger.warning(
+                            f"Hook action {_describe(action)} is not a mapping; skipped"
+                        )
+                        continue
                     try:
                         _execute_action(action, context, self._callbacks)
                     except Exception as e:
+                        # every value here is caller-supplied: format it guarded (#417)
                         logger.warning(
-                            f"Hook action {action.get('type', '?')} failed "
-                            f"for {context.item_id}: {e}"
+                            f"Hook action {_text(action.get('type', '?'))} failed "
+                            f"for {_text(context.item_id)}: {_text(e)}"
                         )
         finally:
             self._depth -= 1
