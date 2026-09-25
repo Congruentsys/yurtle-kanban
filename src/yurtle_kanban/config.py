@@ -24,35 +24,44 @@ CONFIG_VERSION_SINGLE = "1.0"
 CONFIG_VERSION_MULTI = "2.0"
 
 
+def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
+    """Where themes are looked up, first match wins: the repo's .kanban/themes/,
+    the cwd's, the pip-installed share directory, then the source tree."""
+    import sys
+
+    dirs = []
+    if repo_root:
+        dirs.append(repo_root / ".kanban" / "themes")
+    dirs.append(Path.cwd() / ".kanban" / "themes")
+    dirs.append(Path(sys.prefix) / "share" / "yurtle-kanban" / "themes")
+    try:
+        import yurtle_kanban
+
+        dirs.append(Path(yurtle_kanban.__file__).parent.parent.parent / "themes")
+    except Exception:
+        pass
+    dirs.append(Path(__file__).parent.parent.parent / "themes")
+    return dirs
+
+
+def _available_themes(repo_root: Path | None = None) -> list[str]:
+    """Every theme name a config could use (#272)."""
+    names = set()
+    for d in _theme_dirs(repo_root):
+        try:
+            names.update(p.stem for p in d.glob("*.yaml"))
+        except OSError:
+            continue
+    return sorted(names)
+
+
 def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[str, Any] | None:
     """Load a theme from local .kanban/themes/ or package resources."""
     if theme_name in _theme_cache:
         return _theme_cache[theme_name]
 
-    # Priority 1: Local .kanban/themes/ folder
-    search_paths = []
-    if repo_root:
-        search_paths.append(repo_root / ".kanban" / "themes" / f"{theme_name}.yaml")
-    search_paths.append(Path.cwd() / ".kanban" / "themes" / f"{theme_name}.yaml")
-
-    # Priority 2: sys.prefix share directory (pip installed via Hatchling)
-    import sys
-
-    share_path = Path(sys.prefix) / "share" / "yurtle-kanban" / "themes" / f"{theme_name}.yaml"
-    search_paths.append(share_path)
-
-    # Priority 3: Source directory (development)
-    try:
-        import yurtle_kanban
-
-        package_dir = Path(yurtle_kanban.__file__).parent.parent.parent
-        search_paths.append(package_dir / "themes" / f"{theme_name}.yaml")
-    except Exception:
-        pass
-    search_paths.append(Path(__file__).parent.parent.parent / "themes" / f"{theme_name}.yaml")
-
-    # Try each path
-    for theme_path in search_paths:
+    for theme_dir in _theme_dirs(repo_root):
+        theme_path = theme_dir / f"{theme_name}.yaml"
         try:
             if theme_path.exists():
                 with open(theme_path) as f:
@@ -72,14 +81,26 @@ def _or_default(data: dict[str, Any], key: str, default: str) -> Any:
     return default if value is None else value
 
 
-def _theme_name(data: dict[str, Any], key: str, where: str) -> Any:
+def _theme_name(
+    data: dict[str, Any], key: str, where: str, repo_root: Path | None = None
+) -> Any:
     """A theme/preset name: null means the default (#220), an explicit value is
     kept (#241), but an empty or blank one is never a theme, so say so (#256)."""
     value = _or_default(data, key, "software")
-    if isinstance(value, str) and not value.strip():
+    if not isinstance(value, str):
+        # a list or mapping crashed the theme lookup; a number loaded nothing (#272)
+        raise ValueError(
+            f"`{key}`{where} must be a string theme name, got {type(value).__name__} {value!r}"
+        )
+    if not value.strip():
         logger.warning(
             f"config: `{key}` is empty{where}; no theme is loaded "
             "(no WIP limits or workflows). Remove the key for the default."
+        )
+    elif _load_builtin_theme(value, repo_root) is None:
+        logger.warning(
+            f"config: `{key}`{where} is {value!r}, which is not a known theme; no theme is "
+            f"loaded. Available: {', '.join(_available_themes(repo_root))}"
         )
     return value
 
@@ -149,7 +170,7 @@ class BoardConfig:
         return _load_builtin_theme(self.preset, repo_root)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "BoardConfig":
+    def from_dict(cls, data: dict[str, Any], repo_root: Path | None = None) -> "BoardConfig":
         """Create BoardConfig from dictionary.
 
         wip_limits can be:
@@ -165,7 +186,9 @@ class BoardConfig:
             # a bare (null) key means its default, like an absent one (#220); an
             # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
             name=_or_default(data, "name", "default"),
-            preset=_theme_name(data, "preset", f" for board {data.get('name')!r}"),
+            preset=_theme_name(
+                data, "preset", f" for board {data.get('name')!r}", repo_root
+            ),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
             scan_paths=data.get("scan_paths") or [],
@@ -275,12 +298,15 @@ class KanbanConfig:
 
         with open(config_path) as f:
             data = yaml.safe_load(f) or {}
+        # themes are looked up in the config's own repo first (`<repo>/.kanban/…`),
+        # whatever the cwd, as the service does (#272)
+        repo_root = config_path.absolute().parent.parent  # as given, like the service
 
         # Check for v2 multi-board config
         version = data.get("version", CONFIG_VERSION_SINGLE)
         # a bare `boards:` is the same as none: fall back to v1 (#204)
         if version == CONFIG_VERSION_MULTI and data.get("boards") is not None:
-            return cls._load_v2(data)
+            return cls._load_v2(data, repo_root)
         dropped = [k for k in ("namespace", "default_board") if data.get(k) is not None]
         if version == CONFIG_VERSION_MULTI and "boards" in data and dropped:
             logger.warning(
@@ -289,10 +315,10 @@ class KanbanConfig:
             )
 
         # Fall back to v1 single-board config
-        return cls._load_v1(data)
+        return cls._load_v1(data, repo_root)
 
     @classmethod
-    def _load_v1(cls, data: dict[str, Any]) -> "KanbanConfig":
+    def _load_v1(cls, data: dict[str, Any], repo_root: Path | None = None) -> "KanbanConfig":
         """Load v1 single-board configuration."""
         # a bare key (YAML null) means empty, never None (#194, #204)
         kanban_data = data.get("kanban", data) or {}
@@ -310,17 +336,19 @@ class KanbanConfig:
 
         return cls(
             version=CONFIG_VERSION_SINGLE,
-            theme=_theme_name(kanban_data, "theme", ""),
+            theme=_theme_name(kanban_data, "theme", "", repo_root),
             paths=paths,
             workflows=kanban_data.get("workflows") or {},
             gates=kanban_data.get("gates") or {},
         )
 
     @classmethod
-    def _load_v2(cls, data: dict[str, Any]) -> "KanbanConfig":
+    def _load_v2(cls, data: dict[str, Any], repo_root: Path | None = None) -> "KanbanConfig":
         """Load v2 multi-board configuration."""
         # a bare `- ` list entry is skipped, not a crash (#220)
-        boards = [BoardConfig.from_dict(b) for b in data.get("boards", []) if b is not None]
+        boards = [
+            BoardConfig.from_dict(b, repo_root) for b in data.get("boards", []) if b is not None
+        ]
 
         # Aggregate scan_paths from all boards for Priority 3 fallback. Ignore
         # patterns stay per board: scan() applies each board's own (#124)

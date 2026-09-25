@@ -122,7 +122,10 @@ def get_service() -> KanbanService:
         try:
             config = KanbanConfig.load(config_path)
         except ValueError as e:  # a config value of the wrong kind (#220)
-            console.print(f"[red]Invalid {safe(config_path)}: {safe(e)}[/red]")
+            # one line: a wrapped path breaks copy-paste and grep (#272)
+            console.print(
+                f"[red]Invalid {safe(config_path)}: {safe(e)}[/red]", soft_wrap=True
+            )
             sys.exit(1)
     else:
         config = KanbanConfig()  # Use defaults
