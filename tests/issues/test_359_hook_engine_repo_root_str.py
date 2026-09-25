@@ -14,8 +14,9 @@ A relative str root resolves against the cwd exactly as a relative `Path` root d
 
 Note: `str / Path` does NOT raise — `Path.__rtruediv__` handles it — so the log and
 shell behaviours already hold today and are pinned here as guards. The red is the
-type the actions see: the engine writes its root into the caller's `HookContext`
-(`trigger` fills `context.repo_root` when it is None), and today that is a `str`.
+type the actions see: a wrapper around the log action records `context.repo_root`
+as the action receives it, and today that is a `str`. (The reds observe the action,
+not the caller's context, which `trigger()` may copy — #357.)
 
 Controls: a `Path` root, a `None` root (cwd behaviour), and `config_path` given as a
 str, a `Path`, `None` or `""` are unchanged.
@@ -28,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from yurtle_kanban import HookEngine
+from yurtle_kanban import hooks as hooks_mod
 from yurtle_kanban.hooks import HookContext, HookEvent
 
 
@@ -82,32 +84,50 @@ def _assert_cwd_untouched(elsewhere: Path) -> None:
 # --- red: the actions see a Path ---------------------------------------------------
 
 
-def test_str_root_context_repo_root_is_path(
+def _record_action_roots(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Wrap the log action so each call records the `repo_root` the action sees.
+
+    Observes the action, not the caller's context, so it holds whether or not
+    `trigger()` works on a copy of the context (#357).
+    """
+    seen: list[object] = []
+    original = hooks_mod._action_log
+
+    def recording(action: dict, context: HookContext) -> None:
+        seen.append(context.repo_root)
+        original(action, context)
+
+    monkeypatch.setattr(hooks_mod, "_action_log", recording)
+    return seen
+
+
+def test_str_root_action_sees_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo, elsewhere, hooks = _setup(tmp_path, LOG_DEFAULT)
     engine = HookEngine(hooks, repo_root=str(repo))
+    seen = _record_action_roots(monkeypatch)
     monkeypatch.chdir(elsewhere)
-    ctx = _fire(engine)
-    assert (repo / ".kanban" / "hooks.log").is_file()  # sanity: the hook fired
-    assert isinstance(ctx.repo_root, Path), (
-        f"actions saw repo_root as {type(ctx.repo_root).__name__}"
-    )
-    assert ctx.repo_root == repo
+    _fire(engine)
+    assert len(seen) == 1, f"log action ran {len(seen)} times"  # sanity: it fired
+    assert (repo / ".kanban" / "hooks.log").is_file()  # sanity: and wrote
+    assert isinstance(seen[0], Path), f"action saw repo_root as {type(seen[0]).__name__}"
+    assert seen[0] == Path(str(repo))
 
 
-def test_relative_str_root_context_repo_root_matches_path_root(
+def test_relative_str_root_action_sees_same_path_as_path_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, _, hooks = _setup(tmp_path, LOG_DEFAULT)
+    seen = _record_action_roots(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    via_path = _fire(HookEngine(hooks, repo_root=Path("repo")))
-    via_str = _fire(HookEngine(hooks, repo_root="repo"))
-    assert isinstance(via_path.repo_root, Path)  # sanity: the Path baseline
-    assert isinstance(via_str.repo_root, Path), (
-        f"actions saw repo_root as {type(via_str.repo_root).__name__}"
-    )
-    assert via_str.repo_root == via_path.repo_root
+    _fire(HookEngine(hooks, repo_root=Path("repo")))
+    _fire(HookEngine(hooks, repo_root="repo"))
+    assert len(seen) == 2, f"log action ran {len(seen)} times"  # sanity: both fired
+    via_path, via_str = seen
+    assert isinstance(via_path, Path)  # sanity: the Path baseline
+    assert isinstance(via_str, Path), f"action saw repo_root as {type(via_str).__name__}"
+    assert via_str == via_path
 
 
 # --- guards: str root behaves like a Path root (green today via __rtruediv__) -------
@@ -180,11 +200,12 @@ def test_relative_str_root_matches_relative_path_root(
 def test_path_root_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, elsewhere, hooks = _setup(tmp_path, LOG_DEFAULT)
     engine = HookEngine(hooks, repo_root=repo)
+    seen = _record_action_roots(monkeypatch)
     monkeypatch.chdir(elsewhere)
-    ctx = _fire(engine)
+    _fire(engine)
     assert (repo / ".kanban" / "hooks.log").is_file()
-    assert isinstance(ctx.repo_root, Path)
-    assert ctx.repo_root == repo
+    assert seen == [repo]
+    assert isinstance(seen[0], Path)
     _assert_cwd_untouched(elsewhere)
 
 
@@ -193,9 +214,10 @@ def test_none_root_stays_cwd_relative(
 ) -> None:
     repo, elsewhere, hooks = _setup(tmp_path, LOG_DEFAULT)
     engine = HookEngine(hooks, repo_root=None)
+    seen = _record_action_roots(monkeypatch)
     monkeypatch.chdir(elsewhere)
-    ctx = _fire(engine)
-    assert ctx.repo_root is None
+    _fire(engine)
+    assert seen == [None]
     assert (elsewhere / ".kanban" / "hooks.log").is_file()
     assert not (repo / ".kanban").exists()
 
