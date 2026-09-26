@@ -513,6 +513,13 @@ def _mention_lines():
         ("pip index versions yurtle-kanban-extra", False),
         # #516: prose on an allow-listed line must not hide a command mention
         ("allowed-tools: Bash(yurtle-kanban *) — then yurtle-kanban move X done", False),
+        # #516 round 2: a greedy `.*` would cut prose out along with the glob
+        ("allowed-tools: see yurtle-kanban move X done, Bash(yurtle-kanban *)", False),
+        (
+            "allowed-tools: Bash(yurtle-kanban *) then yurtle-kanban move X done"
+            " Bash(yurtle-kanban *)",
+            False,
+        ),
         ("pip index versions yurtle-kanban 2>/dev/null   # or yurtle-kanban list", False),
         ("## yurtle-kanban HDD Board: run yurtle-kanban hdd validate", False),
         ("## yurtle-kanban HDD Board", True),
