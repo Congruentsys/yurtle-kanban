@@ -25,7 +25,14 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 # `git push [flags] <remote> main` — the thing forbidden. `--force-with-lease origin
 # <branch>` is fine, so the branch name is what decides, not the flags.
-PUSH_TO_MAIN = re.compile(r"^\s*\$?\s*git\s+push\b(?![^\n]*--dry-run)[^\n]*\bmain\b\s*$")
+# `main` must be a whole refspec TOKEN (#88): preceded by whitespace, `:` or `+`
+# (optionally via `refs/heads/`), and followed by whitespace, end of line, a comment
+# or a shell operator — never by `/`, `-` or `:`. Only the part of the line before a
+# `#` comment counts, so `main` mentioned in a comment is not a push.
+PUSH_TO_MAIN = re.compile(
+    r"^\s*\$?\s*git\s+push\b(?![^#\n]*--dry-run)"
+    r"[^#\n]*(?<=[\s:+])(?:refs/heads/)?main(?=[\s#;&|]|$)"
+)
 
 # `git checkout main` immediately preceding a merge is the other half of the recipe:
 # it is how you end up ON main with something to push.
