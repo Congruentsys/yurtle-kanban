@@ -454,14 +454,17 @@ class KanbanService:
         """Get board-specific state transitions.
 
         Returns the transitions dict from the board's theme, or None
-        if not defined.
+        if not defined. Every entry is a list of status names, whichever way the
+        theme dict arrived, so `move` and the offer agree (#474, #480).
         """
         if theme is None:
             theme = self._load_board_theme(board_config)
         if not theme or "transitions" not in theme:
             return None
 
-        return theme["transitions"]
+        from .config import _clean_transitions
+
+        return _clean_transitions(theme["transitions"], "theme")
 
     def scan(self) -> list[WorkItem]:
         """Scan configured paths for work items."""
