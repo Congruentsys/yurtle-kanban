@@ -57,6 +57,9 @@ from yurtle_kanban.indexer import WorkItemIndexer
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 from yurtle_kanban.query import ITEM, KB, QueryEngine, UnifiedGraph
 
+# WorkItemIndexer is deprecated (#434); these tests still pin its behaviour.
+pytestmark = pytest.mark.filterwarnings("ignore:WorkItemIndexer:DeprecationWarning")
+
 _PLAIN_KEYS = frozenset(vars(Graph()))
 
 
