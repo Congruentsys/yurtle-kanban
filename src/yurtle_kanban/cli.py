@@ -641,7 +641,9 @@ def move(
             skip_gates=skip_gates or force,
             gate_context=gate_context,
         )
-        console.print(f"[green]Moved {escape(item.id)} to {status.value}[/green]")
+        # named the way the item's theme names it (hdd `active`) (#448)
+        moved_to = safe(service.status_label(item))
+        console.print(f"[green]Moved {escape(item.id)} to {moved_to}[/green]")
         if assign:
             console.print(f"  Assigned to: {escape(assign)}")
     except ValueError as e:
@@ -696,7 +698,7 @@ def show(item_id: str, as_json: bool):
     if as_json:
         click.echo(json.dumps(item.to_dict(), indent=2))
     else:
-        render_item_detail(item, console)
+        render_item_detail(item, console, status_label=service.status_label)
 
 
 @main.command()
@@ -987,11 +989,13 @@ def roadmap(
             lines.append(
                 f"{i}. **{item.id}**: {item.title} "
                 f"[{priority}]{rank_str} "
-                f"({item.status.value}) @{assignee}"
+                f"({service.status_label(item)}) @{assignee}"
             )
         click.echo("\n".join(lines))
     else:
-        render_roadmap(items, console, by_type=by_type, ranked=ranked)
+        render_roadmap(
+            items, console, by_type=by_type, ranked=ranked, status_label=service.status_label
+        )
 
 
 @main.command()
@@ -1023,7 +1027,7 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
             console.print(f"  Value: {escape(summary)}")
         if item.priority:
             console.print(f"  Priority: {escape(str(item.priority))}")
-        console.print(f"  Status: {item.status.value}")
+        console.print(f"  Status: {safe(service.status_label(item))}")
     except ValueError as e:
         console.print(f"[red]{safe(e)}[/red]")
         sys.exit(1)
@@ -1107,7 +1111,7 @@ def next_item(assignee: str | None):
         return
 
     console.print("[bold]Suggested next item:[/bold]")
-    render_item_detail(item, console)
+    render_item_detail(item, console, status_label=service.status_label)
 
 
 @main.command()
@@ -1547,7 +1551,7 @@ def query(
             table.add_column("Title")
             for hit in hits:
                 title = hit.item.title if hit.item else ""
-                status = hit.item.status.value if hit.item else ""
+                status = escape(service.status_label(hit.item)) if hit.item else ""
                 table.add_row(escape(hit.item_id), f"{hit.score:.4f}", status, escape(title))
             console.print(table)
         return
@@ -1630,7 +1634,11 @@ def query(
         table.add_column("Title")
 
         for r in results:
-            row = [escape(r.item.id), r.item.status.value, escape(r.item.priority or "")]
+            row = [
+                escape(r.item.id),
+                escape(service.status_label(r.item)),  # theme's name (#448)
+                escape(r.item.priority or ""),
+            ]
             if has_semantic:
                 row.append(f"{r.combined_score:.3f}")
             row.append(escape(r.item.title))

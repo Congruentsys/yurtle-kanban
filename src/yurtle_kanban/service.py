@@ -466,6 +466,7 @@ class KanbanService:
         """Scan configured paths for work items."""
         self._items.clear()
         self.parse_warnings = []
+        self.__dict__.pop("_status_names_cache", None)  # themes may have changed (#448)
 
         if self.config.is_multi_board:
             # Each board applies its OWN ignore patterns to its own path, exactly
@@ -626,7 +627,7 @@ class KanbanService:
                 status = WorkItemStatus.from_string(status_str)
             except ValueError:
                 # Try theme mapping
-                status = self._map_theme_status(status_str)
+                status = self._map_theme_status(status_str, file_path)
                 if not status:
                     status = WorkItemStatus.BACKLOG
 
@@ -950,8 +951,11 @@ class KanbanService:
                     return mapping.get(type_id, WorkItemType.TASK)
         return None
 
-    def _map_theme_status(self, status_str: str) -> WorkItemStatus | None:
-        """Map theme-specific status to standard status."""
+    def _map_theme_status(
+        self, status_str: str, file_path: Path | None = None
+    ) -> WorkItemStatus | None:
+        """Map theme-specific status to standard status: the item's own board's
+        theme first (#439, #448), then the common aliases below."""
         # Common status mappings across themes
         mapping = {
             # Nautical theme
@@ -972,24 +976,46 @@ class KanbanService:
             "implementing": WorkItemStatus.IN_PROGRESS,
             "accepted": WorkItemStatus.DONE,
         }
-        # a configured theme's own names first (hdd `abandoned` is blocked): `move`
-        # and `create` write them, so a scan must read them back (#439)
-        for theme in self._configured_themes():
-            for native, canonical in (theme.get("status_mappings") or {}).items():
-                if str(native).lower() == status_str.lower():
-                    try:
-                        return WorkItemStatus.from_string(str(canonical))
-                    except ValueError:
-                        pass
-        return mapping.get(status_str.lower())
+        # the item's theme's own names (hdd `abandoned` is blocked): `move` and
+        # `create` write them, so a scan must read them back (#439) — through the
+        # item's own board, so two themes can give one name different meanings (#448)
+        found = self._theme_status_names(file_path).get(status_str.lower())
+        return found if found is not None else mapping.get(status_str.lower())
 
-    def _configured_themes(self) -> list[dict]:
-        """The single board's theme, or every board's preset theme (#439)."""
-        if self.config.is_multi_board:
-            themes = [self._load_board_theme(board) for board in self.config.boards]
+    def _single_board_theme(self) -> dict | None:
+        """The configured theme, looked up once until the next scan (#448)."""
+        cache = self.__dict__.setdefault("_status_names_cache", {})
+        if "__theme__" not in cache:
+            cache["__theme__"] = self.config.get_theme()
+        return cache["__theme__"]
+
+    def _theme_status_names(self, file_path: Path | None) -> dict[str, WorkItemStatus]:
+        """native name → status for the theme of the board `file_path` is on (the
+        single board's theme without boards; every board's, first wins, when the
+        board is unknown). Memoised per board until the next scan (#448)."""
+        board = None
+        if self.config.is_multi_board and file_path is not None:
+            board = self.config.get_board_for_path(file_path, self.repo_root)
+        key = board.name if board else None
+        cache = self.__dict__.setdefault("_status_names_cache", {})
+        if key in cache:
+            return cache[key]
+        if board is not None:
+            themes = [self._load_board_theme(board)]
+        elif self.config.is_multi_board:
+            themes = [self._load_board_theme(b) for b in self.config.boards]
         else:
-            themes = [self.config.get_theme()]
-        return [theme for theme in themes if theme]
+            themes = [self._single_board_theme()]
+        names: dict[str, WorkItemStatus] = {}
+        for theme in themes:
+            for native, canonical in ((theme or {}).get("status_mappings") or {}).items():
+                try:
+                    status = WorkItemStatus.from_string(str(canonical))
+                except ValueError:
+                    continue
+                names.setdefault(str(native).lower(), status)
+        cache[key] = names
+        return names
 
     def get_board(self, board_name: str | None = None) -> Board:
         """Get the kanban board with all items.
@@ -1411,7 +1437,7 @@ class KanbanService:
             )
             root = board_root.path if board_root else "work/"
         else:
-            theme = self.config.get_theme()
+            theme = self._single_board_theme()
             if theme and "item_types" in theme:
                 type_def = theme["item_types"].get(item_type.value, {})
                 if "path" in type_def:
