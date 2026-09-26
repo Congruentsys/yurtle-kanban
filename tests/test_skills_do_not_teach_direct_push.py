@@ -57,6 +57,11 @@ CHECKOUT_MAIN = re.compile(r"^\s*\$?\s*git\s+checkout\s+main\s*$")
 MERGE = re.compile(r"^\s*\$?\s*git\s+merge\b")
 
 
+def refuses_push_to_main(line: str) -> bool:
+    """The guard applied to one skill line."""
+    return bool(PUSH_TO_MAIN.match(line))
+
+
 # Self-tests of the guard itself (#88). A guard that silently misses a form is worse
 # than none: it certifies the skills clean. `main` must be matched as a whole refspec
 # TOKEN, not as a word anywhere on the line — `feature/main-thing` has word boundaries
@@ -142,12 +147,54 @@ PUSH_TO_MAIN_CASES = [
     ("git --work-tree dir push origin main", True),
     ("git --git-dir=.git --work-tree dir -C sub push origin main", True),
     ("git --git-dir .git push origin feature/x", False),
+    # #472: a push chained after another command is still a push — every `&&`, `||`,
+    # `;`, `|` and `&` segment is a command of its own
+    ("cd x && git push origin main", True),
+    ('cd "$WORKTREE" && git push origin main', True),
+    ("git fetch origin && git push origin main", True),
+    ("git commit -m wip; git push origin main", True),
+    ("git commit -m wip ; git push origin main", True),
+    ("false || git push origin main", True),
+    ("yes | git push origin main", True),
+    ("sleep 1 & git push origin main", True),
+    ("git add -A && git commit -m x && git push -u origin main", True),
+    ("- `cd x && git push origin main`", True),
+    ("$ cd x && git push origin HEAD:main", True),
+    ("(cd x && git push origin main)", True),
+    # #472: command prefixes that still run the push
+    ("sudo git push origin main", True),
+    ("sudo -u deploy git push origin main", True),
+    ("env git push origin main", True),
+    ("env -i PATH=/usr/bin git push origin main", True),
+    ("GIT_TRACE=1 git push origin main", True),
+    ("GIT_TRACE=1 GIT_CURL_VERBOSE=1 git push origin main", True),
+    ("GIT_SSH_COMMAND='ssh -i key' git push origin main", True),
+    ("cd x && sudo git push origin main", True),
+    # #472: `-n` as the VALUE of `-o` / `--push-option` is not a dry run
+    ("git push -o -n origin main", True),
+    ("git push --push-option -n origin main", True),
+    # controls — chained, prefixed or optioned, but not a push to main
+    ("cd x && git push origin feat-branch", False),
+    ("git fetch origin main && git push origin feature/x", False),
+    ("git checkout main && git pull", False),
+    ("git pull origin main; git push origin HEAD", False),
+    ("sudo git push origin feature/x", False),
+    ("GIT_TRACE=1 git push origin feature/x", False),
+    ("git push -o ci.skip origin feat", False),
+    ("git push --push-option=ci.skip origin feat", False),
+    ("cd x && git push --dry-run origin main", False),
+    ("cd x && git push -n origin main", False),
+    ("git push -o ci.skip -n origin main", False),
+    ("echo git push origin main", False),
+    ("git log --oneline | grep main", False),
+    ("git push origin feature/x  # then && git push origin main", False),
+    ("we never git push to main; ever", False),
 ]
 
 
 @pytest.mark.parametrize("line,refused", PUSH_TO_MAIN_CASES, ids=[c[0] for c in PUSH_TO_MAIN_CASES])
 def test_push_to_main_guard_table(line, refused):
-    assert bool(PUSH_TO_MAIN.match(line)) is refused, (
+    assert refuses_push_to_main(line) is refused, (
         f"PUSH_TO_MAIN {'missed' if refused else 'falsely refused'}: {line!r}"
     )
 
@@ -170,13 +217,26 @@ ADVERSARIAL_LINES = [
     "1" * 5000 + " git push origin feature/x",
     "git push -" + "n" * 5000 + "1 origin main",
     "git push -" + "n" * 5000 + "- origin feature",
+    # #472: long chains, prefix runs and option-value runs
+    "cd x && " * 2000 + "git push origin feature/x",
+    ";" * 5000 + "git push origin feature/x",
+    "|" * 5000 + " git pull",
+    "sudo " * 2000 + "git pull",
+    "A=b " * 2000 + "git pull",
+    "env " + "-u x " * 2000 + "git pull",
+    "sudo " + "-u -u " * 2000 + "git pull",
+    "A='" + "x " * 2000 + "git pull",
+    "git push " + "-o -n " * 2000 + "origin feature/x",
+    "(" * 5000 + "git pull",
 ]
 
+# The child imports the guard FUNCTION (#472), so line splitting is timed too.
 _TIMED_MATCH = (
-    "import re, sys, time\n"
-    "rx = re.compile(sys.argv[1])\n"
+    "import sys, time\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from test_skills_do_not_teach_direct_push import refuses_push_to_main\n"
     "t = time.perf_counter()\n"
-    "rx.match(sys.argv[2])\n"
+    "refuses_push_to_main(sys.argv[2])\n"
     "print(time.perf_counter() - t)\n"
 )
 
@@ -187,7 +247,7 @@ _TIMED_MATCH = (
 def test_push_to_main_guard_is_linear(line):
     try:
         out = subprocess.run(
-            [sys.executable, "-c", _TIMED_MATCH, PUSH_TO_MAIN.pattern, line],
+            [sys.executable, "-c", _TIMED_MATCH, str(Path(__file__).resolve().parent), line],
             capture_output=True,
             text=True,
             timeout=5,
@@ -219,7 +279,7 @@ def test_skill_does_not_push_to_main(path):
     offenders = [
         (n, line.strip())
         for n, line in enumerate(path.read_text().splitlines(), start=1)
-        if PUSH_TO_MAIN.match(line)
+        if refuses_push_to_main(line)
     ]
     assert not offenders, (
         f"{path.relative_to(SKILLS_DIR.parent)} teaches a push to main: "
