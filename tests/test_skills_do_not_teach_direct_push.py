@@ -43,12 +43,25 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # it belongs to THIS command, i.e. before any `;`, `&` or `|`.
 # The cluster is read ONCE — "has an `n`" is a lookahead, then `[A-Za-z]+` takes the
 # whole run — so `-nnnn…1` is linear (round 3: `[A-Za-z]*n[A-Za-z]*` split it k ways).
+# #472: this matches ONE shell segment; `refuses_push_to_main` splits the line on
+# `&&`, `||`, `;`, `|` and `&` first, so a push chained after `cd x &&` is checked.
+# A segment may open a subshell `(`, and the command may sit behind `sudo`/`env`
+# (with options) and `KEY=val` assignments — each prefix token starts differently
+# (a word, a dash, `NAME=`), so the prefix group has one parse and stays linear.
+# `-n` right after `-o`/`--push-option` is that option's VALUE, not a dry run.
+_CMD_PREFIX = (
+    r"(?:(?:sudo|env)\s+(?:(?:(?:-u|--user|-C|--chdir)\s+[^\s-]\S*"
+    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
+    r"|[A-Za-z_]\w*=(?:'[^']*'|\"[^\"]*\"|[^\s'\"]\S*|)\s+)*"
+)
 PUSH_TO_MAIN = re.compile(
-    r"^\s*(?:(?:[-*>`$]|\d+[.)])\s*)*"
-    r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
+    + _CMD_PREFIX
+    + r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*push\b"
-    r"(?![^#;&|\n]*(?:--dry-run|\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
-    r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`]|$)"
+    r"(?![^#;&|\n]*(?:--dry-run"
+    r"|(?<!\s-o)(?<!--push-option)\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
+    r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
 )
 
 # `git checkout main` immediately preceding a merge is the other half of the recipe:
@@ -57,9 +70,15 @@ CHECKOUT_MAIN = re.compile(r"^\s*\$?\s*git\s+checkout\s+main\s*$")
 MERGE = re.compile(r"^\s*\$?\s*git\s+merge\b")
 
 
+# A shell comment starts at a word boundary: `main#x` is still a word, `x # y` is not.
+_COMMENT = re.compile(r"(?<!\S)#")
+_SEGMENT_SEP = re.compile(r"&&|\|\||[;&|]")
+
+
 def refuses_push_to_main(line: str) -> bool:
-    """The guard applied to one skill line."""
-    return bool(PUSH_TO_MAIN.match(line))
+    """The guard applied to one skill line: any shell segment that pushes to main."""
+    code = _COMMENT.split(line, maxsplit=1)[0]
+    return any(PUSH_TO_MAIN.match(seg) for seg in _SEGMENT_SEP.split(code))
 
 
 # Self-tests of the guard itself (#88). A guard that silently misses a form is worse
