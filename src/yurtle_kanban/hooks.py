@@ -148,12 +148,6 @@ def _clean_hooks(raw: Any, path: Path) -> dict[str, list[dict]]:
             continue
         if hook_list is None:
             continue
-        if event in _NOT_EMITTED and hook_list:
-            # kept, so they run once the event is wired, but not silently dead (#440)
-            logger.warning(
-                f"{path}: `{event}` hooks are declared, but yurtle-kanban doesn't emit "
-                "this event yet; they won't run"
-            )
         if not isinstance(hook_list, list):
             logger.warning(
                 f"{path}: hooks for `{_text(event)}` are not a list "
@@ -167,6 +161,13 @@ def _clean_hooks(raw: Any, path: Path) -> dict[str, list[dict]]:
                 logger.warning(f"{path}: `{_text(event)}` hook {n}: {problem}; ignored")
                 continue
             kept.append(hook_def)
+        if event in _NOT_EMITTED and kept:
+            # kept, so they run once the event is wired, but not silently dead; only
+            # for hooks that survived the shape checks (#440, #446)
+            logger.warning(
+                f"{path}: `{event}` hooks are declared, but yurtle-kanban doesn't emit "
+                "this event yet; they won't run"
+            )
         cleaned[event] = kept
     return cleaned
 
