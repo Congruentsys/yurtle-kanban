@@ -420,6 +420,19 @@ def _verdict(line):
         ("yurtle-kanban hdd -- --quiet", "`yurtle-kanban hdd --quiet` is not a subcommand"),
         ("yurtle-kanban hdd -- --quiet --help", None),
         ("yurtle-kanban hdd --quiet validate", None),
+        # #525: click reads any `-<char>` word as an option, digits included, so a
+        # negative number is "No such option" unless it comes after `--` or is an
+        # option's value; a bare `-` is an argument
+        ("yurtle-kanban history -1", "`-1` is not accepted by `yurtle-kanban history`"),
+        ("yurtle-kanban rank EXP-1 -1", "`-1` is not accepted by `yurtle-kanban rank`"),
+        ("yurtle-kanban -1", "`-1` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban hdd -1", "`-1` is not accepted by `yurtle-kanban hdd`"),
+        ("yurtle-kanban -- -1", "`-1` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban rank EXP-1 -- -1", None),
+        ("yurtle-kanban history --since -5", None),
+        ("yurtle-kanban history --since=-5", None),
+        ("yurtle-kanban show -", None),
+        ("yurtle-kanban -- --", "`yurtle-kanban --` is not a subcommand"),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
@@ -529,12 +542,34 @@ def test_allow_list_is_anchored(text, allowed):
     assert _allow_listed(text) is allowed
 
 
+def _blind_message(where, text):
+    """One line of the mention test's failure message."""
+    return f"{where}: {text.strip()}"
+
+
+@pytest.mark.parametrize(
+    "text,hint",
+    [
+        # #525: the glob is allow-listed only when it comes first; say so
+        ("allowed-tools: Read, Bash(yurtle-kanban *)", True),
+        ("allowed-tools: see yurtle-kanban move X done, Bash(yurtle-kanban *)", True),
+        # glob first, but prose after it: the prose is the problem, not the order
+        ("allowed-tools: Bash(yurtle-kanban *) then yurtle-kanban move X done", False),
+        ("Then run yurtle-kanban move X done", False),
+    ],
+)
+def test_blind_message_says_the_glob_must_come_first(text, hint):
+    message = _blind_message("skills/x/SKILL.md:5", text)
+    assert message.startswith(f"skills/x/SKILL.md:5: {text}")
+    assert ("must come first" in message) is hint
+
+
 def test_every_mention_parses_or_is_allow_listed():
     """No silent skips: a line naming yurtle-kanban is checked, or says why not."""
     mentions = _mention_lines()
     assert len(mentions) >= 100, f"only {len(mentions)} mentions — MENTION is broken"
     blind = [
-        f"{where}: {text.strip()}"
+        _blind_message(where, text)
         for where, text in mentions
         if not _commands_in(text) and not _allow_listed(text)
     ]
