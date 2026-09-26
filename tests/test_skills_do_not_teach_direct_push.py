@@ -144,10 +144,24 @@ _PULL_FLAGS = (
     + r"(?![\w=-]))--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
 )
 _RESET_MODE = r"--(?:hard|soft|keep|merge)(?![\w-])"
+# #543: `am`'s arguments are walked token by token like a push's (quoted strings are
+# one token), and the long options that take a separate value swallow it — so
+# `--resolvemsg 'see --continue'` is no resume. In a short cluster `S`, `C` and `p`
+# take the REST as their value, so a cluster resumes only if its `r` comes first
+# (`-3r`, `-rS`; not `-Sr`). An abbreviated flag (`--cont`) is not recognised, so
+# that `am` is refused — the safe direction.
+_AM_OPT_WITH_VALUE = (
+    r"--(?:resolvemsg|directory|exclude|include|whitespace|patch-format|quoted-cr|empty)(?!\S)"
+)
+_AM_RESUME = (
+    r"(?:--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)"
+    r"|-(?=[A-BD-RT-Za-oq-z0-9]*r)[A-Za-z0-9]+)(?![\w-])"
+)
 # #529: a reset onto the upstream (`@{u}`, `@{upstream}`, `FETCH_HEAD`) is a sync, like
 # `origin/main`; onto `HEAD`, `@`, `ORIG_HEAD` or an ancestor of them (`HEAD~2^`) it is
 # local cleanup. Neither lands work on main. #536: `@{push}` and `<remote>/HEAD`
-# (`origin/HEAD`, `refs/remotes/origin/HEAD`) are the upstream too.
+# (`origin/HEAD`, `refs/remotes/origin/HEAD`) are the upstream too. #543: ANY
+# `<x>/HEAD` is read as a remote's HEAD — `feat/HEAD` included — and so as a sync.
 _RESET_NOT_LANDING = (
     r"(?!['\"]?(?:(?:HEAD|ORIG_HEAD|@)(?:[~^]\d*)*|FETCH_HEAD|@\{(?:u|upstream|push)\}"
     r"|(?:refs/remotes/)?[\w.-]+/HEAD)"
@@ -192,8 +206,17 @@ LANDS = re.compile(
     + _RESET_NOT_LANDING
     + r"['\"]?[^\s'\"`)-]"
     + r"|am(?![\w-])"
-    + r"(?!(?:\s+\S+)*?\s+(?:--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)"
-    + r"|-(?=[A-Za-z0-9]*r)[A-Za-z0-9]+)(?![\w-])))"
+    + r"(?!(?:\s+(?:"
+    + _AM_OPT_WITH_VALUE
+    + r"\s+"
+    + _TOKEN
+    + r"|(?!"
+    + _AM_OPT_WITH_VALUE
+    + r")"
+    + _TOKEN
+    + r"))*?\s+"
+    + _AM_RESUME
+    + r"))"
 )
 UPDATE_REF_MAIN = re.compile(
     _LEAD
