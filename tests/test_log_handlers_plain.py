@@ -13,11 +13,22 @@ every dynamic path. These shapes are known misses, and we don't chase them:
 - `object.__setattr__(h, 'markup', _)` and `builtins.setattr(h, 'markup', _)`;
 - `setattr(h, k, _)` where `k` is a variable holding `'markup'`;
 - `h.__dict__.update(markup=_)`.
-src has none of them today. The backstop is the runtime check
-(`test_no_markup_rich_handler_installed_after_import`): whatever path turned
-markup on, a markup-enabled RichHandler attached to the root or a
-`yurtle-kanban*` logger at import still fails it. Each gap is pinned below as a
-strict xfail, so closing one later is noticed and the xfail is removed.
+src has none of them today. Each gap is pinned below as a strict xfail, so
+closing one later is noticed and the xfail is removed.
+
+What backstops them differs:
+- The four attribute gaps (`object.__setattr__`, `builtins.setattr`, `setattr`
+  with a variable key, `__dict__.update`) turn markup on in the handler itself.
+  The runtime check (`test_no_markup_rich_handler_installed_after_import`)
+  catches that, but only for a handler attached to the root or a
+  `yurtle-kanban*` logger by the time the package is imported. One switched on
+  inside a command body, after import, is not seen.
+- The two `extra=` gaps are NOT backstopped. Rich lets the record override the
+  handler (`getattr(record, "markup", self.markup)`), so a `RichHandler(markup=False)`
+  still renders markup for a record carrying `markup=True`, and the runtime check
+  sees nothing (pinned by `test_record_markup_overrides_a_markup_false_handler`).
+  Today the only protection is that src has no RichHandler reference at all. If a
+  `markup=False` handler is ever added to src, these gaps are live.
 """
 
 from __future__ import annotations
@@ -237,6 +248,36 @@ def test_accepted_gap_is_still_missed(source: str) -> None:
     """Pins a known miss (#530): if the checker starts flagging this shape, the
     strict xfail turns into a failure, so move the row to the flagged list."""
     assert rich_handler_violations(source, "planted.py")
+
+
+def test_record_markup_overrides_a_markup_false_handler() -> None:
+    """Why the `extra=` gaps have no runtime backstop (#530): a record carrying
+    `markup=True` gets markup rendered even by a `RichHandler(markup=False)`, and
+    `_markup_rich_handlers()` doesn't report that handler. If Rich ever stops
+    letting the record win, this fails; then revisit the module docstring."""
+    rich_logging = pytest.importorskip("rich.logging")
+    from rich.console import Console
+
+    out = io.StringIO()
+    handler = rich_logging.RichHandler(
+        markup=False,
+        console=Console(file=out, width=200, color_system=None),
+        show_time=False,
+        show_path=False,
+    )
+    logger = logging.getLogger(f"{PREFIX}.test530")
+    logger.addHandler(handler)
+    logger.propagate = False
+    try:
+        logger.warning("plain [bold]x[/bold]")
+        logger.warning("rich [bold]y[/bold]", extra=dict(markup=True))
+        assert _markup_rich_handlers() == []
+    finally:
+        logger.removeHandler(handler)
+        logger.propagate = True
+    text = out.getvalue()
+    assert "plain [bold]x[/bold]" in text  # the handler alone leaves markup literal
+    assert "rich y" in text and "[bold]y" not in text  # the record's markup=True wins
 
 
 def test_checker_flags_a_planted_module_file(tmp_path: Path) -> None:
