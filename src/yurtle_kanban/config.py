@@ -108,7 +108,16 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
         allowed = transitions[status]
         if isinstance(allowed, str):
             transitions[status] = [allowed]
-        elif not isinstance(allowed, list):
+        elif isinstance(allowed, list):
+            names = [name for name in allowed if isinstance(name, str)]
+            if len(names) != len(allowed):
+                # a number or mapping in the list is no status name (#461)
+                transitions[status] = names
+                logger.warning(
+                    f"theme file {theme_path}: `transitions.{status}` has entries that "
+                    "aren't status names; they are ignored"
+                )
+        else:
             transitions.pop(status)
             logger.warning(
                 f"theme file {theme_path}: `transitions.{status}` is not a list "
