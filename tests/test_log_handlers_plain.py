@@ -74,6 +74,14 @@ def rich_handler_violations(source: str, filename: str = "<string>") -> list[str
         "from rich.logging import RichHandler\nflag = False\nh = RichHandler(markup=flag)\n",
         "import logging\nfrom rich.logging import RichHandler\n"
         "logging.basicConfig(handlers=[RichHandler(markup=True)])\n",
+        # #518: any other reference to RichHandler, not just a call
+        "import logging.config\nlogging.config.dictConfig({'version': 1, 'handlers': "
+        "{'h': {'class': 'rich.logging.RichHandler'}}})\n",
+        "from rich.logging import RichHandler\nhandler_cls = RichHandler\n",
+        "import rich.logging\nh = getattr(rich.logging, 'RichHandler')()\n",
+        "import rich.logging\nhandler_cls = rich.logging.RichHandler\n",
+        # #518: per-record markup via `extra`
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra={'markup': True})\n",
     ],
 )
 def test_checker_flags_markup_capable_rich_handler(source: str) -> None:
