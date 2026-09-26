@@ -230,12 +230,14 @@ kanban:
       - "kanban-work/issues/"
       - "kanban-work/tasks/"
       - "kanban-work/ideas/"
-
-  ignore:
-    - "**/archive/**"
-    - "**/templates/**"
-    - "**/_TEMPLATE*"
+    ignore:
+      - "**/archive/**"
+      - "**/templates/**"
+      - "**/_TEMPLATE*"
 ```
+
+`ignore` and `scan_paths` belong under `paths:`. A copy directly under `kanban:`, as older
+examples showed, is still read when `paths:` doesn't set that key (#482).
 
 On a single board, the **type folders under its root are always part of the board**, whatever
 `scan_paths` lists. By default `create` puts each type in its own folder, `<root>/<plural>/`

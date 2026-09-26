@@ -528,7 +528,18 @@ class KanbanConfig:
         # a bare key (YAML null) means empty, never None (#194, #204)
         kanban_data = data.get("kanban", data) or {}
 
-        paths_data = kanban_data.get("paths") or {}
+        paths_data = dict(kanban_data.get("paths") or {})
+        # README long showed `ignore:` (and consumers wrote `scan_paths:`) beside
+        # `paths:`, not in it: read them there too; `paths.*` wins (#482)
+        for key in ("ignore", "scan_paths"):
+            if key not in kanban_data:
+                continue
+            if key in paths_data:
+                logger.warning(
+                    f"config: `kanban.{key}` is ignored because `kanban.paths.{key}` is set"
+                )
+            else:
+                paths_data[key] = kanban_data[key]
         paths = PathConfig(
             root=_or_default(paths_data, "root", "work/"),
             scan_paths=paths_data.get("scan_paths") or [],
