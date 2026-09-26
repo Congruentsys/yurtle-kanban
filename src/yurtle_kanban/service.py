@@ -15,6 +15,8 @@ import logging
 import os
 import re
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -467,16 +469,25 @@ class KanbanService:
 
     def scan(self) -> list[WorkItem]:
         """Scan configured paths for work items."""
-        self._scanning = True  # theme lookups use the scan's memo (#448, #454)
-        try:
+        with self._scan_scope():
             return self._scan()
+
+    @contextmanager
+    def _scan_scope(self) -> Iterator[None]:
+        """Theme lookups inside use one memo, fresh for the outermost scope; a nested
+        scope keeps the outer one's (#448, #454, #459)."""
+        outer = self._scanning
+        if not outer:
+            self._status_names_cache.clear()  # themes may have changed
+        self._scanning = True
+        try:
+            yield
         finally:
-            self._scanning = False
+            self._scanning = outer
 
     def _scan(self) -> list[WorkItem]:
         self._items.clear()
         self.parse_warnings = []
-        self._status_names_cache.clear()  # themes may have changed (#448)
 
         if self.config.is_multi_board:
             # Each board applies its OWN ignore patterns to its own path, exactly
@@ -994,6 +1005,8 @@ class KanbanService:
 
     def _single_board_theme(self) -> dict | None:
         """The configured theme, looked up once until the next scan (#448)."""
+        if not self._scanning:
+            return self.config.get_theme()  # the current theme outside a scan (#459)
         cache = self._status_names_cache
         if "__theme__" not in cache:
             cache["__theme__"] = self.config.get_theme()
@@ -1007,7 +1020,7 @@ class KanbanService:
         if self.config.is_multi_board and file_path is not None:
             board = self.config.get_board_for_path(file_path, self.repo_root)
         key = board.name if board else None
-        cache = self._status_names_cache
+        cache = self._status_names_cache if self._scanning else {}  # (#459)
         if key in cache:
             return cache[key]
         if board is not None:
@@ -1118,6 +1131,10 @@ class KanbanService:
         Returns:
             List of work items found in the board's path
         """
+        with self._scan_scope():  # get_board/get_items scan here directly (#459)
+            return self._scan_board_items(board_config)
+
+    def _scan_board_items(self, board_config: BoardConfig) -> list[WorkItem]:
         items = []
         board_path = self.repo_root / board_config.path
 
