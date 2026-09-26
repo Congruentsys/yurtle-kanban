@@ -993,6 +993,27 @@ MERGES_ON_MAIN_CASES = [
     ("git checkout main && git am -r", []),
     ("git checkout main && git am -3r", []),
     ("git checkout main && git am --show-current-patch=diff", []),
+    # #543: `-S`, `-C` and `-p` take the REST of a cluster as their value, so `-Sr` is
+    # no `-r`; a cluster is resume only if its `r` comes before any of them
+    ("git checkout main && git am -Sr x.patch", [1]),
+    ("git checkout main && git am -Cr x.patch", [1]),
+    ("git checkout main && git am -pr x.patch", [1]),
+    ("git checkout main && git am -3Sr x.patch", [1]),
+    ("git checkout main && git am -rS", []),
+    ("git checkout main && git am -3r x.patch", []),
+    # #543: a resume flag inside a quoted value, or as the value of `--resolvemsg`
+    # (and the other value-taking long options), is no flag
+    ("git checkout main && git am --resolvemsg 'see --continue' x.patch", [1]),
+    ('git checkout main && git am --resolvemsg="run --skip" x.patch', [1]),
+    ("git checkout main && git am --resolvemsg --continue x.patch", [1]),
+    ("git checkout main && git am --directory --abort x.patch", [1]),
+    ("git checkout main && git am 'x --abort.patch'", [1]),
+    ("git checkout main && git am --resolvemsg x --continue", []),
+    ("git checkout main && git am -S --continue", []),
+    # #543, documented: `<x>/HEAD` is read as a remote's HEAD — a sync — and an
+    # abbreviated resume flag (`--cont`) is not recognised, so it is refused (safe side)
+    ("git checkout main && git reset --hard feat/HEAD", []),
+    ("git checkout main && git am --cont x.patch", [1]),
 ]
 
 
@@ -1062,6 +1083,13 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git checkout main && git am " + "x.patch " * 3000,
     "git checkout main && git am -" + "3" * 5000,
     "git checkout main && git reset --hard " + "a." * 3000 + "/HEAD",
+    # #543
+    "git checkout main && git am " + "--resolvemsg x " * 3000,
+    "git checkout main && git am " + "'a --continue' " * 3000,
+    "git checkout main && git am " + "--resolvemsg " * 3000,
+    "git checkout main && git am -" + "S" * 5000 + "r",
+    "git checkout main && git am -" + "a" * 5000 + "Sr",
+    "git checkout main && git am " + "'" * 3001,
 ]
 
 _TIMED_MERGE = (
