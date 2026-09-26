@@ -245,3 +245,68 @@ def test_log_action_control_absolute(tmp_path, home):
     target = tmp_path / "elsewhere" / "k.log"
     _action_log({"type": "log", "path": str(target)}, _ctx(repo))
     assert _entries(target)[0]["item_id"] == "FEAT-001"
+
+
+# --- c) round 2: a `~` in ITEM DATA is not home (#357) ------------------------------
+# Only a `~` the config author wrote means $HOME. A substituted value is item data:
+# `render_path` keeps it one path segment, so it can't reach a home directory.
+
+# (value, the segment render_path makes of it)
+TILDE_DATA = [("~", "~"), ("~nobody", "~nobody"), ("~/x", "~_x")]
+
+
+def _data_ctx(repo_root: Path | None, field: str, value: str) -> HookContext:
+    ctx = _ctx(repo_root)
+    setattr(ctx, field, value)
+    return ctx
+
+
+def _log(action: dict, ctx: HookContext) -> None:
+    """Run the log action; a crash on item data (e.g. expanduser on `~_x`) is a failure."""
+    try:
+        _action_log(action, ctx)
+    except RuntimeError as e:
+        pytest.fail(f"log action crashed on item data {action['path']!r}: {e}")
+
+
+def _nothing_under(home: Path) -> None:
+    stray = sorted(p for p in home.rglob("*"))
+    assert not stray, f"item data wrote under $HOME: {stray}"
+
+
+@pytest.mark.parametrize("field", ["assignee", "item_id"])
+@pytest.mark.parametrize("value,segment", TILDE_DATA, ids=[v for v, _ in TILDE_DATA])
+def test_log_action_tilde_item_data_stays_in_repo(tmp_path, home, field, value, segment):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _log({"type": "log", "path": f"{{{field}}}/x.log"}, _data_ctx(repo, field, value))
+
+    target = repo / segment / "x.log"
+    assert target.exists(), (
+        f"{field}={value!r}: log not at {target}; repo has "
+        f"{sorted(str(p.relative_to(repo)) for p in repo.rglob('*'))}"
+    )
+    assert _entries(target)[0][field] == value
+    _nothing_under(home)
+
+
+@pytest.mark.parametrize("value,segment", TILDE_DATA, ids=[v for v, _ in TILDE_DATA])
+def test_log_action_tilde_item_data_no_repo_root(tmp_path, home, monkeypatch, value, segment):
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    _log({"type": "log", "path": "{assignee}/x.log"}, _data_ctx(None, "assignee", value))
+
+    assert (cwd / segment / "x.log").exists(), sorted(str(p) for p in cwd.rglob("*"))
+    _nothing_under(home)
+
+
+def test_log_action_author_tilde_with_tilde_item_data(tmp_path, home):
+    """The author's `~` is home; the item's `~` beneath it stays a plain segment."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _action_log(
+        {"type": "log", "path": "~/logs/{assignee}.log"}, _data_ctx(repo, "assignee", "~nobody"),
+    )
+    assert (home / "logs" / "~nobody.log").exists()
+    assert not (repo / "~").exists()
