@@ -1,10 +1,8 @@
 """
 Work item indexer - discovers and parses Yurtle work items.
 
-Deprecated (#434): use ``KanbanService.scan()``, the scanner.
-
-Unused: nothing in yurtle-kanban imports this module; ``KanbanService.scan()``
-is the scanner. Kept only because it is part of the published package. Its
+Deprecated (#434), kept until removal: use ``KanbanService.scan()``, the scanner.
+Nothing in yurtle-kanban imports this module. Its
 ``paths.ignore`` handling is single-board only: multi-board scanning applies each
 board's own ``BoardConfig.ignore`` (#124, #129, #153).
 """
