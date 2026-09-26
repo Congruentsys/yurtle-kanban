@@ -25,13 +25,22 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 # `git push [flags] <remote> main` — the thing forbidden. `--force-with-lease origin
 # <branch>` is fine, so the branch name is what decides, not the flags.
-# `main` must be a whole refspec TOKEN (#88): preceded by whitespace, `:` or `+`
-# (optionally via `refs/heads/`), and followed by whitespace, end of line, a comment
-# or a shell operator — never by `/`, `-` or `:`. Only the part of the line before a
-# `#` comment counts, so `main` mentioned in a comment is not a push.
+# `main` must be a whole refspec TOKEN (#88): preceded by whitespace, `:`, `+` or a
+# quote (optionally via `refs/heads/`), and followed by whitespace, end of line, a
+# closing quote or backtick, a comment or a shell operator — never by `/`, `-` or
+# `:`. Only the part of the line before a `#` comment counts, so `main` mentioned in
+# a comment is not a push.
+# #465: the line may START with markdown that puts a command on it — list markers
+# (`-`, `*`, `1.`), a blockquote `>`, an inline-code backtick, a `$` prompt — but
+# never with prose, so "we never git push to main" is not a command. Global options
+# (`-C dir`, `-c k=v`, `--no-pager`) may sit between `git` and `push`. A dry run —
+# `--dry-run` or a short flag cluster containing `n` — pushes nothing, but only when
+# it belongs to THIS command, i.e. before any `;`, `&` or `|`.
 PUSH_TO_MAIN = re.compile(
-    r"^\s*\$?\s*git\s+push\b(?![^#\n]*--dry-run)"
-    r"[^#\n]*(?<=[\s:+])(?:refs/heads/)?main(?=[\s#;&|]|$)"
+    r"^\s*(?:(?:[-*>`$]|\d+[.)])\s*)*"
+    r"git\s+(?:(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?)\s+)*push\b"
+    r"(?![^#;&|\n]*(?:--dry-run|\s-[A-Za-z]*n[A-Za-z]*(?![\w-])))"
+    r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`]|$)"
 )
 
 # `git checkout main` immediately preceding a merge is the other half of the recipe:
