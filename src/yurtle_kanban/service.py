@@ -437,11 +437,7 @@ class KanbanService:
     def _item_reverse_status_mapping(self, item: WorkItem) -> dict[str, str]:
         """canonical → the item's theme's own status name: the item's board's theme,
         or on a single board the configured theme (#439)."""
-        board_config = self._get_board_for_item(item)
-        theme = (
-            self._load_board_theme(board_config) if board_config
-            else self.config.get_theme()
-        )
+        board_config, theme = self._item_theme(item)
         return self._get_reverse_status_mapping(board_config, theme)
 
     def status_label(self, item: WorkItem) -> str:
@@ -2999,13 +2995,12 @@ class KanbanService:
             forward = {native: canonical for canonical, native in reverse.items()}
             from_native = reverse.get(item.status.value, item.status.value)
             allowed = []
+            canonical_values = {s.value for s in WorkItemStatus}
             for native in board_transitions.get(from_native, []):
-                canonical = forward.get(native, native)
-                try:
-                    value = WorkItemStatus.from_string(canonical).value
-                except ValueError:
-                    continue
-                if value not in allowed:
+                value = forward.get(native, native)
+                # exactly a status value, as `move` compares it: `in-progress` isn't
+                # offered because `move` would refuse it (#461)
+                if value in canonical_values and value not in allowed:
                     allowed.append(value)
             return allowed
         workflow = self._workflow_parser.load_workflow(item.item_type.value)
