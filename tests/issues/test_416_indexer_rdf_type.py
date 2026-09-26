@@ -37,6 +37,9 @@ from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.indexer import WorkItemIndexer
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 
+# WorkItemIndexer is deprecated (#434); these tests still pin its behaviour.
+pytestmark = pytest.mark.filterwarnings("ignore:WorkItemIndexer:DeprecationWarning")
+
 REPEATS = 40
 PREFIX = "@prefix kb: <https://yurtle.dev/kanban/> ."
 
