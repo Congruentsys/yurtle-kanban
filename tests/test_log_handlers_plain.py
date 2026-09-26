@@ -22,12 +22,27 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "yurtle_kanban"
 PREFIX = "yurtle-kanban"
 
 
-def rich_handler_violations(source: str, filename: str = "<string>") -> list[str]:
-    """Every `RichHandler(...)` call in `source` that doesn't pass `markup=False`.
+def _is_safe_rich_call(node: ast.Call) -> bool:
+    """`RichHandler(..., markup=False, ...)` with a literal `False` and no `**kwargs`."""
+    markup = [kw for kw in node.keywords if kw.arg == "markup"]
+    return (
+        len(markup) == 1
+        and isinstance(markup[0].value, ast.Constant)
+        and markup[0].value.value is False
+        and not any(kw.arg is None for kw in node.keywords)
+    )
 
-    Matches the bare name, any `from rich.logging import RichHandler as X` alias,
-    and any attribute access ending in `.RichHandler` (`rich.logging.RichHandler`,
-    `rl.RichHandler`). A `**kwargs` call can't be proved safe, so it's flagged.
+
+def rich_handler_violations(source: str, filename: str = "<string>") -> list[str]:
+    """Every reference to `RichHandler` in `source` other than a `markup=False` call,
+    and every `extra=` dict literal with a `"markup"` key (#505, #518).
+
+    A reference is the bare name or any `from rich.logging import RichHandler as X`
+    alias, an attribute ending in `.RichHandler` (`rich.logging.RichHandler`), or a
+    string constant naming it (dictConfig's `'rich.logging.RichHandler'`,
+    `getattr(rich.logging, 'RichHandler')`). The only allowed use is a direct call
+    passing a literal `markup=False`; a `**kwargs` call can't be proved safe. The
+    import that makes such a call possible isn't itself a reference.
     """
     tree = ast.parse(source, filename)
     names = {"RichHandler"}
@@ -36,25 +51,38 @@ def rich_handler_violations(source: str, filename: str = "<string>") -> list[str
             for alias in node.names:
                 if alias.name == "RichHandler":
                     names.add(alias.asname or alias.name)
-    found = []
+
+    def refers(node: ast.AST) -> bool:
+        return (
+            (isinstance(node, ast.Name) and node.id in names)
+            or (isinstance(node, ast.Attribute) and node.attr == "RichHandler")
+            or (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and "RichHandler" in node.value
+            )
+        )
+
+    found: list[str] = []
+    covered: set[int] = set()  # references already reported, or allowed, via their call
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        for kw in node.keywords:
+            if (
+                kw.arg == "extra"
+                and isinstance(kw.value, ast.Dict)
+                and any(isinstance(k, ast.Constant) and k.value == "markup" for k in kw.value.keys)
+            ):
+                found.append(f"{filename}:{node.lineno}: {ast.unparse(node)}")
         func = node.func
-        is_rich = (isinstance(func, ast.Name) and func.id in names) or (
-            isinstance(func, ast.Attribute) and func.attr == "RichHandler"
-        )
-        if not is_rich:
-            continue
-        markup = [kw for kw in node.keywords if kw.arg == "markup"]
-        splat = any(kw.arg is None for kw in node.keywords)
-        safe = (
-            len(markup) == 1
-            and isinstance(markup[0].value, ast.Constant)
-            and markup[0].value.value is False
-            and not splat
-        )
-        if not safe:
+        if isinstance(func, (ast.Name, ast.Attribute)) and refers(func):
+            covered.update(id(n) for n in ast.walk(func))
+            if not _is_safe_rich_call(node):
+                found.append(f"{filename}:{node.lineno}: {ast.unparse(node)}")
+    for node in ast.walk(tree):
+        if id(node) not in covered and refers(node):
+            covered.update(id(n) for n in ast.walk(node))
             found.append(f"{filename}:{node.lineno}: {ast.unparse(node)}")
     return found
 
@@ -159,6 +187,10 @@ def test_no_markup_rich_handler_installed_after_import() -> None:
 
 
 def test_markup_looking_warning_is_emitted_verbatim(caplog: pytest.LogCaptureFixture) -> None:
+    """The #215/#234 record factory leaves `[...]` alone: a markup-looking warning
+    from a package logger reaches a plain handler verbatim. This pins only the
+    factory, not the behaviour of any package handler; the static scan above is
+    what keeps markup-interpreting handlers out of the package."""
     _import_package()
     logger = logging.getLogger(f"{PREFIX}.test505")
     stream = io.StringIO()
