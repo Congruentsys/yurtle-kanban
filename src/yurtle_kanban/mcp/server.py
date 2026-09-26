@@ -585,6 +585,10 @@ def run_server():
 
                 request = json.loads(line)
                 response = await handle_request(request)
+                # JSON-RPC 2.0: a success payload goes under `result`; an error
+                # reply already carries `error` (#563)
+                if response is not None and "error" not in response:
+                    response = {"result": response}
 
                 if response is not None:
                     response["jsonrpc"] = "2.0"
