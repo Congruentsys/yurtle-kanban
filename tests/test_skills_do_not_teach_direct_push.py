@@ -46,9 +46,10 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # whole run — so `-nnnn…1` is linear (round 3: `[A-Za-z]*n[A-Za-z]*` split it k ways).
 # #472: this matches ONE shell segment; `refuses_push_to_main` splits the line on
 # `&&`, `||`, `;`, `|` and `&` first, so a push chained after `cd x &&` is checked.
-# A segment may open a subshell `(`, and the command may sit behind `sudo`/`env`
-# (with options) and `KEY=val` assignments — each prefix token starts differently
-# (a word, a dash, `NAME=`), so the prefix group has one parse and stays linear.
+# A segment may open a subshell `(` or a brace group `{` (#489), and the command may
+# sit behind `sudo`/`env` (with options) and `KEY=val` assignments — each prefix token
+# starts differently (a word, a dash, `NAME=`), so the prefix group has one parse and
+# stays linear.
 # `-n` right after `-o`/`--push-option` is that option's VALUE, not a dry run.
 # #489: also `command [-p]`, `nohup`, `time [-p]`, `exec`, `!`, and the compound-
 # command keywords `then`/`do`/`else` that open a segment (`if x; then git push …`).
@@ -62,7 +63,7 @@ _CMD_PREFIX = (
     r"|(?:command|time)\s+(?:-p\s+)*|(?:nohup|exec|then|do|else)\s+|!\s+"
     r"|[A-Za-z_]\w*=(?:'[^']*'|\"[^\"]*\"|[^\s'\"]\S*|)\s+)*"
 )
-_LEAD = r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
+_LEAD = r"^\s*(?:(?:[-*>`$({]|\d+[.)])\s*)*"
 _GIT = (
     r"(?:(?:/[\w.+-]+)*/)?git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
