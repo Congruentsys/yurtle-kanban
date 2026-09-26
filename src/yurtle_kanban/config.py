@@ -74,6 +74,12 @@ _THEME_SECTIONS = (
 )
 
 
+def _under(repo_root: Path, path: str | Path) -> Path:
+    """A configured path as a real location: relative ones sit under the repo, a
+    leading `~` is the user's home (#479). The config keeps the spelling it has."""
+    return repo_root / Path(path).expanduser()
+
+
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -460,9 +466,9 @@ class KanbanConfig:
 
         for board in self.boards:
             if repo_root:
-                board_path = (repo_root / board.path).resolve()
+                board_path = _under(repo_root, board.path).resolve()
             else:
-                board_path = Path(board.path).resolve()
+                board_path = Path(board.path).expanduser().resolve()
             try:
                 abs_path.relative_to(board_path)
                 return board
