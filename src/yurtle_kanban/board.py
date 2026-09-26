@@ -4,6 +4,8 @@ Terminal board rendering using the rich library.
 Provides beautiful terminal-based kanban board visualization.
 """
 
+from collections.abc import Callable
+
 from rich import box
 from rich.console import Console, Group
 from rich.markup import escape
@@ -250,8 +252,13 @@ def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
     console.print()
 
 
-def render_list(items: list[WorkItem], console: Console | None = None) -> None:
-    """Render a list of work items."""
+def render_list(
+    items: list[WorkItem],
+    console: Console | None = None,
+    status_label: Callable[[WorkItem], str] | None = None,
+) -> None:
+    """Render a list of work items; `status_label` names each status the way the
+    item's theme does (hdd `draft`), else the canonical value (#439)."""
     if console is None:
         console = Console()
 
@@ -285,7 +292,9 @@ def render_list(items: list[WorkItem], console: Console | None = None) -> None:
         table.add_row(
             f"{icon} {escape(item.id)}",
             escape(title),
-            f"[{status_color}]{item.status.value}[/{status_color}]",
+            f"[{status_color}]"
+            f"{escape(status_label(item) if status_label else item.status.value)}"
+            f"[/{status_color}]",
             f"[{priority_color}]{escape(str(item.priority or 'medium'))}[/{priority_color}]",
             escape(assignee),
         )

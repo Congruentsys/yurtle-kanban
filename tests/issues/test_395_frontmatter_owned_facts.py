@@ -503,9 +503,17 @@ def moved(repo: Path) -> QueryEngine:
     _move("PAPER-002", "done", "--closed-by", PR_URL)
     _move("PAPER-002", "backlog")
     text = _item_file(repo, "PAPER-002").read_text(encoding="utf-8")
-    assert "\nstatus: backlog\n" in text, "fixture: frontmatter not back to backlog"
+    # move writes the theme's name for backlog (hdd: `draft`), so check the scanned status (#439)
+    assert "\nstatus: backlog\n" in text or "\nstatus: draft\n" in text, (
+        "fixture: frontmatter not back to backlog"
+    )
     assert text.count("kb:status kb:") == 2, f"fixture: two history entries expected:\n{text}"
-    eng = QueryEngine.from_service(get_service(), enable_semantic=False)
+    service = get_service()
+    scanned = service.get_item("PAPER-002")
+    assert scanned is not None and scanned.status.value == "backlog", (
+        "fixture: frontmatter not back to backlog"
+    )
+    eng = QueryEngine.from_service(service, enable_semantic=False)
     item = eng._ug.get_item("PAPER-002")
     assert item is not None and item.graph is not None
     assert len(set(item.graph.subjects(KB.status, None))) == 2, "fixture: history not parsed"

@@ -429,6 +429,23 @@ class KanbanService:
             for native, canonical in theme["status_mappings"].items()
         }
 
+    def _item_reverse_status_mapping(self, item: WorkItem) -> dict[str, str]:
+        """canonical → the item's theme's own status name: the item's board's theme,
+        or on a single board the configured theme (#439)."""
+        board_config = self._get_board_for_item(item)
+        theme = (
+            self._load_board_theme(board_config) if board_config
+            else self.config.get_theme()
+        )
+        return self._get_reverse_status_mapping(board_config, theme)
+
+    def status_label(self, item: WorkItem) -> str:
+        """The item's status as its theme names it (hdd `draft` for backlog), for
+        people; machine output keeps the canonical `item.status.value` (#439)."""
+        return self._item_reverse_status_mapping(item).get(
+            item.status.value, item.status.value
+        )
+
     def _get_board_transitions(
         self, board_config: BoardConfig | None,
         theme: dict | None = None,
@@ -955,7 +972,24 @@ class KanbanService:
             "implementing": WorkItemStatus.IN_PROGRESS,
             "accepted": WorkItemStatus.DONE,
         }
+        # a configured theme's own names first (hdd `abandoned` is blocked): `move`
+        # and `create` write them, so a scan must read them back (#439)
+        for theme in self._configured_themes():
+            for native, canonical in (theme.get("status_mappings") or {}).items():
+                if str(native).lower() == status_str.lower():
+                    try:
+                        return WorkItemStatus.from_string(str(canonical))
+                    except ValueError:
+                        pass
         return mapping.get(status_str.lower())
+
+    def _configured_themes(self) -> list[dict]:
+        """The single board's theme, or every board's preset theme (#439)."""
+        if self.config.is_multi_board:
+            themes = [self._load_board_theme(board) for board in self.config.boards]
+        else:
+            themes = [self.config.get_theme()]
+        return [theme for theme in themes if theme]
 
     def get_board(self, board_name: str | None = None) -> Board:
         """Get the kanban board with all items.
@@ -1508,6 +1542,11 @@ class KanbanService:
             file_content = self._apply_priority(content, priority)
         else:
             file_content = item.to_markdown()
+        # the file says the theme's own initial status (hdd `draft`), as move writes
+        # it; it still scans as backlog (#439)
+        native = self._item_reverse_status_mapping(item).get(item.status.value)
+        if native and native != item.status.value:
+            file_content = self._add_or_update_frontmatter_field(file_content, "status", native)
         path.write_text(file_content)
 
         # Parse RDF graph from written content
@@ -2965,13 +3004,9 @@ class KanbanService:
         """
         content, eol = self._read_item_text(item.file_path)
 
-        # Determine board-native status name (e.g., 'active' for HDD)
-        board_config = self._get_board_for_item(item)
-        theme = self._load_board_theme(board_config)
-        reverse_mapping = self._get_reverse_status_mapping(
-            board_config, theme,
-        )
-        native_status = reverse_mapping.get(
+        # Determine board-native status name (e.g., 'active' for HDD), on a single
+        # board too (#439)
+        native_status = self._item_reverse_status_mapping(item).get(
             new_status.value, new_status.value,
         )
 
