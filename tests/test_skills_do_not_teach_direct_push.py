@@ -41,11 +41,13 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # (round 2: `--?[\w-]+` read `--x` two ways and went 2^N on a run of options). A dry run —
 # `--dry-run` or a short flag cluster containing `n` — pushes nothing, but only when
 # it belongs to THIS command, i.e. before any `;`, `&` or `|`.
+# The cluster is read ONCE — "has an `n`" is a lookahead, then `[A-Za-z]+` takes the
+# whole run — so `-nnnn…1` is linear (round 3: `[A-Za-z]*n[A-Za-z]*` split it k ways).
 PUSH_TO_MAIN = re.compile(
     r"^\s*(?:(?:[-*>`$]|\d+[.)])\s*)*"
     r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*push\b"
-    r"(?![^#;&|\n]*(?:--dry-run|\s-[A-Za-z]*n[A-Za-z]*(?![\w-])))"
+    r"(?![^#;&|\n]*(?:--dry-run|\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
     r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`]|$)"
 )
 
