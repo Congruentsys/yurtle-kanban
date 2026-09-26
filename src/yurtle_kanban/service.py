@@ -2643,7 +2643,8 @@ class KanbanService:
             # If the item being moved is itself exempt, skip WIP check entirely
             if item_type_str not in exempt_types:
                 for col in board.columns:
-                    if col.id == new_status.value:
+                    # the same column→status lookup the board uses (#87, #442)
+                    if board.column_status(col.id) == new_status:
                         if col.type_wip_limits is not None:
                             # Per-type WIP check
                             type_count = len(
