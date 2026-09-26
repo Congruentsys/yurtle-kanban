@@ -518,14 +518,9 @@ class Board:
         """
         violations: list[tuple[Column, int, str | None]] = []
         for col in self.columns:
-            # Resolve column to status
-            if col.id in self.column_status_map:
-                status = self.column_status_map[col.id]
-            else:
-                try:
-                    status = WorkItemStatus.from_string(col.id)
-                except ValueError:
-                    continue
+            status = self.column_status(col.id)  # one lookup for all (#87, #442)
+            if status is None:
+                continue
 
             if col.type_wip_limits is not None:
                 # Check per-type limits
