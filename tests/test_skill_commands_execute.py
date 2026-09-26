@@ -116,6 +116,41 @@ def _needs(param):
     return "requires a value" if param.nargs <= 1 else f"requires {param.nargs} values"
 
 
+def _consume_option(words, i, cmd, where):
+    """Check the option at `words[i]` against `cmd`; consume its value words.
+
+    Returns `(rejection or None, index after the option, [params it named])`.
+    """
+    word, i = words[i], i + 1
+    declared = _declared_options(cmd)
+    if word.startswith("--"):
+        name, eq, _ = word.partition("=")
+        param = declared.get(name)
+        if param is None:
+            return f"`{name}` is not accepted by `{where}`", i, []
+        named = [param]
+        if not _takes_value(param):
+            if eq:
+                return f"`{name}` does not take a value in `{where}`", i, named
+            return None, i, named
+        wanted = max(param.nargs, 1) - (1 if eq else 0)
+    else:
+        # `-fm msg`, `-fmmsg`: flags, until a value-taking option; the rest of
+        # the cluster is its first value, and it takes more words if it needs them.
+        wanted, named = 0, []
+        for j, ch in enumerate(word[1:], start=2):
+            name, param = f"-{ch}", declared.get(f"-{ch}")
+            if param is None:
+                return f"`{name}` is not accepted by `{where}`", i, named
+            named.append(param)
+            if _takes_value(param):
+                wanted = max(param.nargs, 1) - (1 if word[j:] else 0)
+                break
+    if i + wanted > len(words):
+        return f"`{name}` {_needs(param)} in `{where}`", i, named
+    return None, i + wanted, named
+
+
 def _rejection(*words, root=main):
     """Why the CLI would reject `yurtle-kanban <words>`, or None if it accepts it.
 
@@ -124,51 +159,41 @@ def _rejection(*words, root=main):
     subcommand (so any depth resolves); an option is checked against the command
     it is given to, and consumes its value words; anything else is an argument.
     `--` ends options for the command it is given to — at a group the next word
-    is still a subcommand, whose own options are parsed as usual.
+    is still a subcommand, whose own options are parsed as usual. If that word
+    looks like an option instead, click's `resolve_command` re-parses from there
+    as the group's options: an eager one (`--version`, `--help`) runs and exits,
+    an unknown one is "No such option", anything else is "No such command".
     """
     cmd, path, i = root, [], 0
     options_ended = False
     while i < len(words):
         word = words[i]
-        i += 1
         where = " ".join(["yurtle-kanban", *path])
         if word == "--" and not options_ended:
-            options_ended = True
+            options_ended, i = True, i + 1
             continue
-        if isinstance(cmd, click.Group) and (options_ended or not OPTION_TOKEN.match(word)):
+        is_option = OPTION_TOKEN.match(word)
+        if isinstance(cmd, click.Group) and options_ended and is_option:
+            eager = False
+            while i < len(words) and OPTION_TOKEN.match(words[i]):
+                problem, i, named = _consume_option(words, i, cmd, where)
+                if problem:
+                    return problem
+                eager = eager or any(p.is_eager for p in named)
+            return None if eager else f"`{where} {word}` is not a subcommand"
+        if isinstance(cmd, click.Group) and (options_ended or not is_option):
             if word not in cmd.commands:
                 return f"`{where} {word}` is not a subcommand"
             cmd = cmd.commands[word]
             path.append(word)
-            options_ended = False
+            options_ended, i = False, i + 1
             continue
-        if options_ended or not OPTION_TOKEN.match(word):
+        if options_ended or not is_option:
+            i += 1
             continue  # a positional argument of a leaf command
-        declared = _declared_options(cmd)
-        if word.startswith("--"):
-            name, eq, _ = word.partition("=")
-            param = declared.get(name)
-            if param is None:
-                return f"`{name}` is not accepted by `{where}`"
-            if not _takes_value(param):
-                if eq:
-                    return f"`{name}` does not take a value in `{where}`"
-                continue
-            wanted = max(param.nargs, 1) - (1 if eq else 0)
-        else:
-            # `-fm msg`, `-fmmsg`: flags, until a value-taking option; the rest of
-            # the cluster is its first value, and it takes more words if it needs them.
-            wanted = 0
-            for j, ch in enumerate(word[1:], start=2):
-                name, param = f"-{ch}", declared.get(f"-{ch}")
-                if param is None:
-                    return f"`{name}` is not accepted by `{where}`"
-                if _takes_value(param):
-                    wanted = max(param.nargs, 1) - (1 if word[j:] else 0)
-                    break
-        if i + wanted > len(words):
-            return f"`{name}` {_needs(param)} in `{where}`"
-        i += wanted
+        problem, i, _named = _consume_option(words, i, cmd, where)
+        if problem:
+            return problem
     return None
 
 
@@ -453,8 +478,17 @@ NOT_COMMANDS = {
 
 
 def _allow_listed(text):
-    """True if `text` is a NOT_COMMANDS mention."""
-    return any(p.search(text) for p in NOT_COMMANDS)
+    """True if `text` is a NOT_COMMANDS mention, and mentions nothing else.
+
+    The rest of the line, with the allow-listed part cut out, must not mention
+    `yurtle-kanban`: prose after a frontmatter glob or a pip line could otherwise
+    hide a real command the guard never checks (#516).
+    """
+    for pattern in NOT_COMMANDS:
+        m = pattern.search(text)
+        if m and not MENTION.search(text[: m.start()] + " " + text[m.end() :]):
+            return True
+    return False
 
 
 def _mention_lines():
