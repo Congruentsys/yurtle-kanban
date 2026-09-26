@@ -25,7 +25,7 @@ IDEA -> HYPOTHESIS -> EXPERIMENT (on branch) -> RESULTS
 
 | Outcome | Action | Branch | What We Learn |
 |---------|--------|--------|---------------|
-| **VALIDATED** | Merge to main | `git merge` | Enhancement works |
+| **VALIDATED** | Merge the PR | `gh pr merge` | Enhancement works |
 | **REFUTED** | Don't merge | Archive | Why it failed |
 | **NEEDS-MORE-DATA** | Keep branch | Continue | Need larger N |
 

@@ -148,8 +148,8 @@ Execute the protocol on the branch. Collect data.
 # Create PR from feature branch
 gh pr create --title "feat(EXPR-{nnn}): Validated H{paper}.{n}"
 
-# After review, merge to main
-git checkout main && git merge exp-{description}
+# After someone OTHER than the author approves, merge the PR (never a local merge on main)
+gh pr merge --merge --delete-branch
 ```
 
 **If REFUTED:**
