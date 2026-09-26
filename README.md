@@ -242,12 +242,13 @@ examples showed, is still read when `paths:` doesn't set that key (#482).
 On a single board, the **type folders under its root are always part of the board**, whatever
 `scan_paths` lists. By default `create` puts each type in its own folder, `<root>/<plural>/`
 (`features/`, `ideas/`, `papers/`, …). A theme `path`, a legacy `paths.<type>s` or a matching
-scan path can place it elsewhere. Wherever `create` writes, `scan()` walks that folder, so an
-item is never written where the board can't see it (#109, #113). With a broad root such as
-`root: .` and narrow `scan_paths`, that means `./ideas/`, `./papers/`, `./issues/` and so on at
-the repo root are scanned too. Any hand-written `.md` in them that has frontmatter shows up as an
-item. Give the board a dedicated root (`kanban-work/`), or exclude those folders with
-`paths.ignore` patterns such as `ideas/*` (#137). A multi-board board scans only its own `path`.
+scan path can place it elsewhere. Wherever `create` writes inside the repo, `scan()` walks that
+folder, so an item is never written where the board can't see it (#109, #113). With a broad
+root such as `root: .` and narrow `scan_paths`, that means `./ideas/`, `./papers/`, `./issues/`
+and so on at the repo root are scanned too. Any hand-written `.md` in them that has frontmatter
+shows up as an item. Give the board a dedicated root (`kanban-work/`), or exclude those folders
+with `paths.ignore` patterns such as `ideas/*` (#137). In a multi-board config, each board
+scans only its own `path`.
 
 `ignore` patterns match a file's path relative to the repo. For a board root **outside the
 repo** (an absolute path, or one reached with `../`), items aren't under the repo, so patterns
