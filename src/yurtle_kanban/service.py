@@ -369,6 +369,9 @@ class KanbanService:
         # absolute: git runs with cwd=repo_root, so a relative root would double
         # every path handed to `git add` (#198); `.absolute()` keeps symlinks as given
         self.repo_root = Path(repo_root).absolute()
+        # status-name lookups memoised per board until the next scan (#448, #454)
+        self._status_names_cache: dict[str | None, Any] = {}
+        self._scanning = False
         if getattr(config, "repo_root", None) is None:
             # a config with no repo_root (built directly, or from load for a missing
             # file) resolves themes in this service's repo, not the cwd; one loaded from
@@ -464,9 +467,16 @@ class KanbanService:
 
     def scan(self) -> list[WorkItem]:
         """Scan configured paths for work items."""
+        self._scanning = True  # theme lookups use the scan's memo (#448, #454)
+        try:
+            return self._scan()
+        finally:
+            self._scanning = False
+
+    def _scan(self) -> list[WorkItem]:
         self._items.clear()
         self.parse_warnings = []
-        self.__dict__.pop("_status_names_cache", None)  # themes may have changed (#448)
+        self._status_names_cache.clear()  # themes may have changed (#448)
 
         if self.config.is_multi_board:
             # Each board applies its OWN ignore patterns to its own path, exactly
@@ -984,7 +994,7 @@ class KanbanService:
 
     def _single_board_theme(self) -> dict | None:
         """The configured theme, looked up once until the next scan (#448)."""
-        cache = self.__dict__.setdefault("_status_names_cache", {})
+        cache = self._status_names_cache
         if "__theme__" not in cache:
             cache["__theme__"] = self.config.get_theme()
         return cache["__theme__"]
@@ -997,7 +1007,7 @@ class KanbanService:
         if self.config.is_multi_board and file_path is not None:
             board = self.config.get_board_for_path(file_path, self.repo_root)
         key = board.name if board else None
-        cache = self.__dict__.setdefault("_status_names_cache", {})
+        cache = self._status_names_cache
         if key in cache:
             return cache[key]
         if board is not None:
@@ -1437,7 +1447,9 @@ class KanbanService:
             )
             root = board_root.path if board_root else "work/"
         else:
-            theme = self._single_board_theme()
+            # inside a scan, the scan's memoised theme; otherwise the current one, so
+            # an override written since the last scan places new files at once (#454)
+            theme = self._single_board_theme() if self._scanning else self.config.get_theme()
             if theme and "item_types" in theme:
                 type_def = theme["item_types"].get(item_type.value, {})
                 if "path" in type_def:
