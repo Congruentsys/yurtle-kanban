@@ -17,6 +17,8 @@ are not skills and are not consumed by anyone else's agent.
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -129,6 +131,11 @@ PUSH_TO_MAIN_CASES = [
     ("git push origin main; git log --dry-run", True),
     # `-n` must be a flag, not part of a word
     ("git push --no-verify origin main", True),
+    # #465 round 2: global options that take a separate value
+    ("git --git-dir .git push origin main", True),
+    ("git --work-tree dir push origin main", True),
+    ("git --git-dir=.git --work-tree dir -C sub push origin main", True),
+    ("git --git-dir .git push origin feature/x", False),
 ]
 
 
@@ -137,6 +144,50 @@ def test_push_to_main_guard_table(line, refused):
     assert bool(PUSH_TO_MAIN.match(line)) is refused, (
         f"PUSH_TO_MAIN {'missed' if refused else 'falsely refused'}: {line!r}"
     )
+
+
+# #465 round 2: the guard runs on every line of every skill, so it must be linear on
+# ANY line — an option token with two parses (`--x` as `--`+`x` or `-`+`-x`) made the
+# global-options group 2^N on a line of N options that never reaches `push`. Each
+# line runs in a child process with a hard timeout: `re` cannot be interrupted
+# in-process, and a hung guard must fail, not hang the suite.
+ADVERSARIAL_LINES = [
+    "git " + "--no-pager " * 60 + "log",
+    "git " + "--a=b " * 60 + "pul",
+    "git " + "-c " * 60 + "x",
+    "git " + "-c -c " * 60 + "push origin feature/x",
+    "git " + "--git-dir " * 60 + "x",
+    "- " * 200 + "git pull",
+    "git push " + "-a " * 500 + "origin feature/x",
+    "git push " + "x" * 5000,
+    "git push " + "n" * 5000 + " origin feature/x",
+]
+
+_TIMED_MATCH = (
+    "import re, sys, time\n"
+    "rx = re.compile(sys.argv[1])\n"
+    "t = time.perf_counter()\n"
+    "rx.match(sys.argv[2])\n"
+    "print(time.perf_counter() - t)\n"
+)
+
+
+@pytest.mark.parametrize(
+    "line", ADVERSARIAL_LINES, ids=[f"{c[:24]}...len{len(c)}" for c in ADVERSARIAL_LINES]
+)
+def test_push_to_main_guard_is_linear(line):
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", _TIMED_MATCH, PUSH_TO_MAIN.pattern, line],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"PUSH_TO_MAIN backtracks catastrophically (>5 s) on {line[:40]!r}...")
+    elapsed = float(out.stdout)
+    assert elapsed < 0.1, f"PUSH_TO_MAIN took {elapsed:.3f} s on {line[:40]!r}..."
 
 
 def _skill_files():
