@@ -79,11 +79,46 @@ PUSH_TO_MAIN = re.compile(
 # end up merging ON main. Both are read per shell segment, with the same lead and
 # prefixes as a push. A checkout is OF main only when `main` is its last token (after
 # flags that take no value): `-b feat main` lands on feat, `main -- file` stays put.
+# #502: `'main'`/`"main"` is main. `-B main <start>` / `-C main <start>` (and `-b`/`-c`)
+# land on main whatever follows; `--detach`/`-d` never does. A checkout with a `--`
+# token restores files (CHECKOUT_PATHS) — it neither opens nor closes the window.
+# Landing on main is not only `git merge`: `git rebase <x>`, `git cherry-pick <x>` and
+# `git pull <remote> <branch>` count too — but syncing does not: a bare `git pull`,
+# `git pull <remote>`, `git pull <remote> main`, a bare `git rebase`, `git rebase
+# [<remote>/]main`, and flag-only forms like `--continue`/`--abort`. Every flag token
+# has one parse and each lookahead is a bounded check, so the patterns stay linear.
+_QMAIN = r"(?:'main'|\"main\"|main)"
+_FLAGS = r"(?:--?[A-Za-z][\w-]*(?:=\S+)?\s+)*"
+_NOT_MAIN_REF = r"(?!['\"]?(?:[\w.-]+/)?main['\"]?(?:[\s`)]|$))"
 CHECKOUT_MAIN = re.compile(
-    _LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\s+(?:--?[A-Za-z][\w-]*\s+)*main[`'\")\s]*$"
+    _LEAD
+    + _CMD_PREFIX
+    + _GIT
+    + r"(?:checkout|switch)\s+(?:(?!--detach(?![\w-])|-d(?![\w-]))--?[A-Za-z][\w-]*(?:=\S+)?\s+)*"
+    + r"(?:-[BbCc]\s+"
+    + _QMAIN
+    + r"(?=[\s`)]|$)|"
+    + _QMAIN
+    + r"[`)\s]*$)"
 )
+CHECKOUT_PATHS = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"checkout\s+(?:\S+\s+)*?--(?:\s|$)")
 CHECKOUT = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\b")
-MERGE = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"merge(?![\w-])")
+LANDS = re.compile(
+    _LEAD
+    + _CMD_PREFIX
+    + _GIT
+    + r"(?:merge(?![\w-])"
+    + r"|(?:rebase|cherry-pick)\s+"
+    + _FLAGS
+    + _NOT_MAIN_REF
+    + r"['\"]?[^\s'\"`)-]"
+    + r"|pull\s+"
+    + _FLAGS
+    + r"['\"]?[^\s'\"-]\S*\s+"
+    + _FLAGS
+    + _NOT_MAIN_REF
+    + r"['\"]?[^\s'\"`)-])"
+)
 
 
 def _scan(line: str) -> tuple[list[str], bool]:
@@ -181,19 +216,22 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
     """The merge guard applied to a skill: every (1-based line, text) that merges on main.
 
     One pass over the segments in order: a checkout of main opens a window through
-    the next MERGE_WINDOW lines, a checkout of anything else closes it, and a merge
-    inside the window is a merge on main.
+    the next MERGE_WINDOW lines, a checkout of anything else closes it, a pathspec
+    checkout does neither (#502), and a merge, rebase, cherry-pick or pull of another
+    branch inside the window lands work on main.
     """
     offenders = []
     opened = None  # 0-based line of the checkout of main whose window is open
     for n, text, segments in _commands(lines):
         hit = False
         for seg in segments:
+            if CHECKOUT_PATHS.match(seg):
+                continue
             if CHECKOUT_MAIN.match(seg):
                 opened = n
             elif CHECKOUT.match(seg):
                 opened = None
-            elif MERGE.match(seg) and opened is not None and n - opened <= MERGE_WINDOW:
+            elif LANDS.match(seg) and opened is not None and n - opened <= MERGE_WINDOW:
                 hit = True
         if hit:
             offenders.append((n + 1, text.strip()))
