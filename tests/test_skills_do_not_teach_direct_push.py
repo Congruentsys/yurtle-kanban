@@ -150,12 +150,38 @@ _RESET_MODE = r"--(?:hard|soft|keep|merge)(?![\w-])"
 # take the REST as their value, so a cluster resumes only if its `r` comes first
 # (`-3r`, `-rS`; not `-Sr`). An abbreviated flag (`--cont`) is not recognised, so
 # that `am` is refused — the safe direction.
+# #547: git also takes any UNAMBIGUOUS prefix of a long option (`--resolvem`, `--d`),
+# so each value option matches from its shortest unambiguous prefix up to its full
+# name. The shortest prefixes are git 2.54's (`git am --<prefix>` names the option).
+# An AMBIGUOUS prefix (`--resolve`, `--e`, `--in`, `--qu`) is rejected by git, so
+# nothing applies either way; the guard does not treat it as a value option.
+_AM_VALUE_LONG = {
+    "resolvemsg": "resolvem",
+    "directory": "d",
+    "exclude": "ex",
+    "include": "inc",
+    "whitespace": "w",
+    "patch-format": "p",
+    "quoted-cr": "quo",
+    "empty": "em",
+}
+
+
+def _abbreviations(name: str, shortest: str) -> str:
+    """A pattern for `shortest` followed by any prefix of the rest of `name` (linear)."""
+    rest = name[len(shortest) :]
+    return re.escape(shortest) + "".join("(?:" + re.escape(c) for c in rest) + ")?" * len(rest)
+
+
 _AM_OPT_WITH_VALUE = (
-    r"--(?:resolvemsg|directory|exclude|include|whitespace|patch-format|quoted-cr|empty)(?!\S)"
+    "--(?:" + "|".join(_abbreviations(n, s) for n, s in _AM_VALUE_LONG.items()) + r")(?!\S)"
 )
+# Short options that take the REST of their cluster as a value (`-S<keyid>`,
+# `-C<n>`, `-p<n>`): a cluster resumes only if its `r` comes before any of them.
+_AM_VALUE_SHORT = "CSp"
 _AM_RESUME = (
     r"(?:--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)"
-    r"|-(?=[A-BD-RT-Za-oq-z0-9]*r)[A-Za-z0-9]+)(?![\w-])"
+    r"|-(?=(?:(?![" + _AM_VALUE_SHORT + r"])[A-Za-z0-9])*?r)[A-Za-z0-9]+)(?![\w-])"
 )
 # #529: a reset onto the upstream (`@{u}`, `@{upstream}`, `FETCH_HEAD`) is a sync, like
 # `origin/main`; onto `HEAD`, `@`, `ORIG_HEAD` or an ancestor of them (`HEAD~2^`) it is
