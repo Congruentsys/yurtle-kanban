@@ -166,6 +166,8 @@ ADVERSARIAL_LINES = [
     "git push " + "x" * 5000,
     "git push " + "n" * 5000 + " origin feature/x",
     "1" * 5000 + " git push origin feature/x",
+    "git push -" + "n" * 5000 + "1 origin main",
+    "git push -" + "n" * 5000 + "- origin feature",
 ]
 
 _TIMED_MATCH = (
