@@ -525,23 +525,71 @@ def test_guard_verdicts(monkeypatch, line, expected):
 _GROUP_SUFFIXES = ["", "--", "--help", "--version", "-- --help", "-- --version", "--help --"]
 
 
+# After an eager option: an unknown option, a `-1`, a stray word, a bare `--` —
+# and the unknown option BEFORE it, which click rejects before `--help` runs.
+_EAGER_TAILS = [["--help", "--bogus"], ["--help", "-1"], ["--help", "bogus"], ["--help", "--"]]
+_EAGER_HEADS = [["--bogus", "--help"]]
+
+
 def _group_shapes():
-    """Lines that end at, or stop before, a group: none of them runs a command."""
-    shapes = [
-        f"{g} {suffix}".split() for g in ["", *_SUBGROUPS] for suffix in _GROUP_SUFFIXES
-    ]
-    shapes += [[eager, g] for eager in ("--version", "--help") for g in _SUBGROUPS]
-    return shapes
+    """Lines click settles while PARSING: a usage error, or an eager option's exit.
+
+    Groups: bare, with `--`, and with the eager options in every position.
+    Every command, leaves included: an eager option followed by an unknown
+    option, a `-1`, a stray word or `--`, and one preceded by an unknown option.
+    The root's `--version`/`--help` in front of every command path, alone and
+    followed by an unknown option. (#542, #549)
+    """
+    paths = [(), *_command_paths()]
+    groups = [(), *[p for p in paths if isinstance(_command_at(p), click.Group)]]
+    shapes = [[*g, *suffix.split()] for g in groups for suffix in _GROUP_SUFFIXES]
+    for p in paths:
+        shapes += [[*p, *tail] for tail in _EAGER_TAILS + _EAGER_HEADS]
+    for p in paths[1:]:
+        shapes += [["--version", *p], ["--help", *p], ["--version", *p, "--bogus"]]
+    shapes += [["--version", "--bogus"], ["--version", "-1"], ["--version", "bogus"]]
+    shapes += [["--version", "--", "--"]]
+    unique = list(dict.fromkeys(tuple(s) for s in shapes))
+    return [list(s) for s in unique]
+
+
+def _command_at(path):
+    cmd = main
+    for name in path:
+        cmd = cmd.commands[name]
+    return cmd
+
+
+@pytest.fixture
+def inert_callbacks(monkeypatch):
+    """Replace every command's callback, groups and leaves, so nothing real runs.
+
+    Click invokes a GROUP's callback once it has resolved the subcommand and
+    before it parses that subcommand's words (so `main`'s runs for `hdd --help`);
+    those become no-ops. A LEAF callback must never run: click has to settle
+    each line while parsing. If a shape ever did reach one, it lands in the
+    returned list — never on the repo — and the test says so.
+    """
+    leaf_ran = []
+    for path in [(), *_command_paths()]:
+        cmd = _command_at(path)
+        if isinstance(cmd, click.Group):
+            stub = lambda *a, **kw: None  # noqa: E731
+        else:
+            stub = lambda *a, _p=path, **kw: leaf_ran.append(_p)  # noqa: E731
+        monkeypatch.setattr(cmd, "callback", stub)
+    return leaf_ran
 
 
 @pytest.mark.parametrize("words", _group_shapes(), ids=" ".join)
-def test_group_shapes_agree_with_click(words):
+def test_group_shapes_agree_with_click(words, inert_callbacks):
     """The guard's verdict IS click's: accepted exactly when click exits 0.
 
-    None of these lines reaches a leaf command, so click only parses them — it
-    exits 0 (an eager option ran) or 2 (a usage error), never runs anything.
+    Every line here is settled by click's parser — it exits 0 (an eager option
+    ran) or 2 (a usage error) — and no leaf command's callback runs.
     """
     result = CliRunner().invoke(main, words)
+    assert not inert_callbacks, f"a leaf callback ran for {words}: {inert_callbacks}"
     assert result.exit_code in (0, 2), result.output
     click_accepts = result.exit_code == 0
     verdict = _rejection(*words)
