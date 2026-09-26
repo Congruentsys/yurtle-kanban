@@ -85,6 +85,41 @@ PUSH_TO_MAIN_CASES = [
     # not a push line at all
     ("git pull origin main", False),
     ("Never run git push origin main.", False),
+    # #465: quoted refspecs are the same push
+    ("git push origin 'main'", True),
+    ('git push origin "main"', True),
+    ("git push origin 'HEAD:main'", True),
+    ("git push origin 'main-x'", False),
+    ('git push origin "feature/main"', False),
+    # #465: global git options before `push`
+    ("git -C dir push origin main", True),
+    ("git -c k=v push origin main", True),
+    ("git --no-pager push origin main", True),
+    ("git -C dir push origin feature/x", False),
+    # #465: command lines behind a markdown prefix
+    ("- git push origin main", True),
+    ("* git push origin main", True),
+    ("`git push origin main`", True),
+    ("> git push origin main", True),
+    ("1. git push origin main", True),
+    ("- `git push origin main`", True),
+    ("> $ git push origin main", True),
+    ("- git push origin feature/x", False),
+    ("`git push origin main-thing`", False),
+    # #465: prose stays prose — only a line that STARTS with the command is one
+    ("we never git push to main", False),
+    ("- we never git push to main", False),
+    ("> Never run `git push origin main`.", False),
+    ("Do not run `git push origin main` here.", False),
+    # #465: the short dry-run `-n` pushes nothing either
+    ("git push -n origin main", False),
+    ("git push origin main -n", False),
+    ("git push -nf origin main", False),
+    # ...but a `-n` belonging to a LATER command does not exempt the push
+    ("git push origin main && echo -n done", True),
+    ("git push origin main; git log --dry-run", True),
+    # `-n` must be a flag, not part of a word
+    ("git push --no-verify origin main", True),
 ]
 
 
