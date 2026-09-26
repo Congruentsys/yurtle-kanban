@@ -439,6 +439,15 @@ def _verdict(line):
         ("yurtle-kanban history --since=-5", None),
         ("yurtle-kanban show -", None),
         ("yurtle-kanban -- --", "`yurtle-kanban --` is not a subcommand"),
+        # #537: a group that ends at `--`, with no subcommand after it, is click's
+        # "Missing command"; `--` then a subcommand, or an eager option, is fine
+        ("yurtle-kanban --", "`yurtle-kanban --` is missing a subcommand"),
+        ("yurtle-kanban hdd --", "`yurtle-kanban hdd --` is missing a subcommand"),
+        ("yurtle-kanban epic --", "`yurtle-kanban epic --` is missing a subcommand"),
+        ("yurtle-kanban -- hdd --", "`yurtle-kanban hdd --` is missing a subcommand"),
+        ("yurtle-kanban hdd -- validate", None),
+        ("yurtle-kanban -- --version --", None),
+        ("yurtle-kanban move EXP-1 done --", None),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
