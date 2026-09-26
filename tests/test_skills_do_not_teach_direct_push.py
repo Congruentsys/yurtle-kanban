@@ -1037,6 +1037,28 @@ MERGES_ON_MAIN_CASES = [
     # abbreviated resume flag (`--cont`) is not recognised, so it is refused (safe side)
     ("git checkout main && git reset --hard feat/HEAD", []),
     ("git checkout main && git am --cont x.patch", [1]),
+    # #547: git accepts any UNAMBIGUOUS prefix of a long option, so an abbreviated
+    # value option still swallows the next token — `--resolvem --continue x.patch`
+    # applies x.patch (checked against git 2.54)
+    ("git checkout main && git am --resolvem --continue x.patch", [1]),
+    ("git checkout main && git am --resolvems --continue x.patch", [1]),
+    ("git checkout main && git am --dir --abort x.patch", [1]),
+    ("git checkout main && git am --d --skip x.patch", [1]),
+    ("git checkout main && git am --ex --continue x.patch", [1]),
+    ("git checkout main && git am --inc --continue x.patch", [1]),
+    ("git checkout main && git am --w --continue x.patch", [1]),
+    ("git checkout main && git am --patch --continue x.patch", [1]),
+    ("git checkout main && git am --quo --continue x.patch", [1]),
+    ("git checkout main && git am --em --continue x.patch", [1]),
+    # #547 controls: an abbreviation followed by its value, a longer non-option, and
+    # AMBIGUOUS prefixes (`--resolve`, `--e`, `--in`, `--qu`: git rejects them) — the
+    # guard does not treat those as value options, so the resume flag after counts
+    ("git checkout main && git am --dir x --continue", []),
+    ("git checkout main && git am --dirx --continue x.patch", []),
+    ("git checkout main && git am --resolve --continue x.patch", []),
+    ("git checkout main && git am --e --continue x.patch", []),
+    ("git checkout main && git am --in --continue x.patch", []),
+    ("git checkout main && git am --qu --continue x.patch", []),
 ]
 
 
@@ -1113,6 +1135,11 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git checkout main && git am -" + "S" * 5000 + "r",
     "git checkout main && git am -" + "a" * 5000 + "Sr",
     "git checkout main && git am " + "'" * 3001,
+    # #547
+    "git checkout main && git am " + "--resolvem x " * 3000,
+    "git checkout main && git am " + "--d " * 3000,
+    "git checkout main && git am " + "--resolvemsgx " * 3000,
+    "git checkout main && git am --" + "d" * 5000,
 ]
 
 _TIMED_MERGE = (
