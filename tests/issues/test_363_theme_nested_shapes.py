@@ -227,7 +227,8 @@ class TestLoaderDropsBadEntry:
         ]
         assert len(hits) == 1, _warnings(warnings_log)
 
-    @pytest.mark.parametrize("section", ["status_mappings", "transitions"])
+    # a non-list transitions entry is now dropped (#457); covered by test_457
+    @pytest.mark.parametrize("section", ["status_mappings"])
     def test_control_status_mappings_and_transitions_entries_kept(
         self,
         tmp_path: Path,
