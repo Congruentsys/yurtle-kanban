@@ -49,9 +49,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
-mcp = [
-    "mcp>=0.1.0",
-]
+# the MCP server is a stdlib stdio loop; it never imports the `mcp` package, so
+# the extra is kept only so `yurtle-kanban[mcp]` still resolves (#555)
+mcp = []
 search = [
     "sentence-transformers>=2.2.0",
     "numpy>=1.24.0",
