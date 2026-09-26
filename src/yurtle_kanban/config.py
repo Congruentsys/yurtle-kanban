@@ -291,7 +291,14 @@ def _scan_list(data: dict[str, Any]) -> list[str]:
         raise ValueError(
             f"scan_paths: expected a list of paths, got {type(value).__name__} {value!r}"
         )
-    return list(value)
+    bad = [p for p in value if not isinstance(p, str)]
+    if bad:
+        raise ValueError(f"scan_paths: every entry must be a path string, got {bad[0]!r}")
+    # an empty entry is `Path('.')`, the repo root: never scan that by accident (#517)
+    paths = [p for p in value if p.strip()]
+    if len(paths) != len(value):
+        logger.warning("config: an empty `scan_paths` entry ('') is ignored")
+    return paths
 
 
 def _ignore_list(data: dict[str, Any]) -> list[str]:
@@ -546,7 +553,9 @@ class KanbanConfig:
         # a bare key (YAML null) means empty, never None (#194, #204)
         kanban_data = data.get("kanban", data) or {}
 
-        raw_paths = kanban_data.get("paths") or {}
+        # only a bare `paths:` (null) means empty; `0`, `''` or `[]` is a bad shape (#517)
+        raw_paths = kanban_data.get("paths")
+        raw_paths = {} if raw_paths is None else raw_paths
         if not isinstance(raw_paths, dict):
             raise ValueError(
                 f"kanban.paths must be a mapping, got {type(raw_paths).__name__} {raw_paths!r}"
