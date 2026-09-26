@@ -14,6 +14,10 @@ What this guard covers, and what it deliberately does not:
                fixture per command and would couple this to board state. Flag
                and subcommand drift is the failure that has actually happened
                twice, and it is statically decidable from --help.
+  not covered  how MANY positional arguments a command gets: `-- list extra`
+               passes here, where click says "Got unexpected extra argument".
+               Arity is a fact about each command's signature, not drift in a
+               name, and counting it would mean modelling every argument (#525).
 
 The extraction is deliberately narrow: a line that STARTS with `yurtle-kanban`
 (after an optional `$` prompt and `VAR=value` env prefixes), or a `yurtle-kanban
@@ -48,8 +52,10 @@ BACKTICK_INVOCATION = re.compile(r"`(" + _ENV + r"yurtle-kanban(?:\s[^`]*)?)`")
 # A quoted argument is one value, whatever it looks like: `--params "--x=1"`.
 QUOTED = re.compile(r"\"[^\"]*\"|'[^']*'")
 
-# `-f`, `-abc`, `--flag`, `--flag=value` — not `-1` or a bare `-`.
-OPTION_TOKEN = re.compile(r"^--?[A-Za-z]")
+# Any word click reads as an option: `-f`, `-abc`, `--flag`, `--flag=value`, and
+# `-1` too — click has no notion of a negative number, it says "No such option
+# '-1'" (#525). Not a bare `-` (an argument) and not `--` (handled on its own).
+OPTION_TOKEN = re.compile(r"^-(?!-?$)")
 
 # A trailing shell comment (`--force  # Skip WIP limit check`) is prose, not flags.
 SHELL_COMMENT = re.compile(r"\s+#\s.*$")
@@ -175,7 +181,7 @@ def _rejection(*words, root=main):
         is_option = OPTION_TOKEN.match(word)
         if isinstance(cmd, click.Group) and options_ended and is_option:
             eager = False
-            while i < len(words) and OPTION_TOKEN.match(words[i]):
+            while i < len(words) and OPTION_TOKEN.match(words[i]):  # stops at `--`
                 problem, i, named = _consume_option(words, i, cmd, where)
                 if problem:
                     return problem
@@ -482,8 +488,9 @@ MENTION = re.compile(r"(?<![\w/.-])yurtle-kanban\s+\S")
 
 # Mentions that are deliberately NOT commands. Each one needs a reason; anything
 # else that mentions `yurtle-kanban` must parse, or the guard is silently blind.
+ALLOWED_TOOLS_GLOB = re.compile(r"^allowed-tools:\s*Bash\(yurtle-kanban \*\)")
 NOT_COMMANDS = {
-    re.compile(r"^allowed-tools:\s*Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
+    ALLOWED_TOOLS_GLOB: "an allowed-tools permission glob",
     re.compile(r"^pip index versions yurtle-kanban(?=\s|$)"): "the package name, passed to pip",
     re.compile(r"^## yurtle-kanban "): "a markdown heading",
     re.compile(r"^Initialize yurtle-kanban in "): "init's one-line description",
@@ -542,9 +549,20 @@ def test_allow_list_is_anchored(text, allowed):
     assert _allow_listed(text) is allowed
 
 
+# The allowed-tools glob anywhere on its line — for the failure hint only; the
+# allow-list itself accepts it only first (ALLOWED_TOOLS_GLOB).
+_ALLOWED_TOOLS_GLOB_ANYWHERE = re.compile(r"^allowed-tools:.*Bash\(yurtle-kanban \*\)")
+
+
 def _blind_message(where, text):
-    """One line of the mention test's failure message."""
-    return f"{where}: {text.strip()}"
+    """One line of the mention test's failure message, with the fix when it is known."""
+    message = f"{where}: {text.strip()}"
+    if _ALLOWED_TOOLS_GLOB_ANYWHERE.search(text) and not ALLOWED_TOOLS_GLOB.search(text):
+        message += (
+            "  <- the Bash(yurtle-kanban *) glob must come first on an allowed-tools"
+            " line to be allow-listed"
+        )
+    return message
 
 
 @pytest.mark.parametrize(
