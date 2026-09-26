@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from yurtle_kanban.mcp import server as mcp_server
 
 
@@ -247,3 +249,21 @@ def test_number_is_invalid_request(monkeypatch, tmp_path):
 
 def test_string_is_invalid_request(monkeypatch, tmp_path):
     _assert_invalid_request(monkeypatch, tmp_path, b'"s"')
+
+
+# (5) blank lines are skipped silently (#571) ----------------------------------
+
+
+@pytest.mark.parametrize("blank", [b"\n", b"   \n", b"\r\n"], ids=["lf", "spaces", "crlf"])
+def test_blank_line_gets_no_reply(monkeypatch, tmp_path, blank):
+    replies, crash = _run_raw(monkeypatch, tmp_path, blank + TOOLS_LIST_2)
+    assert crash is None, f"{type(crash).__name__}: {crash}"
+    assert [r.get("id") for r in replies] == [2], f"a blank line was answered: {replies!r}"
+    assert set(replies[0]) == {"jsonrpc", "id", "result"}
+    assert "tools" in replies[0]["result"]
+
+
+def test_all_blank_kinds_together_get_no_reply(monkeypatch, tmp_path):
+    replies, crash = _run_raw(monkeypatch, tmp_path, b"\n   \n\r\n" + TOOLS_LIST_2)
+    assert crash is None, f"{type(crash).__name__}: {crash}"
+    assert [r.get("id") for r in replies] == [2], f"a blank line was answered: {replies!r}"
