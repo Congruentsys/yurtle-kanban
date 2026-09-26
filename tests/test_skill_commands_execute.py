@@ -250,3 +250,118 @@ def test_help_example_is_accepted_by_the_cli(parts, example, sub, sub2, flags):
         f"`yurtle-kanban {' '.join(parts)} --help` prints `{example}` — {problem}. "
         f"--help is what an agent reads first: it runs this and gets a usage error."
     )
+
+
+# --- blind spots found reviewing #89 (issue #476) --------------------------------
+
+
+def _verdict(line):
+    """What the guard says about one printed line: a rejection, None, or "unparsed"."""
+    parsed = _parse(line)
+    return "unparsed" if parsed is None else _rejection(*parsed)
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        # short flags are checked, not skipped
+        ("yurtle-kanban move EXP-1 done -f", None),
+        ("yurtle-kanban move EXP-1 done -z", "`-z` is not accepted by `yurtle-kanban move`"),
+        ("yurtle-kanban move EXP-1 done -m 'msg' -a Mini", None),
+        # an env-var prefix is still a command
+        ("KANBAN_ROOT=/tmp/b yurtle-kanban list --status done", None),
+        (
+            "KANBAN_ROOT=/tmp/b yurtle-kanban list --bogus",
+            "`--bogus` is not accepted by `yurtle-kanban list`",
+        ),
+        # a main-level option before any subcommand
+        ("yurtle-kanban --version", None),
+        ("yurtle-kanban --bogus list", "`--bogus` is not accepted by `yurtle-kanban`"),
+        # a quoted value that starts with `--` is a value, not a flag
+        ('yurtle-kanban experiment run EXPR-1 --params "--x=1"', None),
+        ("yurtle-kanban experiment run EXPR-1 --params '--x=1'", None),
+        ("yurtle-kanban history --since=2026-01-01", None),
+        # unchanged: a group given a subcommand it lacks; a command plus an argument
+        ("yurtle-kanban hdd validat --strict", "`yurtle-kanban hdd validat` is not a subcommand"),
+        ("yurtle-kanban board research", None),
+    ],
+)
+def test_guard_verdicts(line, expected):
+    assert _verdict(line) == expected
+
+
+def test_hidden_option_alias_is_accepted(monkeypatch):
+    """An alias hidden from Options: is still accepted by click, so the guard accepts it."""
+    history = main.commands["history"]
+    hidden = click.Option(["--last-week"], is_flag=True, hidden=True)
+    monkeypatch.setattr(history, "params", [*history.params, hidden])
+    assert _verdict("yurtle-kanban history --last-week") is None
+
+
+def test_depth_three_command_path(monkeypatch):
+    """A group nested in a group: flags go to the leaf, not to the middle group."""
+
+    @click.group()
+    def deep():
+        pass
+
+    @deep.command()
+    @click.option("--x", is_flag=True)
+    def leaf(x):
+        pass
+
+    monkeypatch.setitem(main.commands["hdd"].commands, "deep", deep)
+    assert _verdict("yurtle-kanban hdd deep leaf --x") is None
+    assert _verdict("yurtle-kanban hdd deep leaf --y") == (
+        "`--y` is not accepted by `yurtle-kanban hdd deep leaf`"
+    )
+    assert _verdict("yurtle-kanban hdd deep nope") == (
+        "`yurtle-kanban hdd deep nope` is not a subcommand"
+    )
+
+
+# A line that names `yurtle-kanban` followed by more text, not inside a URL or path.
+MENTION = re.compile(r"(?<![\w/.-])yurtle-kanban\s+\S")
+
+# Mentions that are deliberately NOT commands. Each one needs a reason; anything
+# else that mentions `yurtle-kanban` must parse, or the guard is silently blind.
+NOT_COMMANDS = {
+    re.compile(r"Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
+    re.compile(r"pip index versions yurtle-kanban"): "the package name, passed to pip",
+    re.compile(r"^## yurtle-kanban "): "a markdown heading",
+    re.compile(r"^Initialize yurtle-kanban in "): "init's one-line description",
+}
+
+
+def _commands_in(line):
+    """Every command a line prints."""
+    parsed = _parse(line)
+    return [parsed] if parsed else []
+
+
+def _mention_lines():
+    """(where, text) for every skill line and --help chunk that mentions yurtle-kanban."""
+    out = []
+    for path in _skill_files():
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            out.append((f"{path.relative_to(SKILLS_DIR.parent)}:{lineno}", line))
+    for parts in [(), *_command_paths()]:
+        for line in _help_for(parts).splitlines():
+            for chunk in EXAMPLE_SEPARATOR.split(line.strip()):
+                out.append((f"yurtle-kanban {' '.join(parts)} --help".replace("  ", " "), chunk))
+    return [(where, text) for where, text in out if MENTION.search(text)]
+
+
+def test_every_mention_parses_or_is_allow_listed():
+    """No silent skips: a line naming yurtle-kanban is checked, or says why not."""
+    mentions = _mention_lines()
+    assert len(mentions) >= 100, f"only {len(mentions)} mentions — MENTION is broken"
+    blind = [
+        f"{where}: {text.strip()}"
+        for where, text in mentions
+        if not _commands_in(text) and not any(p.search(text) for p in NOT_COMMANDS)
+    ]
+    assert not blind, "mentions the guard neither checks nor allow-lists:\n" + "\n".join(blind)
+    # and every allow-list entry still earns its place
+    for pattern, reason in NOT_COMMANDS.items():
+        assert any(pattern.search(t) for _, t in mentions), f"stale allow-list: {reason}"
