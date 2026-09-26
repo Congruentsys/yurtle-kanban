@@ -404,7 +404,8 @@ def _action_log(action: dict, context: HookContext) -> None:
     """Append a JSON line to a log file."""
     log_path = action.get("path", ".kanban/hooks.log")
     # only a `~` the config author wrote means home: expanded before rendering, so
-    # item data (an assignee `~x`) stays a plain path segment (#357, #509)
+    # item data (an assignee `~x`) stays a plain path segment (#357, #509). Not
+    # `_under`, which would expand after rendering; the join below comes last (#523)
     log_path = Path(context.render_path(os.path.expanduser(log_path)))
     if context.repo_root is not None and not log_path.is_absolute():
         log_path = context.repo_root / log_path
