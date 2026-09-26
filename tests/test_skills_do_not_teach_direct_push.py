@@ -14,6 +14,14 @@ repair.
 
 Scope note — this checks the SHIPPED skills only. The repo's own workflow files
 are not skills and are not consumed by anyone else's agent.
+
+Out of reach of a linear, line-at-a-time text guard (#507), by design:
+- quotes that span lines — each line's quotes are paired on that line alone;
+- heredoc bodies — they are scanned as if they were commands;
+- `xargs` (and other commands that run their arguments as a command);
+- git aliases — `git pm` may well mean `push origin main`;
+- refs held in variables — `git pull origin $BASE` is refused as another branch,
+  which is the safe default.
 """
 
 import re
@@ -57,22 +65,46 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # cluster `o` takes the REST as its value (`-on` pushes with option "n"), so a
 # cluster is a dry run only when an `n` comes before any `o`. git may be named by
 # an absolute path (`/usr/bin/git`), whose `/`-delimited parts split one way only.
+# #507: `if`/`elif`/`while`/`until` lead a segment too (the condition runs), and so
+# does `builtin`. git may be named relatively (`./git`, `../bin/git`, `~/bin/git`). A
+# `{` opens a brace group only when a blank follows — `{git` is one word to bash.
 _CMD_PREFIX = (
     r"(?:(?:sudo|env)\s+(?:(?:(?:-u|--user|-C|--chdir)\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
-    r"|(?:command|time)\s+(?:-p\s+)*|(?:nohup|exec|then|do|else)\s+|!\s+"
+    r"|(?:command|time)\s+(?:-p\s+)*"
+    r"|(?:nohup|exec|builtin|then|do|else|if|elif|while|until)\s+|!\s+"
     r"|[A-Za-z_]\w*=(?:'[^']*'|\"[^\"]*\"|[^\s'\"]\S*|)\s+)*"
 )
-_LEAD = r"^\s*(?:(?:[-*>`$({]|\d+[.)])\s*)*"
+_LEAD = r"^\s*(?:(?:[-*>`$(]|\{(?=\s)|\d+[.)])\s*)*"
 _GIT = (
-    r"(?:(?:/[\w.+-]+)*/)?git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"(?:(?:~|\.\.?)?(?:/[\w.+-]+)*/)?git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
 )
+# #507: the dry-run test walks the push's arguments TOKEN by token (a quoted string
+# is one token), so a `-n` inside a quoted value is no flag, and a short cluster that
+# ENDS in `o` (`-o`, `-fo`) or `--push-option` swallows the next token as its value.
+# The token kinds start differently and the walk tries the dry-run flag first at each
+# boundary, so every boundary is visited once: linear.
+_TOKEN = r"(?:'[^']*'\S*|\"[^\"]*\"\S*|[^\s'\"]\S*)"
+_OPT_WITH_VALUE = r"(?:-[A-Za-np-z]*o|--push-option)(?!\S)"
+_DRY_RUN = r"(?:--dry-run|-(?=[A-Za-np-z]*n)[A-Za-z]+)(?![\w-])"
 PUSH_TO_MAIN = re.compile(
-    _LEAD + _CMD_PREFIX + _GIT + r"push\b"
-    r"(?![^\n]*(?:--dry-run"
-    r"|(?<!\s-o)(?<!--push-option)\s-(?=[A-Za-np-z]*n)[A-Za-z]+(?![\w-])))"
-    r"[^\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
+    _LEAD
+    + _CMD_PREFIX
+    + _GIT
+    + r"push\b"
+    + r"(?!(?:\s+(?:"
+    + _OPT_WITH_VALUE
+    + r"\s+"
+    + _TOKEN
+    + r"|(?!"
+    + _OPT_WITH_VALUE
+    + r")"
+    + _TOKEN
+    + r"))*?\s+"
+    + _DRY_RUN
+    + r")"
+    + r"[^\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
 )
 
 # #485: the other half of the recipe — a checkout of main, then a merge, is how you
@@ -87,9 +119,27 @@ PUSH_TO_MAIN = re.compile(
 # `git pull <remote>`, `git pull <remote> main`, a bare `git rebase`, `git rebase
 # [<remote>/]main`, and flag-only forms like `--continue`/`--abort`. Every flag token
 # has one parse and each lookahead is a bounded check, so the patterns stay linear.
+# #507: `refs/heads/main` (and `refs/remotes/<r>/main`) is main too. `-t`/`--track
+# <remote>/main` creates and lands on main. `git pull` flags that take a separate
+# value (`-X ours`, `-s x`, `--depth 1`, …) keep it, so the value is never read as the
+# remote. `reset --hard|--soft|--keep|--merge <x>` and `am` on main land work there;
+# `update-ref refs/heads/main …` moves main with no checkout at all, so it is refused
+# wherever it appears.
 _QMAIN = r"(?:'main'|\"main\"|main)"
 _FLAGS = r"(?:--?[A-Za-z][\w-]*(?:=\S+)?\s+)*"
-_NOT_MAIN_REF = r"(?!['\"]?(?:[\w.-]+/)?main['\"]?(?:[\s`)]|$))"
+_NOT_MAIN_REF = r"(?!['\"]?(?:refs/heads/|refs/remotes/[\w.-]+/|[\w.-]+/)?main['\"]?(?:[\s`)]|$))"
+_PULL_VALUE_FLAG = (
+    r"(?:-[Xsj]|--(?:strategy|strategy-option|depth|deepen|jobs|upload-pack"
+    r"|shallow-since|shallow-exclude|server-option|negotiation-tip))"
+)
+_PULL_FLAGS = (
+    r"(?:(?:"
+    + _PULL_VALUE_FLAG
+    + r"\s+[^\s-]\S*|(?!"
+    + _PULL_VALUE_FLAG
+    + r"(?![\w=-]))--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
+)
+_RESET_MODE = r"--(?:hard|soft|keep|merge)(?![\w-])"
 CHECKOUT_MAIN = re.compile(
     _LEAD
     + _CMD_PREFIX
@@ -97,7 +147,8 @@ CHECKOUT_MAIN = re.compile(
     + r"(?:checkout|switch)\s+(?:(?!--detach(?![\w-])|-d(?![\w-]))--?[A-Za-z][\w-]*(?:=\S+)?\s+)*"
     + r"(?:-[BbCc]\s+"
     + _QMAIN
-    + r"(?=[\s`)]|$)|"
+    + r"(?=[\s`)]|$)"
+    + r"|(?:-t|--track(?:=\S+)?)\s+['\"]?(?:refs/remotes/)?[\w.-]+/main['\"]?(?=[\s`)]|$)|"
     + _QMAIN
     + r"[`)\s]*$)"
 )
@@ -113,11 +164,28 @@ LANDS = re.compile(
     + _NOT_MAIN_REF
     + r"['\"]?[^\s'\"`)-]"
     + r"|pull\s+"
-    + _FLAGS
+    + _PULL_FLAGS
     + r"['\"]?[^\s'\"-]\S*\s+"
+    + _PULL_FLAGS
+    + _NOT_MAIN_REF
+    + r"['\"]?[^\s'\"`)-]"
+    + r"|reset\s+(?:(?!"
+    + _RESET_MODE
+    + r")--?[A-Za-z][\w-]*(?:=\S+)?\s+)*"
+    + _RESET_MODE
+    + r"\s+"
     + _FLAGS
     + _NOT_MAIN_REF
-    + r"['\"]?[^\s'\"`)-])"
+    + r"(?!['\"]?HEAD['\"]?(?:[\s`)]|$))['\"]?[^\s'\"`)-]"
+    + r"|am(?![\w-])(?!\s+--(?:abort|continue|skip|quit|retry|show-current-patch)(?![\w-])))"
+)
+UPDATE_REF_MAIN = re.compile(
+    _LEAD
+    + _CMD_PREFIX
+    + _GIT
+    + r"update-ref\s+(?:(?:-m\s+(?:'[^']*'|\"[^\"]*\"|[^\s'\"-]\S*)"
+    + r"|(?!-m(?![\w-]))--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
+    + r"['\"]?refs/heads/main['\"]?(?=[\s`)]|$)"
 )
 
 
@@ -126,7 +194,10 @@ def _scan(line: str) -> tuple[list[str], bool]:
 
     #489: one left-to-right pass that knows quotes. Inside '…' or "…" (with `\\"`
     escapes) a `#` is not a comment and `&&`/`||`/`;`/`|`/`&` do not split; outside,
-    a `\\` escapes the next character and a `#` at a word start begins a comment. A
+    a `\\` escapes the next character and a `#` at a word start begins a comment.
+    #507: a word starts after an UNESCAPED blank or after `;`, `&`, `|`, `(` or `)`,
+    so `\\ #x` is no comment and `true;#x` is one; ANSI-C `$'…'` takes `\\'` as an
+    escaped quote (it can close only at a `'` behind an even run of backslashes). A
     quote with no partner later on the line is a literal character, so an apostrophe
     in prose never hides the rest of the line. The partner test is an index compare
     against the last `'` and the last unescaped `"`, so the pass stays linear.
@@ -134,7 +205,9 @@ def _scan(line: str) -> tuple[list[str], bool]:
     n = len(line)
     last_sq = line.rfind("'")
     last_dq = -1
+    last_ansi = -1  # last `'` behind an even run of backslashes: can close `$'…'`
     escaped = False
+    run = 0
     for i, c in enumerate(line):
         if escaped:
             escaped = False
@@ -142,14 +215,24 @@ def _scan(line: str) -> tuple[list[str], bool]:
             escaped = True
         elif c == '"':
             last_dq = i
+        if c == "'" and run % 2 == 0:
+            last_ansi = i
+        run = run + 1 if c == "\\" else 0
     segments = []
     start = i = 0
+    escaped_at = -1  # the last character a `\\` escaped
     while i < n:
         c = line[i]
         if c == "\\":
             if i == n - 1:
                 return segments + [line[start:i]], True
+            escaped_at = i + 1
             i += 2
+        elif c == "'" and i and line[i - 1] == "$" and escaped_at != i - 1 and last_ansi > i:
+            i += 1
+            while i < n and line[i] != "'":
+                i += 2 if line[i] == "\\" else 1
+            i += 1
         elif c == "'" and last_sq > i:
             i = line.index("'", i + 1) + 1
         elif c == '"' and last_dq > i:
@@ -157,7 +240,9 @@ def _scan(line: str) -> tuple[list[str], bool]:
             while i < n and line[i] != '"':
                 i += 2 if line[i] == "\\" else 1
             i += 1
-        elif c == "#" and (i == 0 or line[i - 1].isspace()):
+        elif c == "#" and (
+            i == 0 or (escaped_at != i - 1 and (line[i - 1].isspace() or line[i - 1] in ";&|()"))
+        ):
             n = i
         elif c in ";&|":
             segments.append(line[start:i])
@@ -217,8 +302,9 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
 
     One pass over the segments in order: a checkout of main opens a window through
     the next MERGE_WINDOW lines, a checkout of anything else closes it, a pathspec
-    checkout does neither (#502), and a merge, rebase, cherry-pick or pull of another
-    branch inside the window lands work on main.
+    checkout does neither (#502), and a merge, rebase, cherry-pick, pull of another
+    branch, `reset --hard <x>` or `am` inside the window lands work on main. An
+    `update-ref refs/heads/main` moves main directly and is refused anywhere (#507).
     """
     offenders = []
     opened = None  # 0-based line of the checkout of main whose window is open
@@ -227,7 +313,9 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
         for seg in segments:
             if CHECKOUT_PATHS.match(seg):
                 continue
-            if CHECKOUT_MAIN.match(seg):
+            if UPDATE_REF_MAIN.match(seg):
+                hit = True
+            elif CHECKOUT_MAIN.match(seg):
                 opened = n
             elif CHECKOUT.match(seg):
                 opened = None
