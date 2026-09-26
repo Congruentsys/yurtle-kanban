@@ -2845,9 +2845,13 @@ class KanbanService:
         Returns:
             Tuple of (is_valid, error_message)
         """
-        # Check board-specific transitions first (e.g., HDD theme)
+        # Check board-specific transitions first (e.g., HDD theme); a single board
+        # uses its configured theme's, as a multi-board board uses its preset's (#450)
         board_config = self._get_board_for_item(item)
-        theme = self._load_board_theme(board_config)
+        theme = (
+            self._load_board_theme(board_config) if board_config
+            else self.config.get_theme()
+        )
         board_transitions = self._get_board_transitions(board_config, theme)
 
         if board_transitions:
