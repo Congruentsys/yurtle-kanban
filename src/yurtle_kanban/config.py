@@ -101,6 +101,19 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
                     f"({type(value).__name__}); ignored"
                 )
     had_columns = bool(data.get("columns"))
+    # each transitions entry is a list of statuses; a lone name is a one-item list,
+    # as `item_types: expedition` is (#432); anything else is dropped (#457)
+    transitions = data.get("transitions", {})
+    for status in list(transitions):
+        allowed = transitions[status]
+        if isinstance(allowed, str):
+            transitions[status] = [allowed]
+        elif not isinstance(allowed, list):
+            transitions.pop(status)
+            logger.warning(
+                f"theme file {theme_path}: `transitions.{status}` is not a list "
+                f"({type(allowed).__name__}); ignored"
+            )
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
         entries = data.get(section, {})

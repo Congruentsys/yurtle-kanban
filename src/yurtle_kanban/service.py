@@ -2859,11 +2859,7 @@ class KanbanService:
         """
         # Check board-specific transitions first (e.g., HDD theme); a single board
         # uses its configured theme's, as a multi-board board uses its preset's (#450)
-        board_config = self._get_board_for_item(item)
-        theme = (
-            self._load_board_theme(board_config) if board_config
-            else self.config.get_theme()
-        )
+        board_config, theme = self._item_theme(item)
         board_transitions = self._get_board_transitions(board_config, theme)
 
         if board_transitions:
@@ -2967,8 +2963,34 @@ class KanbanService:
         """Get the workflow for a specific item type."""
         return self._workflow_parser.load_workflow(item_type)
 
+    def _item_theme(self, item: WorkItem) -> tuple[BoardConfig | None, dict | None]:
+        """The item's board and its theme; on a single board, the configured theme."""
+        board_config = self._get_board_for_item(item)
+        theme = (
+            self._load_board_theme(board_config) if board_config
+            else self.config.get_theme()
+        )
+        return board_config, theme
+
     def get_allowed_transitions(self, item: WorkItem) -> list[str]:
-        """Get list of allowed transitions for an item."""
+        """Get list of allowed transitions for an item (canonical status values):
+        the theme's own `transitions` when it has them, as `move` enforces (#457)."""
+        board_config, theme = self._item_theme(item)
+        board_transitions = self._get_board_transitions(board_config, theme)
+        if board_transitions:
+            reverse = self._get_reverse_status_mapping(board_config, theme)
+            forward = {native: canonical for canonical, native in reverse.items()}
+            from_native = reverse.get(item.status.value, item.status.value)
+            allowed = []
+            for native in board_transitions.get(from_native, []):
+                canonical = forward.get(native, native)
+                try:
+                    value = WorkItemStatus.from_string(canonical).value
+                except ValueError:
+                    continue
+                if value not in allowed:
+                    allowed.append(value)
+            return allowed
         workflow = self._workflow_parser.load_workflow(item.item_type.value)
         if workflow:
             return workflow.get_allowed_transitions(item.status.value)
