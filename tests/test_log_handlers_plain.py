@@ -40,6 +40,8 @@ import logging
 from pathlib import Path
 
 import pytest
+from rich.console import Console
+from rich.logging import RichHandler
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "yurtle_kanban"
 PREFIX = "yurtle-kanban"
@@ -255,11 +257,8 @@ def test_record_markup_overrides_a_markup_false_handler() -> None:
     `markup=True` gets markup rendered even by a `RichHandler(markup=False)`, and
     `_markup_rich_handlers()` doesn't report that handler. If Rich ever stops
     letting the record win, this fails; then revisit the module docstring."""
-    rich_logging = pytest.importorskip("rich.logging")
-    from rich.console import Console
-
     out = io.StringIO()
-    handler = rich_logging.RichHandler(
+    handler = RichHandler(
         markup=False,
         console=Console(file=out, width=200, color_system=None),
         show_time=False,
@@ -319,10 +318,6 @@ def _import_package() -> None:
 
 
 def _markup_rich_handlers() -> list[str]:
-    try:
-        from rich.logging import RichHandler
-    except ImportError:
-        return []
     loggers = [logging.getLogger()] + [
         lg
         for name, lg in logging.Logger.manager.loggerDict.items()
