@@ -19,6 +19,7 @@ are not skills and are not consumed by anyone else's agent.
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -49,21 +50,28 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # (with options) and `KEY=val` assignments — each prefix token starts differently
 # (a word, a dash, `NAME=`), so the prefix group has one parse and stays linear.
 # `-n` right after `-o`/`--push-option` is that option's VALUE, not a dry run.
+# #489: also `command [-p]`, `nohup`, `time [-p]`, `exec`, `!`, and the compound-
+# command keywords `then`/`do`/`else` that open a segment (`if x; then git push …`).
+# Each is a distinct word, so the prefix group keeps its single parse. Inside a short
+# cluster `o` takes the REST as its value (`-on` pushes with option "n"), so a
+# cluster is a dry run only when an `n` comes before any `o`. git may be named by
+# an absolute path (`/usr/bin/git`), whose `/`-delimited parts split one way only.
 _CMD_PREFIX = (
     r"(?:(?:sudo|env)\s+(?:(?:(?:-u|--user|-C|--chdir)\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
+    r"|(?:command|time)\s+(?:-p\s+)*|(?:nohup|exec|then|do|else)\s+|!\s+"
     r"|[A-Za-z_]\w*=(?:'[^']*'|\"[^\"]*\"|[^\s'\"]\S*|)\s+)*"
 )
 _LEAD = r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
 _GIT = (
-    r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"(?:(?:/[\w.+-]+)*/)?git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
 )
 PUSH_TO_MAIN = re.compile(
     _LEAD + _CMD_PREFIX + _GIT + r"push\b"
-    r"(?![^#;&|\n]*(?:--dry-run"
-    r"|(?<!\s-o)(?<!--push-option)\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
-    r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
+    r"(?![^\n]*(?:--dry-run"
+    r"|(?<!\s-o)(?<!--push-option)\s-(?=[A-Za-np-z]*n)[A-Za-z]+(?![\w-])))"
+    r"[^\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
 )
 
 # #485: the other half of the recipe — a checkout of main, then a merge, is how you
@@ -76,20 +84,92 @@ CHECKOUT_MAIN = re.compile(
 CHECKOUT = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\b")
 MERGE = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"merge(?![\w-])")
 
-# A shell comment starts at a word boundary: `main#x` is still a word, `x # y` is not.
-_COMMENT = re.compile(r"(?<!\S)#")
-_SEGMENT_SEP = re.compile(r"&&|\|\||[;&|]")
+
+def _scan(line: str) -> tuple[list[str], bool]:
+    """Split one line into shell segments; also say whether it continues (`\\` at end).
+
+    #489: one left-to-right pass that knows quotes. Inside '…' or "…" (with `\\"`
+    escapes) a `#` is not a comment and `&&`/`||`/`;`/`|`/`&` do not split; outside,
+    a `\\` escapes the next character and a `#` at a word start begins a comment. A
+    quote with no partner later on the line is a literal character, so an apostrophe
+    in prose never hides the rest of the line. The partner test is an index compare
+    against the last `'` and the last unescaped `"`, so the pass stays linear.
+    """
+    n = len(line)
+    last_sq = line.rfind("'")
+    last_dq = -1
+    escaped = False
+    for i, c in enumerate(line):
+        if escaped:
+            escaped = False
+        elif c == "\\":
+            escaped = True
+        elif c == '"':
+            last_dq = i
+    segments = []
+    start = i = 0
+    while i < n:
+        c = line[i]
+        if c == "\\":
+            if i == n - 1:
+                return segments + [line[start:i]], True
+            i += 2
+        elif c == "'" and last_sq > i:
+            i = line.index("'", i + 1) + 1
+        elif c == '"' and last_dq > i:
+            i += 1
+            while i < n and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+            i += 1
+        elif c == "#" and (i == 0 or line[i - 1].isspace()):
+            n = i
+        elif c in ";&|":
+            segments.append(line[start:i])
+            i += 2 if line[i : i + 2] in ("&&", "||") else 1
+            start = i
+        else:
+            i += 1
+    segments.append(line[start:n])
+    return segments, False
+
+
+def _commands(lines: list[str]) -> Iterator[tuple[int, str, list[str]]]:
+    """Yield (0-based start line, text, segments) per command, continuations joined (#489).
+
+    Each physical line is scanned once to learn whether it continues; a joined command
+    is scanned once more as a whole, so the work stays linear in the text.
+    """
+    i = 0
+    while i < len(lines):
+        start = i
+        segments, continues = _scan(lines[i])
+        if not continues or i + 1 == len(lines):
+            yield start, lines[i], segments
+            i += 1
+            continue
+        parts = []
+        while continues and i + 1 < len(lines):
+            parts.append(lines[i][:-1])
+            i += 1
+            _, continues = _scan(lines[i])
+        parts.append(lines[i])
+        i += 1
+        text = "".join(parts)
+        yield start, text, _scan(text)[0]
 
 
 def refuses_push_to_main(line: str) -> bool:
     """The guard applied to one skill line: any shell segment that pushes to main."""
-    code = _COMMENT.split(line, maxsplit=1)[0]
-    return any(PUSH_TO_MAIN.match(seg) for seg in _SEGMENT_SEP.split(code))
+    return any(PUSH_TO_MAIN.match(seg) for seg in _scan(line)[0])
 
 
 def pushes_to_main(lines: list[str]) -> list[tuple[int, str]]:
     """The push guard applied to a skill: every (1-based line, text) that pushes to main."""
-    return [(n + 1, line.strip()) for n, line in enumerate(lines) if refuses_push_to_main(line)]
+    return [
+        (n + 1, text.strip())
+        for n, text, segments in _commands(lines)
+        if any(PUSH_TO_MAIN.match(seg) for seg in segments)
+    ]
 
 
 # How far after a checkout of main a `git merge` still counts as a merge ON main.
@@ -105,10 +185,9 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
     """
     offenders = []
     opened = None  # 0-based line of the checkout of main whose window is open
-    for n, line in enumerate(lines):
-        code = _COMMENT.split(line, maxsplit=1)[0]
+    for n, text, segments in _commands(lines):
         hit = False
-        for seg in _SEGMENT_SEP.split(code):
+        for seg in segments:
             if CHECKOUT_MAIN.match(seg):
                 opened = n
             elif CHECKOUT.match(seg):
@@ -116,7 +195,7 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
             elif MERGE.match(seg) and opened is not None and n - opened <= MERGE_WINDOW:
                 hit = True
         if hit:
-            offenders.append((n + 1, line.strip()))
+            offenders.append((n + 1, text.strip()))
     return offenders
 
 
