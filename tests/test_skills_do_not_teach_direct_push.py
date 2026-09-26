@@ -17,6 +17,8 @@ are not skills and are not consumed by anyone else's agent.
 """
 
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,13 +27,28 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 
 # `git push [flags] <remote> main` — the thing forbidden. `--force-with-lease origin
 # <branch>` is fine, so the branch name is what decides, not the flags.
-# `main` must be a whole refspec TOKEN (#88): preceded by whitespace, `:` or `+`
-# (optionally via `refs/heads/`), and followed by whitespace, end of line, a comment
-# or a shell operator — never by `/`, `-` or `:`. Only the part of the line before a
-# `#` comment counts, so `main` mentioned in a comment is not a push.
+# `main` must be a whole refspec TOKEN (#88): preceded by whitespace, `:`, `+` or a
+# quote (optionally via `refs/heads/`), and followed by whitespace, end of line, a
+# closing quote or backtick, a comment or a shell operator — never by `/`, `-` or
+# `:`. Only the part of the line before a `#` comment counts, so `main` mentioned in
+# a comment is not a push.
+# #465: the line may START with markdown that puts a command on it — list markers
+# (`-`, `*`, `1.`), a blockquote `>`, an inline-code backtick, a `$` prompt — but
+# never with prose, so "we never git push to main" is not a command. Global options
+# (`-C dir`, `-c k=v`, `--git-dir dir`, `--no-pager`) may sit between `git` and
+# `push`. Each option token has exactly ONE parse — a dash, an optional second dash,
+# then a letter; a separate value never starts with `-` — so the group is linear
+# (round 2: `--?[\w-]+` read `--x` two ways and went 2^N on a run of options). A dry run —
+# `--dry-run` or a short flag cluster containing `n` — pushes nothing, but only when
+# it belongs to THIS command, i.e. before any `;`, `&` or `|`.
+# The cluster is read ONCE — "has an `n`" is a lookahead, then `[A-Za-z]+` takes the
+# whole run — so `-nnnn…1` is linear (round 3: `[A-Za-z]*n[A-Za-z]*` split it k ways).
 PUSH_TO_MAIN = re.compile(
-    r"^\s*\$?\s*git\s+push\b(?![^#\n]*--dry-run)"
-    r"[^#\n]*(?<=[\s:+])(?:refs/heads/)?main(?=[\s#;&|]|$)"
+    r"^\s*(?:(?:[-*>`$]|\d+[.)])\s*)*"
+    r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*push\b"
+    r"(?![^#;&|\n]*(?:--dry-run|\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
+    r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`]|$)"
 )
 
 # `git checkout main` immediately preceding a merge is the other half of the recipe:
@@ -85,6 +102,46 @@ PUSH_TO_MAIN_CASES = [
     # not a push line at all
     ("git pull origin main", False),
     ("Never run git push origin main.", False),
+    # #465: quoted refspecs are the same push
+    ("git push origin 'main'", True),
+    ('git push origin "main"', True),
+    ("git push origin 'HEAD:main'", True),
+    ("git push origin 'main-x'", False),
+    ('git push origin "feature/main"', False),
+    # #465: global git options before `push`
+    ("git -C dir push origin main", True),
+    ("git -c k=v push origin main", True),
+    ("git --no-pager push origin main", True),
+    ("git -C dir push origin feature/x", False),
+    # #465: command lines behind a markdown prefix
+    ("- git push origin main", True),
+    ("* git push origin main", True),
+    ("`git push origin main`", True),
+    ("> git push origin main", True),
+    ("1. git push origin main", True),
+    ("- `git push origin main`", True),
+    ("> $ git push origin main", True),
+    ("- git push origin feature/x", False),
+    ("`git push origin main-thing`", False),
+    # #465: prose stays prose — only a line that STARTS with the command is one
+    ("we never git push to main", False),
+    ("- we never git push to main", False),
+    ("> Never run `git push origin main`.", False),
+    ("Do not run `git push origin main` here.", False),
+    # #465: the short dry-run `-n` pushes nothing either
+    ("git push -n origin main", False),
+    ("git push origin main -n", False),
+    ("git push -nf origin main", False),
+    # ...but a `-n` belonging to a LATER command does not exempt the push
+    ("git push origin main && echo -n done", True),
+    ("git push origin main; git log --dry-run", True),
+    # `-n` must be a flag, not part of a word
+    ("git push --no-verify origin main", True),
+    # #465 round 2: global options that take a separate value
+    ("git --git-dir .git push origin main", True),
+    ("git --work-tree dir push origin main", True),
+    ("git --git-dir=.git --work-tree dir -C sub push origin main", True),
+    ("git --git-dir .git push origin feature/x", False),
 ]
 
 
@@ -93,6 +150,53 @@ def test_push_to_main_guard_table(line, refused):
     assert bool(PUSH_TO_MAIN.match(line)) is refused, (
         f"PUSH_TO_MAIN {'missed' if refused else 'falsely refused'}: {line!r}"
     )
+
+
+# #465 round 2: the guard runs on every line of every skill, so it must be linear on
+# ANY line — an option token with two parses (`--x` as `--`+`x` or `-`+`-x`) made the
+# global-options group 2^N on a line of N options that never reaches `push`. Each
+# line runs in a child process with a hard timeout: `re` cannot be interrupted
+# in-process, and a hung guard must fail, not hang the suite.
+ADVERSARIAL_LINES = [
+    "git " + "--no-pager " * 60 + "log",
+    "git " + "--a=b " * 60 + "pul",
+    "git " + "-c " * 60 + "x",
+    "git " + "-c -c " * 60 + "push origin feature/x",
+    "git " + "--git-dir " * 60 + "x",
+    "- " * 200 + "git pull",
+    "git push " + "-a " * 500 + "origin feature/x",
+    "git push " + "x" * 5000,
+    "git push " + "n" * 5000 + " origin feature/x",
+    "1" * 5000 + " git push origin feature/x",
+    "git push -" + "n" * 5000 + "1 origin main",
+    "git push -" + "n" * 5000 + "- origin feature",
+]
+
+_TIMED_MATCH = (
+    "import re, sys, time\n"
+    "rx = re.compile(sys.argv[1])\n"
+    "t = time.perf_counter()\n"
+    "rx.match(sys.argv[2])\n"
+    "print(time.perf_counter() - t)\n"
+)
+
+
+@pytest.mark.parametrize(
+    "line", ADVERSARIAL_LINES, ids=[f"{c[:24]}...len{len(c)}" for c in ADVERSARIAL_LINES]
+)
+def test_push_to_main_guard_is_linear(line):
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", _TIMED_MATCH, PUSH_TO_MAIN.pattern, line],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"PUSH_TO_MAIN backtracks catastrophically (>5 s) on {line[:40]!r}...")
+    elapsed = float(out.stdout)
+    assert elapsed < 0.1, f"PUSH_TO_MAIN took {elapsed:.3f} s on {line[:40]!r}..."
 
 
 def _skill_files():
