@@ -108,7 +108,7 @@ def _get_items(service: KanbanService) -> list[WorkItem]:
 
 
 @pytest.mark.parametrize("read", [_get_board, _get_items], ids=["get_board", "get_items"])
-def test_per_board_read_outside_scan_builds_status_names_once(
+def test_per_board_read_outside_scan_builds_status_names_boundedly(
     repo: Path, monkeypatch: pytest.MonkeyPatch, read: Callable[[KanbanService], list[WorkItem]]
 ) -> None:
     service = cli.get_service()
