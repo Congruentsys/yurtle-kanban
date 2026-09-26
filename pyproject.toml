@@ -48,6 +48,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "tomli>=1.1; python_version < '3.11'",  # tomllib for 3.10 in tests (#555)
 ]
 # the MCP server is a stdlib stdio loop; it never imports the `mcp` package, so
 # the extra is kept only so `yurtle-kanban[mcp]` still resolves (#555)
