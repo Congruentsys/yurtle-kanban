@@ -368,6 +368,10 @@ def test_help_example_is_accepted_by_the_cli(parts, example, words):
 # --- blind spots found reviewing #89 (issue #476) --------------------------------
 
 
+# Every group below the root, e.g. `hdd`, `epic` — the shapes #542's review found.
+_SUBGROUPS = sorted(n for n, c in main.commands.items() if isinstance(c, click.Group))
+
+
 def _verdict(line):
     """What the guard says about one printed line: a rejection, None, or "unparsed"."""
     parsed = _parse(line)
@@ -475,6 +479,29 @@ def _verdict(line):
         ("yurtle-kanban hdd -- --help", None),
         ("yurtle-kanban hdd --quiet --help", None),
         ("yurtle-kanban hdd validate", None),
+        # #542 round 2: click runs an eager option's callback while it parses
+        # that command's own words, and exits 0 before it resolves a subcommand.
+        # So after `--version`/`--help`, the rest of that command's options are
+        # still checked, but a subcommand word and everything after it are not.
+        *[(f"yurtle-kanban --version {g}", None) for g in _SUBGROUPS],
+        *[(f"yurtle-kanban --help {g}", None) for g in _SUBGROUPS],
+        *[(f"yurtle-kanban {g} --help --", None) for g in _SUBGROUPS],
+        ("yurtle-kanban --help --", None),
+        ("yurtle-kanban --version bogus", None),
+        ("yurtle-kanban --version hdd bogus", None),
+        ("yurtle-kanban --version hdd --bogus", None),
+        ("yurtle-kanban hdd --help bogus", None),
+        ("yurtle-kanban --help -- bogus", None),
+        ("yurtle-kanban --help -- --bogus", None),
+        ("yurtle-kanban --version -- --", None),
+        ("yurtle-kanban --version --bogus", "`--bogus` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban --version -1", "`-1` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban hdd --help --bogus", "`--bogus` is not accepted by `yurtle-kanban hdd`"),
+        (
+            "yurtle-kanban move EXP-1 done --help --bogus",
+            "`--bogus` is not accepted by `yurtle-kanban move`",
+        ),
+        ("yurtle-kanban hdd --version", "`--version` is not accepted by `yurtle-kanban hdd`"),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
@@ -487,6 +514,35 @@ def test_guard_verdicts(monkeypatch, line, expected):
     quiet = click.Option(["--quiet"], is_flag=True, hidden=True)
     monkeypatch.setattr(hdd, "params", [*hdd.params, quiet])
     assert _verdict(line) == expected
+
+
+_GROUP_SUFFIXES = ["", "--", "--help", "--version", "-- --help", "-- --version", "--help --"]
+
+
+def _group_shapes():
+    """Lines that end at, or stop before, a group: none of them runs a command."""
+    shapes = [
+        f"{g} {suffix}".split() for g in ["", *_SUBGROUPS] for suffix in _GROUP_SUFFIXES
+    ]
+    shapes += [[eager, g] for eager in ("--version", "--help") for g in _SUBGROUPS]
+    return shapes
+
+
+@pytest.mark.parametrize("words", _group_shapes(), ids=" ".join)
+def test_group_shapes_agree_with_click(words):
+    """The guard's verdict IS click's: accepted exactly when click exits 0.
+
+    None of these lines reaches a leaf command, so click only parses them — it
+    exits 0 (an eager option ran) or 2 (a usage error), never runs anything.
+    """
+    result = CliRunner().invoke(main, words)
+    assert result.exit_code in (0, 2), result.output
+    click_accepts = result.exit_code == 0
+    verdict = _rejection(*words)
+    assert (verdict is None) is click_accepts, (
+        f"`yurtle-kanban {' '.join(words)}`: click exits {result.exit_code}, "
+        f"the guard says {verdict!r}"
+    )
 
 
 def test_hidden_option_alias_is_accepted(monkeypatch):
