@@ -128,7 +128,8 @@ def hdd_backfill(dry_run):
 @hdd.command("registry")
 @click.option(
     "--output", "output_path", default=None,
-    help="Output file path (default: research/REGISTRY.md)",
+    help="Output file path (default: research/REGISTRY.md; <board root>/REGISTRY.md "
+    "for a board outside the repo)",
 )
 @click.option("--push", is_flag=True, help="Commit and push the registry file")
 def hdd_registry(output_path: str | None, push: bool):
@@ -229,6 +230,13 @@ def hdd_registry(output_path: str | None, push: bool):
         out = Path(output_path)
     else:
         out = service.repo_root / "research" / "REGISTRY.md"
+        if not service.config.is_multi_board:
+            # a board root outside the repo keeps its registry with it: the repo
+            # doesn't hold (or track) the items it would index (#174, #192)
+            root = Path(service._board_root()).expanduser()
+            root = root if root.is_absolute() else service.repo_root / root
+            if service._repo_relative(root) is None:
+                out = root / "REGISTRY.md"
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines))
@@ -241,6 +249,8 @@ def hdd_registry(output_path: str | None, push: bool):
     )
     console.print(f"  {total} items indexed, {len(orphaned)} orphaned")
 
+    if push and service._outside_repo(out):
+        push = False  # outside the repo: nothing to commit; it warned why (#174, #192)
     if push:
         try:
             subprocess.run(
