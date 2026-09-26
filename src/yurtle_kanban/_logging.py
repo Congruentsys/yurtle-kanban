@@ -9,6 +9,10 @@ message and in its exception messages escaped when the record is made, before an
 handler formats it. DEBUG and INFO are left alone (the SPARQL debug log is
 multi-line on purpose), and so is a traceback's own layout.
 
+Messages are plain text: they interpolate names from repo files (boards, themes,
+titles), so no package code installs a handler that interprets Rich markup;
+tests/test_log_handlers_plain.py enforces that (#505).
+
 The traceback text is pre-rendered into `record.exc_text`, so a handler's own
 `Formatter.formatException` isn't called for these records. The guarantee also
 assumes nobody later replaces the record factory without chaining it.
