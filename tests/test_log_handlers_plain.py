@@ -6,6 +6,18 @@ package code ever logged through a Rich handler with markup on, a `[bold]` or
 decision on #505: no per-message escaping; instead pin that no package code
 constructs a `RichHandler` unless it passes `markup=False` explicitly, and that
 a markup-looking warning comes out verbatim.
+
+Accepted gaps (#530). The static scan reads source text, so it can't follow
+every dynamic path. These shapes are known misses, and we don't chase them:
+- `extra=` given as a variable, or passed inside `**kw`;
+- `object.__setattr__(h, 'markup', _)` and `builtins.setattr(h, 'markup', _)`;
+- `setattr(h, k, _)` where `k` is a variable holding `'markup'`;
+- `h.__dict__.update(markup=_)`.
+src has none of them today. The backstop is the runtime check
+(`test_no_markup_rich_handler_installed_after_import`): whatever path turned
+markup on, a markup-enabled RichHandler attached to the root or a
+`yurtle-kanban*` logger at import still fails it. Each gap is pinned below as a
+strict xfail, so closing one later is noticed and the xfail is removed.
 """
 
 from __future__ import annotations
@@ -187,6 +199,44 @@ def test_checker_flags_markup_capable_rich_handler(source: str) -> None:
 )
 def test_checker_passes_plain_handlers(source: str) -> None:
     assert rich_handler_violations(source, "planted.py") == []
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="accepted gap #530")
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "import logging\ne = dict(markup=True)\n"
+            "logging.getLogger('yurtle-kanban').warning('x', extra=e)\n",
+            id="extra-variable",
+        ),
+        pytest.param(
+            "import logging\nkw = {'extra': dict(markup=True)}\n"
+            "logging.getLogger('yurtle-kanban').warning('x', **kw)\n",
+            id="extra-via-kwargs",
+        ),
+        pytest.param(
+            "h = make_handler()\nobject.__setattr__(h, 'markup', True)\n",
+            id="object-setattr",
+        ),
+        pytest.param(
+            "import builtins\nh = make_handler()\nbuiltins.setattr(h, 'markup', True)\n",
+            id="builtins-setattr",
+        ),
+        pytest.param(
+            "h = make_handler()\nk = 'markup'\nsetattr(h, k, True)\n",
+            id="setattr-variable-key",
+        ),
+        pytest.param(
+            "h = make_handler()\nh.__dict__.update(markup=True)\n",
+            id="dict-update",
+        ),
+    ],
+)
+def test_accepted_gap_is_still_missed(source: str) -> None:
+    """Pins a known miss (#530): if the checker starts flagging this shape, the
+    strict xfail turns into a failure, so move the row to the flagged list."""
+    assert rich_handler_violations(source, "planted.py")
 
 
 def test_checker_flags_a_planted_module_file(tmp_path: Path) -> None:
