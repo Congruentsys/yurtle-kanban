@@ -566,11 +566,23 @@ class KanbanService:
         rel = self._repo_relative(path)
         return str(rel) if rel is not None else str(path)
 
+    def _outside_git(self, path: Path) -> bool:
+        """True when `path` lies outside the git work tree holding the repo root:
+        the one test of "outside" for both where a file goes and whether git
+        commits it (#174, #478)."""
+        return self._repo_relative(path, self._git_toplevel()) is None
+
+    def _hdd_board(self) -> BoardConfig | None:
+        """The board holding the folder new hypotheses are written to, found through
+        `_get_type_directory` itself so the two can't drift (#114, #478)."""
+        folder = self._get_type_directory(WorkItemType.HYPOTHESIS)
+        return self.config.get_board_for_path(folder, self.repo_root)
+
     def _outside_repo(self, *paths: Path) -> bool:
         """True, with a warning, when any of `paths` lies outside the git repository,
         so git can't commit it (#174): the caller skips git instead of failing late."""
         top = self._git_toplevel()
-        outside = [str(p) for p in paths if self._repo_relative(p, top) is None]
+        outside = [str(p) for p in paths if self._outside_git(p)]
         if outside:
             logger.warning(
                 f"Not committed: {', '.join(outside)} is outside the git repository at {top}"

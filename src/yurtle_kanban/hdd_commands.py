@@ -142,6 +142,7 @@ def hdd_registry(output_path: str | None, push: bool):
         yurtle-kanban hdd registry
         yurtle-kanban hdd registry --output research/REGISTRY.md --push
     """
+    import os
     import subprocess
 
     service = _get_service()
@@ -230,13 +231,19 @@ def hdd_registry(output_path: str | None, push: bool):
         out = Path(output_path)
     else:
         out = service.repo_root / "research" / "REGISTRY.md"
-        if not service.config.is_multi_board:
-            # a board root outside the repo keeps its registry with it: the repo
-            # doesn't hold (or track) the items it would index (#174, #192)
-            root = Path(service._board_root()).expanduser()
+        # a board root outside the git repository keeps its registry with it: the
+        # repo doesn't hold (or track) the items it would index (#174, #192, #478)
+        if service.config.is_multi_board:
+            board = service._hdd_board()
+            root_name = board.path if board else None
+        else:
+            root_name = service._board_root()
+        if root_name:
+            root = Path(root_name).expanduser()
             root = root if root.is_absolute() else service.repo_root / root
-            if service._repo_relative(root) is None:
+            if service._outside_git(root):
                 out = root / "REGISTRY.md"
+        out = Path(os.path.normpath(out))  # the default only: --output is used as given
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines))
