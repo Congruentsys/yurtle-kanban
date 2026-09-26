@@ -1012,7 +1012,7 @@ class KanbanService:
     def _theme_status_names(self, file_path: Path | None) -> dict[str, WorkItemStatus]:
         """native name → status for the theme of the board `file_path` is on (the
         single board's theme without boards; every board's, first wins, when the
-        board is unknown). Memoised per board until the next scan (#448)."""
+        board is unknown). Memoised per board within a scan scope (#448, #459)."""
         board = None
         if self.config.is_multi_board and file_path is not None:
             board = self.config.get_board_for_path(file_path, self.repo_root)
