@@ -538,7 +538,11 @@ def _group_shapes():
     Every command, leaves included: an eager option followed by an unknown
     option, a `-1`, a stray word or `--`, and one preceded by an unknown option.
     The root's `--version`/`--help` in front of every command path, alone and
-    followed by an unknown option. (#542, #549)
+    followed by an unknown option. And every option that is real on an ancestor
+    group but not on the command itself, placed after that command — alone,
+    after `--help`, before `--help`, and repeated after a root `--version` —
+    so a parent's option is never mistaken for the leaf's: `move --version`,
+    `hdd validate --version`. (#542, #549, #553)
     """
     paths = [(), *_command_paths()]
     groups = [(), *[p for p in paths if isinstance(_command_at(p), click.Group)]]
@@ -549,8 +553,24 @@ def _group_shapes():
         shapes += [["--version", *p], ["--help", *p], ["--version", *p, "--bogus"]]
     shapes += [["--version", "--bogus"], ["--version", "-1"], ["--version", "bogus"]]
     shapes += [["--version", "--", "--"]]
+    for p in paths[1:]:
+        for opt in _parent_only_options(p):
+            shapes += [[*p, opt], [*p, "--help", opt], [*p, opt, "--help"]]
+            shapes += [["--version", *p, opt]]
     unique = list(dict.fromkeys(tuple(s) for s in shapes))
     return [list(s) for s in unique]
+
+
+def _long_options(cmd):
+    return {o for o in _declared_options(cmd) if o.startswith("--")}
+
+
+def _parent_only_options(path):
+    """Long options some ancestor group of `path` declares and `path` itself does not."""
+    inherited = set()
+    for depth in range(len(path)):
+        inherited |= _long_options(_command_at(path[:depth]))
+    return sorted(inherited - _long_options(_command_at(path)))
 
 
 def _command_at(path):
