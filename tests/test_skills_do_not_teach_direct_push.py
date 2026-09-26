@@ -35,12 +35,16 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 # #465: the line may START with markdown that puts a command on it — list markers
 # (`-`, `*`, `1.`), a blockquote `>`, an inline-code backtick, a `$` prompt — but
 # never with prose, so "we never git push to main" is not a command. Global options
-# (`-C dir`, `-c k=v`, `--no-pager`) may sit between `git` and `push`. A dry run —
+# (`-C dir`, `-c k=v`, `--git-dir dir`, `--no-pager`) may sit between `git` and
+# `push`. Each option token has exactly ONE parse — a dash, an optional second dash,
+# then a letter; a separate value never starts with `-` — so the group is linear
+# (round 2: `--?[\w-]+` read `--x` two ways and went 2^N on a run of options). A dry run —
 # `--dry-run` or a short flag cluster containing `n` — pushes nothing, but only when
 # it belongs to THIS command, i.e. before any `;`, `&` or `|`.
 PUSH_TO_MAIN = re.compile(
     r"^\s*(?:(?:[-*>`$]|\d+[.)])\s*)*"
-    r"git\s+(?:(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?)\s+)*push\b"
+    r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*push\b"
     r"(?![^#;&|\n]*(?:--dry-run|\s-[A-Za-z]*n[A-Za-z]*(?![\w-])))"
     r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`]|$)"
 )
@@ -161,6 +165,7 @@ ADVERSARIAL_LINES = [
     "git push " + "-a " * 500 + "origin feature/x",
     "git push " + "x" * 5000,
     "git push " + "n" * 5000 + " origin feature/x",
+    "1" * 5000 + " git push origin feature/x",
 ]
 
 _TIMED_MATCH = (
