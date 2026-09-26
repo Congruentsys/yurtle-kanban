@@ -418,6 +418,42 @@ PUSH_TO_MAIN_CASES = [
     ("{ echo; } && git push origin feature/x", False),
     ("{ git push origin feature/x; }", False),
     ("{ echo hi; }", False),
+    # #507: `if`/`while`/`until`/`elif` open a segment too — the condition runs
+    ("if git push origin main; then echo ok; fi", True),
+    ("while ! git push origin main; do sleep 1; done", True),
+    ("until git push origin main; do :; done", True),
+    ("if x; then :; elif git push origin main; then :; fi", True),
+    # #507: a cluster ENDING in `o` takes the next token as its value — not a dry run
+    ("git push -fo -n origin main", True),
+    ("git push -uo -n origin main", True),
+    # #507: a quoted `-n` is part of a value, not a flag
+    ('git push -o "a -n" origin main', True),
+    ("git push -o 'x -n' origin main", True),
+    ('git push --push-option "a -n" origin main', True),
+    # #507: an escaped space is not a word break, so the `#` after it is no comment
+    ("echo \\ #x && git push origin main", True),
+    # #507: ANSI-C `$'…'` quotes take `\'` as an escaped quote
+    ("$'\\'' && git push origin main; echo 'x'", True),
+    ("echo $'a\\'b' && git push origin main; echo 'c'", True),
+    # #507: relative and builtin ways to name git
+    ("./git push origin main", True),
+    ("../bin/git push origin main", True),
+    ("~/bin/git push origin main", True),
+    ("builtin command git push origin main", True),
+    # #507 controls
+    ("if git push origin feat; then :; fi", False),
+    ("iffy git push origin main", False),
+    ("while true; do git push origin feature/x; done", False),
+    ("git push -fo x -n origin main", False),
+    ("git push -of -n origin main", False),
+    ('git push -n -o "a b" origin main', False),
+    ("echo \\#x && git push origin feature/x", False),
+    ("true;# && git push origin main", False),
+    ("true&&# git push origin main", False),
+    ("{git push origin main;}", False),
+    ("./gitx push origin main", False),
+    ("~/bin/git push origin feature/x", False),
+    ("builtin command git push origin feat", False),
 ]
 
 
@@ -505,6 +541,20 @@ ADVERSARIAL_LINES = [
     "git push " + "-ao " * 2000 + "origin feature/x",
     "{ " * 5000 + "git pull",
     "{" * 5000 + " git push origin feature/x",
+    # #507
+    "if while until elif " * 1000 + "git pull",
+    "git push " + "-fo x " * 2000 + "origin feature/x",
+    "git push " + '"a -n" ' * 2000 + "origin feature/x",
+    "git push " + '"' * 3001 + " origin feature/x",
+    "git push " + "-fo " * 3000 + "origin feature/x",
+    "git push -" + "f" * 5000 + "o -n origin feature/x",
+    "echo " + "\\ " * 3000 + "#x",
+    "$'" + "\\'" * 3000 + " && git pull",
+    "$'" * 3000,
+    "./" * 3000 + "git pull",
+    "~/" + "a/" * 3000 + "git pull",
+    "true;#" * 2000,
+    "{git " * 2000,
 ]
 
 # The child imports the guard FUNCTION (#472), so line splitting is timed too; it
@@ -679,6 +729,50 @@ MERGES_ON_MAIN_CASES = [
     ("git checkout feat && git cherry-pick abc", []),
     ("git checkout feat && git pull origin feat", []),
     ("git rebase feat && git checkout main", []),
+    # #507: shared leads, git names and scanner fixes reach the merge guard
+    ("if git checkout main; then git merge x; fi", [1]),
+    ("git checkout main\nuntil git merge x; do sleep 1; done", [2]),
+    ("./git checkout main && ~/bin/git merge x", [1]),
+    ("builtin command git checkout main && git merge x", [1]),
+    ("echo \\ #x && git checkout main && git merge x", [1]),
+    ("git checkout main; echo $'\\'' && git merge x; echo 'y'", [1]),
+    # #507: `-t`/`--track <remote>/main` creates and lands on main
+    ("git checkout -t origin/main && git merge x", [1]),
+    ("git checkout --track origin/main\ngit merge x", [2]),
+    ("git switch --track origin/main && git merge x", [1]),
+    # #507: `reset --hard <x>` and `am` on main land work on main
+    ("git checkout main && git reset --hard feat", [1]),
+    ("git checkout main\ngit reset -q --hard origin/feat", [2]),
+    ("git checkout main && git am 0001.patch", [1]),
+    ("git checkout main && git am < series.mbox", [1]),
+    ("git checkout main\ngit am -3 patches/x.patch", [2]),
+    # #507: `update-ref refs/heads/main` moves main with no checkout at all
+    ("git update-ref refs/heads/main feat", [1]),
+    ("git update-ref -m 'land' refs/heads/main feat", [1]),
+    ("git checkout feat && git update-ref refs/heads/main HEAD", [1]),
+    ("git update-ref -d refs/heads/main", [1]),
+    # #507 controls — pull flags that take a value, refs/heads/main, other branches
+    ("git checkout main && git pull -X ours origin main", []),
+    ("git checkout main && git pull -s recursive origin main", []),
+    ("git checkout main && git pull --strategy ours origin main", []),
+    ("git checkout main && git pull --depth 1 origin", []),
+    ("git checkout main && git pull --depth 1 origin main", []),
+    ("git checkout main && git rebase refs/heads/main", []),
+    ("git checkout main && git pull origin refs/heads/main", []),
+    ("git checkout -b feat -t origin/main && git merge x", []),
+    ("git checkout -t origin/feat && git merge x", []),
+    ("git checkout --track origin/main-x && git merge x", []),
+    ("git checkout main && git reset --hard", []),
+    ("git checkout main && git reset --hard origin/main", []),
+    ("git checkout main && git reset --hard HEAD", []),
+    ("git checkout main && git reset file.txt", []),
+    ("git checkout feat && git reset --hard main", []),
+    ("git checkout main && git am --abort", []),
+    ("git checkout feat && git am 0001.patch", []),
+    ("git update-ref refs/heads/feat main", []),
+    ("git update-ref refs/heads/main-x x", []),
+    ("{git checkout main;} && git merge x", []),
+    ("true;# git checkout main && git merge x", []),
 ]
 
 
@@ -722,6 +816,16 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git checkout main && git rebase " + "--a=b " * 3000,
     "git checkout main && git cherry-pick " + "-x " * 3000,
     "git checkout main && git rebase " + "a/" * 3000 + "main",
+    # #507
+    "git checkout main && git pull " + "-X ours " * 2000 + "origin main",
+    "git checkout main && git pull " + "-X " * 3000,
+    "git checkout main && git reset " + "--hard " * 3000,
+    "git checkout main && git reset " + "-q " * 3000 + "--hard x",
+    "git update-ref " + "-m x " * 3000 + "refs/heads/main x",
+    "git update-ref " + "-m " * 3000,
+    "git checkout " + "-t " * 3000 + "origin/main",
+    "git checkout main && git rebase " + "refs/heads/" * 2000 + "main",
+    "git checkout main && git am " + "--abort " * 3000,
 ]
 
 _TIMED_MERGE = (
