@@ -589,6 +589,58 @@ MERGES_ON_MAIN_CASES = [
     ("{ git checkout main; }\ngit merge x", [2]),
     ("{ git checkout main; git pull; }", []),
     ("{ echo; } && git merge x", []),
+    # #502: a quoted `main` is main — it opens the window, and never closes it
+    ("git checkout 'main' && git merge x", [1]),
+    ('git checkout "main"\ngit merge x', [2]),
+    ("git switch 'main' && git merge x", [1]),
+    ("git checkout main && git checkout 'main' && git merge x", [1]),
+    ("- `git checkout 'main' && git merge x`", [1]),
+    # #502: `-B`/`-C` (and `-b`/`-c`) name the branch you land on
+    ("git checkout -B main origin/main && git merge x", [1]),
+    ("git checkout -B main && git merge x", [1]),
+    ("git switch -C main origin/main\ngit merge x", [2]),
+    ("git checkout -b main && git merge x", [1]),
+    ("git checkout -q -B 'main' origin/main && git merge x", [1]),
+    # #502: a pathspec checkout restores files — it neither opens nor closes the window
+    ("git checkout main\ngit checkout -- file.txt\ngit merge x", [3]),
+    ("git checkout main && git checkout main -- f && git merge x", [1]),
+    ("git checkout main && git checkout HEAD -- a b && git merge x", [1]),
+    ("git checkout main && git checkout feat -- f && git merge x", [1]),
+    # #502: pull of another branch, rebase and cherry-pick on main land work on main too
+    ("git checkout main && git pull origin feat", [1]),
+    ("git checkout main\ngit pull --rebase origin feat", [2]),
+    ("git switch main && git pull upstream feature/x", [1]),
+    ("git checkout main && git pull origin 'feat'", [1]),
+    ("git checkout main && git rebase feat", [1]),
+    ("git checkout main && git rebase -i HEAD~3", [1]),
+    ("git checkout main && git cherry-pick abc123", [1]),
+    ("git checkout main\ngit cherry-pick -x abc123", [2]),
+    # #502 (landed in #489): `command`/`time`/`nohup` prefixes
+    ("command git checkout main && time git merge x", [1]),
+    ("nohup git checkout main\ncommand git rebase feat", [2]),
+    ("time git switch main && nohup git cherry-pick abc", [1]),
+    # #502 controls
+    ("git checkout 'main-x' && git merge x", []),
+    ("git checkout main && git checkout 'feat' && git merge x", []),
+    ("git checkout --detach main && git merge x", []),
+    ("git switch --detach main && git merge x", []),
+    ("git switch -d main && git merge x", []),
+    ("git checkout -B feat main && git merge x", []),
+    ("git switch -c feat main && git merge x", []),
+    ("git checkout -- file.txt && git merge x", []),
+    ("git checkout main && git pull", []),
+    ("git checkout main && git pull origin main", []),
+    ("git checkout main && git pull --ff-only origin main", []),
+    ("git checkout main && git pull origin", []),
+    ("git checkout main && git pull 'origin' 'main'", []),
+    ("git checkout main && git rebase", []),
+    ("git checkout main && git rebase origin/main", []),
+    ("git checkout main && git rebase --continue", []),
+    ("git checkout main && git cherry-pick --abort", []),
+    ("git checkout feat && git rebase main", []),
+    ("git checkout feat && git cherry-pick abc", []),
+    ("git checkout feat && git pull origin feat", []),
+    ("git rebase feat && git checkout main", []),
 ]
 
 
@@ -621,6 +673,17 @@ ADVERSARIAL_MERGE_TEXTS = [
     'git commit -m "' + "; git checkout main" * 1000,
     "'" * 5001 + " && git checkout main && git merge x",
     "{ " * 5000 + "git checkout main",
+    # #502
+    "git checkout " + "-- " * 3000 + "x",
+    "git checkout " + "x " * 3000 + "--x",
+    "git checkout " + "--detach " * 3000 + "main",
+    "git switch " + "-C " * 3000 + "main",
+    "git checkout " + "'main' " * 3000,
+    "git checkout main\ngit pull " + "-a " * 3000 + "x",
+    "git checkout main && git pull " + "o " * 3000,
+    "git checkout main && git rebase " + "--a=b " * 3000,
+    "git checkout main && git cherry-pick " + "-x " * 3000,
+    "git checkout main && git rebase " + "a/" * 3000 + "main",
 ]
 
 _TIMED_MERGE = (
