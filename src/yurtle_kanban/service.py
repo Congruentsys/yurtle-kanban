@@ -2993,22 +2993,17 @@ class KanbanService:
         board_transitions = self._get_board_transitions(board_config, theme)
         if board_transitions:
             reverse = self._get_reverse_status_mapping(board_config, theme)
-            forward = {native: canonical for canonical, native in reverse.items()}
             from_native = reverse.get(item.status.value, item.status.value)
+            # by construction: status `t` is offered iff `move` would accept it, i.e.
+            # iff its theme name `reverse.get(t, t)` is in the list; theme order, then
+            # WorkItemStatus order among statuses sharing one listed name (#467, #474)
+            listed = board_transitions.get(from_native, [])
             allowed = []
-            canonical_values = {s.value for s in WorkItemStatus}
-            for native in board_transitions.get(from_native, []):
-                value = forward.get(native, native)
-                # exactly a status value, as `move` compares it: `in-progress` isn't
-                # offered because `move` would refuse it (#461)
-                # and only if `move` would take it: it maps the target back to the
-                # theme's name and looks for that in the list (#467)
-                if (
-                    value in canonical_values
-                    and reverse.get(value, value) == native
-                    and value not in allowed
-                ):
-                    allowed.append(value)
+            for native in listed:
+                for status in WorkItemStatus:
+                    value = status.value
+                    if reverse.get(value, value) == native and value not in allowed:
+                        allowed.append(value)
             return allowed
         workflow = self._workflow_parser.load_workflow(item.item_type.value)
         if workflow:
