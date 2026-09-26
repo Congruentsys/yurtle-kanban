@@ -686,7 +686,10 @@ class KanbanConfig:
                 common = Path(os.path.commonpath([str(s) for s in scans]))
             except ValueError:  # absolute and relative scan paths mixed (#147)
                 return root or "work/"
-        return f"{common.as_posix()}/" if str(common) not in ("", ".") else (root or "work/")
+        if str(common) in ("", ".") or common == Path(common.anchor):
+            # nothing shared but the filesystem root is no board path (#509)
+            return root or "work/"
+        return f"{common.as_posix()}/"
 
     def add_board(self, board: BoardConfig) -> None:
         """Add a board to the configuration.

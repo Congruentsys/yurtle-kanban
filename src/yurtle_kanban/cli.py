@@ -208,6 +208,20 @@ _TEMPLATE_SECTIONS: dict[str, list[str]] = {
 
 
 
+def _yaml_scalar(text: str) -> str:
+    """`text` as a YAML value that loads back as exactly `text`: bare when it
+    already does, else a JSON string (valid YAML), so `~` or `a: b` stay the path
+    they are, never null or a mapping (#509)."""
+    import yaml
+
+    try:
+        if yaml.safe_load(f"k: {text}") == {"k": text}:
+            return text
+    except yaml.YAMLError:
+        pass
+    return json.dumps(text, ensure_ascii=False)
+
+
 def _within(path: Path, root: Path) -> bool:
     """True when `path` is `root` or lies under it (both repo-relative)."""
     return path == root or root in path.parents
@@ -275,13 +289,15 @@ def init(theme: str, path: str | None):
             path, scanned = "work/", scan_paths
         else:
             path, scanned = "work/", ["work/"]
-    scan_paths_yaml = "\n".join(f'    - "{p}"' for p in scanned)
+    # JSON strings are YAML strings: the same `"p"` as before for a plain path,
+    # and a `"` or `\\` in one is escaped instead of breaking the file (#509)
+    scan_paths_yaml = "\n".join(f"    - {json.dumps(p, ensure_ascii=False)}" for p in scanned)
     config_content = f"""# yurtle-kanban configuration
 kanban:
   theme: {theme}
 
   paths:
-    root: {path}
+    root: {_yaml_scalar(path)}
     scan_paths:
 {scan_paths_yaml}
 
