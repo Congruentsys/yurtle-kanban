@@ -37,6 +37,7 @@ import ast
 import importlib
 import io
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -313,8 +314,77 @@ def _import_package() -> None:
     importlib.import_module("yurtle_kanban.cli")
     try:
         importlib.import_module("yurtle_kanban.mcp.server")
-    except ImportError:  # optional `mcp` extra
-        pass
+    except ModuleNotFoundError as e:
+        if not _is_missing_mcp(e):  # a broken internal import fails loudly (#547)
+            raise
+
+
+def _is_missing_mcp(e: ModuleNotFoundError) -> bool:
+    """The optional `mcp` extra itself (or a submodule of it) isn't installed."""
+    return e.name is not None and (e.name == "mcp" or e.name.startswith("mcp."))
+
+
+_REAL_IMPORT = importlib.import_module
+
+
+def _failing_mcp_server_import(exc: ImportError):  # type: ignore[no-untyped-def]
+    def fake(name: str, package: str | None = None):  # type: ignore[no-untyped-def]
+        if name == "yurtle_kanban.mcp.server":
+            raise exc
+        return _REAL_IMPORT(name, package)
+
+    return fake
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(ModuleNotFoundError("No module named 'mcp'", name="mcp"), id="mcp"),
+        pytest.param(
+            ModuleNotFoundError("No module named 'mcp.types'", name="mcp.types"),
+            id="mcp-submodule",
+        ),
+    ],
+)
+def test_import_package_skips_only_a_missing_mcp(
+    monkeypatch: pytest.MonkeyPatch, exc: ImportError
+) -> None:
+    monkeypatch.setattr(importlib, "import_module", _failing_mcp_server_import(exc))
+    _import_package()  # the optional extra is absent: skipped quietly
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(ImportError("boom"), id="plain-importerror"),
+        pytest.param(
+            ImportError("cannot import name 'X' from 'yurtle_kanban.service'"),
+            id="bad-internal-name",
+        ),
+        pytest.param(
+            ModuleNotFoundError("No module named 'yurtle_kanban.gone'", name="yurtle_kanban.gone"),
+            id="missing-internal-module",
+        ),
+        pytest.param(ModuleNotFoundError("No module named 'mcpx'", name="mcpx"), id="mcp-prefix"),
+        pytest.param(ModuleNotFoundError("no name"), id="no-name"),
+    ],
+)
+def test_import_package_does_not_swallow_a_broken_import(
+    monkeypatch: pytest.MonkeyPatch, exc: ImportError
+) -> None:
+    monkeypatch.setattr(importlib, "import_module", _failing_mcp_server_import(exc))
+    with pytest.raises(ImportError) as info:
+        _import_package()
+    assert info.value is exc
+
+
+def test_import_package_fails_on_a_halted_internal_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real import failure, not a patched one: `None` in sys.modules halts it."""
+    monkeypatch.setitem(sys.modules, "yurtle_kanban.mcp.server", None)
+    with pytest.raises(ModuleNotFoundError):
+        _import_package()
 
 
 def _markup_rich_handlers() -> list[str]:
