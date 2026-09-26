@@ -510,14 +510,14 @@ boards:
     preset: hdd
     path: research/
     wip_limits:
-      active: 5               # Research can have more concurrent items
+      active: 8               # research runs more at once than the hdd default of 5
 ```
 
 Each item type goes to the board whose theme defines it: `yurtle-kanban create bug …`
 lands in `kanban-work/bugs/`, `yurtle-kanban create hypothesis …` in
-`research/hypotheses/`. Links between the boards live in the items themselves, in their
-turtle knowledge blocks (for example an experiment's `expr:implements`), not in
-`config.yaml`.
+`research/hypotheses/`. Links between the boards live in the items themselves, not in
+`config.yaml`: an experiment's frontmatter `implements: [EXP-…]` names the development
+work it depends on, and experiment readiness follows that work's status.
 
 Research items don't count against development WIP limits. The boards are separate
 workflows with separate rhythms, connected by cross-board relationships.
