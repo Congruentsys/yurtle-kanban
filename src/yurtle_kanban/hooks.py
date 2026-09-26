@@ -402,7 +402,7 @@ def _action_nats_publish(action: dict, context: HookContext) -> None:
 def _action_log(action: dict, context: HookContext) -> None:
     """Append a JSON line to a log file."""
     log_path = action.get("path", ".kanban/hooks.log")
-    log_path = Path(context.render_path(log_path))
+    log_path = Path(context.render_path(log_path)).expanduser()  # `~` is home (#509)
     if context.repo_root is not None and not log_path.is_absolute():
         log_path = context.repo_root / log_path
 
