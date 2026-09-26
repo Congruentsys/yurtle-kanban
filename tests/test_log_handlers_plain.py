@@ -33,24 +33,38 @@ def _is_safe_rich_call(node: ast.Call) -> bool:
     )
 
 
-def rich_handler_violations(source: str, filename: str = "<string>") -> list[str]:
-    """Every reference to `RichHandler` in `source` other than a `markup=False` call,
-    and every `extra=` dict literal with a `"markup"` key (#505, #518).
+def _is_markup_key(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value == "markup"
 
-    A reference is the bare name or any `from rich.logging import RichHandler as X`
-    alias, an attribute ending in `.RichHandler` (`rich.logging.RichHandler`), or a
-    string constant naming it (dictConfig's `'rich.logging.RichHandler'`,
-    `getattr(rich.logging, 'RichHandler')`). The only allowed use is a direct call
-    passing a literal `markup=False`; a `**kwargs` call can't be proved safe. The
-    import that makes such a call possible isn't itself a reference.
+
+def rich_handler_violations(source: str, filename: str = "<string>") -> list[str]:
+    """Every way `source` could get Rich markup into a log line (#505, #518, #524).
+
+    Flagged:
+    - any reference to `RichHandler` other than a direct call passing a literal
+      `markup=False` (no `**kwargs`): the bare name or any
+      `from rich.logging import RichHandler as X` alias, an attribute ending in
+      `.RichHandler`, or a string constant containing it — dictConfig's
+      `'rich.logging.RichHandler'`, `getattr(rich.logging, 'RichHandler')`, and
+      docstrings and other prose too, as a tripwire. The import that makes a safe
+      call possible isn't itself a reference;
+    - any reference to `fileConfig`, which can name any handler class from a file;
+    - turning markup on after construction: a store to a `.markup` attribute,
+      `setattr(_, 'markup', _)`, or a `[...]['markup'] = _` store such as
+      `h.__dict__['markup'] = _`;
+    - `'markup'` as a dict literal key anywhere (so `extra={'markup': _}`), and
+      `extra=dict(markup=_)`.
     """
     tree = ast.parse(source, filename)
     names = {"RichHandler"}
+    file_config = {"fileConfig"}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.name == "RichHandler":
                     names.add(alias.asname or alias.name)
+                elif alias.name == "fileConfig":
+                    file_config.add(alias.asname or alias.name)
 
     def refers(node: ast.AST) -> bool:
         return (
@@ -63,25 +77,46 @@ def rich_handler_violations(source: str, filename: str = "<string>") -> list[str
             )
         )
 
+    def sets_markup(node: ast.AST) -> bool:
+        if isinstance(node, ast.Attribute):
+            return node.attr == "markup" and isinstance(node.ctx, ast.Store)
+        if isinstance(node, ast.Subscript):
+            return isinstance(node.ctx, ast.Store) and _is_markup_key(node.slice)
+        if isinstance(node, ast.Dict):
+            return any(_is_markup_key(k) for k in node.keys)
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "setattr" and len(node.args) >= 2:
+                return _is_markup_key(node.args[1])
+            return any(
+                kw.arg == "extra"
+                and isinstance(kw.value, ast.Call)
+                and isinstance(kw.value.func, ast.Name)
+                and kw.value.func.id == "dict"
+                and any(k.arg == "markup" for k in kw.value.keywords)
+                for kw in node.keywords
+            )
+        return False
+
+    def file_config_ref(node: ast.AST) -> bool:
+        return (isinstance(node, ast.Name) and node.id in file_config) or (
+            isinstance(node, ast.Attribute) and node.attr == "fileConfig"
+        )
+
     found: list[str] = []
     covered: set[int] = set()  # references already reported, or allowed, via their call
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        for kw in node.keywords:
-            if (
-                kw.arg == "extra"
-                and isinstance(kw.value, ast.Dict)
-                and any(isinstance(k, ast.Constant) and k.value == "markup" for k in kw.value.keys)
-            ):
-                found.append(f"{filename}:{node.lineno}: {ast.unparse(node)}")
         func = node.func
         if isinstance(func, (ast.Name, ast.Attribute)) and refers(func):
             covered.update(id(n) for n in ast.walk(func))
             if not _is_safe_rich_call(node):
                 found.append(f"{filename}:{node.lineno}: {ast.unparse(node)}")
     for node in ast.walk(tree):
-        if id(node) not in covered and refers(node):
+        if id(node) in covered:
+            continue
+        if refers(node) or file_config_ref(node) or sets_markup(node):
             covered.update(id(n) for n in ast.walk(node))
             found.append(f"{filename}:{node.lineno}: {ast.unparse(node)}")
     return found
@@ -110,6 +145,21 @@ def rich_handler_violations(source: str, filename: str = "<string>") -> list[str
         "import rich.logging\nhandler_cls = rich.logging.RichHandler\n",
         # #518: per-record markup via `extra`
         "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra={'markup': True})\n",
+        # #524: turning markup on after construction
+        "h = make_handler()\nh.markup = True\n",
+        "h = make_handler()\nh.markup |= True\n",
+        "h = make_handler()\nsetattr(h, 'markup', True)\n",
+        "h = make_handler()\nh.__dict__['markup'] = True\n",
+        # #524: markup via extra=dict(...), or any 'markup' dict key
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra=dict(markup=True))\n",
+        "opts = {'markup': True}\n",
+        "opts = {}\nopts['markup'] = True\n",
+        # #524: fileConfig can name any handler class from an ini file
+        "import logging.config\nlogging.config.fileConfig('logging.ini')\n",
+        "from logging.config import fileConfig\nfileConfig('logging.ini')\n",
+        "from logging.config import fileConfig as fc\nfc('logging.ini')\n",
+        # prose counts: a docstring naming the handler is flagged too (a tripwire)
+        '"""Logs go through a RichHandler."""\n',
     ],
 )
 def test_checker_flags_markup_capable_rich_handler(source: str) -> None:
@@ -123,6 +173,16 @@ def test_checker_flags_markup_capable_rich_handler(source: str) -> None:
         "import rich.logging\nh = rich.logging.RichHandler(markup=False, show_path=False)\n",
         "import logging\nlogging.basicConfig(level=logging.INFO)\n",
         "from rich.console import Console\nConsole().print('[bold]x[/bold]')\n",
+        # #524 controls
+        "h = make_handler()\nprint(h.markup)\n",
+        "h = make_handler()\nattr = 'level'\nsetattr(h, attr, 10)\n",
+        "h = make_handler()\nh.__dict__['level'] = 10\n",
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra=dict(user=1))\n",
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra={'user': 1})\n",
+        "opts = {'level': 'markup'}\nopts['level'] = 'markup'\n",
+        "import logging.config\nlogging.config.dictConfig({'version': 1})\n",
+        "from rich.text import Text\nt = Text.from_markup('[b]x[/b]')\n",
+        '"""Warnings are plain text, never Rich markup."""\n',
     ],
 )
 def test_checker_passes_plain_handlers(source: str) -> None:
@@ -148,7 +208,11 @@ def test_no_package_module_builds_a_markup_rich_handler() -> None:
     violations = [
         v for path in modules for v in rich_handler_violations(path.read_text(), str(path))
     ]
-    assert violations == [], "log messages must be plain text (#505):\n" + "\n".join(violations)
+    assert violations == [], (
+        "log messages must be plain text (#505). Any mention of RichHandler counts,"
+        " docstrings and other prose in strings included (a tripwire, #524): reword it"
+        " or pass markup=False.\n" + "\n".join(violations)
+    )
 
 
 # -- runtime -------------------------------------------------------------------
