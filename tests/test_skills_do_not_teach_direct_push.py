@@ -85,8 +85,12 @@ _GIT = (
 # ENDS in `o` (`-o`, `-fo`) or `--push-option` swallows the next token as its value.
 # The token kinds start differently and the walk tries the dry-run flag first at each
 # boundary, so every boundary is visited once: linear.
-_TOKEN = r"(?:'[^']*'\S*|\"[^\"]*\"\S*|[^\s'\"]\S*)"
-_OPT_WITH_VALUE = r"(?:-[A-Za-np-z]*o|--push-option)(?!\S)"
+# #529: a token is a run of plain characters, `\\x` escapes and quoted strings in
+# any order, so `-o'a -n'`, `--push-option="a -n"` and `-o a\\ -n` are ONE token each.
+# Each piece starts with a different character, so a token still has one parse. The
+# long options `--receive-pack`, `--exec` and `--repo` take a separate value as well.
+_TOKEN = r"(?:[^\s'\"\\]|\\.|'[^']*'|\"[^\"]*\")+"
+_OPT_WITH_VALUE = r"(?:-[A-Za-np-z]*o|--(?:push-option|receive-pack|exec|repo))(?!\S)"
 _DRY_RUN = r"(?:--dry-run|-(?=[A-Za-np-z]*n)[A-Za-z]+)(?![\w-])"
 PUSH_TO_MAIN = re.compile(
     _LEAD
@@ -140,6 +144,13 @@ _PULL_FLAGS = (
     + r"(?![\w=-]))--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
 )
 _RESET_MODE = r"--(?:hard|soft|keep|merge)(?![\w-])"
+# #529: a reset onto the upstream (`@{u}`, `@{upstream}`, `FETCH_HEAD`) is a sync, like
+# `origin/main`; onto `HEAD`, `@`, `ORIG_HEAD` or an ancestor of them (`HEAD~2^`) it is
+# local cleanup. Neither lands work on main.
+_RESET_NOT_LANDING = (
+    r"(?!['\"]?(?:(?:HEAD|ORIG_HEAD|@)(?:[~^]\d*)*|FETCH_HEAD|@\{(?:u|upstream)\})"
+    r"['\"]?(?:[\s`)]|$))"
+)
 CHECKOUT_MAIN = re.compile(
     _LEAD
     + _CMD_PREFIX
@@ -176,8 +187,10 @@ LANDS = re.compile(
     + r"\s+"
     + _FLAGS
     + _NOT_MAIN_REF
-    + r"(?!['\"]?HEAD['\"]?(?:[\s`)]|$))['\"]?[^\s'\"`)-]"
-    + r"|am(?![\w-])(?!\s+--(?:abort|continue|skip|quit|retry|show-current-patch)(?![\w-])))"
+    + _RESET_NOT_LANDING
+    + r"['\"]?[^\s'\"`)-]"
+    + r"|am(?![\w-])"
+    + r"(?!\s+--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)(?![\w-])))"
 )
 UPDATE_REF_MAIN = re.compile(
     _LEAD
@@ -186,6 +199,32 @@ UPDATE_REF_MAIN = re.compile(
     + r"update-ref\s+(?:(?:-m\s+(?:'[^']*'|\"[^\"]*\"|[^\s'\"-]\S*)"
     + r"|(?!-m(?![\w-]))--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
     + r"['\"]?refs/heads/main['\"]?(?=[\s`)]|$)"
+)
+# #529: `git branch -f main [<x>]` resets main, and `git branch -C|-M [<old>] main`
+# copies or moves a branch ONTO main — both move main with no checkout, like
+# update-ref. `-f feat main` and `-C main feat` move another branch instead.
+_BRANCH_FORCE = r"(?:-f|--force)(?![\w-])"
+_BRANCH_ONTO = r"-[CM](?![\w-])"
+BRANCH_MOVES_MAIN = re.compile(
+    _LEAD
+    + _CMD_PREFIX
+    + _GIT
+    + r"branch\s+(?:(?!"
+    + _BRANCH_FORCE
+    + r"|"
+    + _BRANCH_ONTO
+    + r")--?[A-Za-z][\w-]*(?:=\S+)?\s+)*(?:"
+    + _BRANCH_FORCE
+    + r"\s+"
+    + _FLAGS
+    + _QMAIN
+    + r"(?=[\s`)]|$)|"
+    + _BRANCH_ONTO
+    + r"\s+"
+    + _FLAGS
+    + r"(?:['\"]?[^\s'\"-]\S*\s+)?"
+    + _QMAIN
+    + r"[`)\s]*$)"
 )
 
 
@@ -304,7 +343,8 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
     the next MERGE_WINDOW lines, a checkout of anything else closes it, a pathspec
     checkout does neither (#502), and a merge, rebase, cherry-pick, pull of another
     branch, `reset --hard <x>` or `am` inside the window lands work on main. An
-    `update-ref refs/heads/main` moves main directly and is refused anywhere (#507).
+    `update-ref refs/heads/main` (#507) or `branch -f main` / `-C|-M … main` (#529)
+    moves main directly and is refused anywhere.
     """
     offenders = []
     opened = None  # 0-based line of the checkout of main whose window is open
@@ -313,7 +353,7 @@ def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
         for seg in segments:
             if CHECKOUT_PATHS.match(seg):
                 continue
-            if UPDATE_REF_MAIN.match(seg):
+            if UPDATE_REF_MAIN.match(seg) or BRANCH_MOVES_MAIN.match(seg):
                 hit = True
             elif CHECKOUT_MAIN.match(seg):
                 opened = n
