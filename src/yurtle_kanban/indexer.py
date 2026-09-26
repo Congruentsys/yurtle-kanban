@@ -13,7 +13,7 @@ from pathlib import Path
 from rdflib import RDF, BNode, Graph, Literal, Namespace, URIRef
 
 from yurtle_kanban._graph_iri import set_self_iri
-from yurtle_kanban.config import KanbanConfig
+from yurtle_kanban.config import KanbanConfig, _under
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
 
 KB = Namespace("https://yurtle.dev/kanban/")
@@ -35,7 +35,7 @@ class WorkItemIndexer:
         self._items.clear()
 
         for path in self.config.get_work_paths():
-            full_path = self.repo_root / path
+            full_path = _under(self.repo_root, path)
             if full_path.exists():
                 for item in self._scan_directory(full_path):
                     self._items[item.id] = item

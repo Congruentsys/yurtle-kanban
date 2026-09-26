@@ -37,7 +37,7 @@ from .board import (
     render_roadmap,
     render_stats,
 )
-from .config import KanbanConfig
+from .config import KanbanConfig, _under
 from .epic_commands import epic, voyage
 from .export import (
     export_expedition_index,
@@ -248,7 +248,7 @@ def init(theme: str, path: str | None):
             folder = Path(*parts[1:]) if len(parts) > 1 else Path(type_path)
             type_path = f"{(Path(path) / folder).as_posix()}/"
         if type_path:
-            type_dir = repo_root / type_path
+            type_dir = _under(repo_root, type_path)
             type_dir.mkdir(parents=True, exist_ok=True)
             scan_paths.append(type_path)
             dirs_created.append(type_path)
@@ -293,7 +293,7 @@ kanban:
     config_path = kanban_dir / "config.yaml"
     config_path.write_text(config_content)
 
-    board_root = (repo_root / path).resolve()
+    board_root = _under(repo_root, path).resolve()
     git_root = (git_toplevel(repo_root) or repo_root).resolve()
     if not _within(board_root, git_root):
         # git commits nothing outside the repo; say so now, not at the first move (#174)
@@ -316,7 +316,7 @@ kanban:
 
     # Create the root directory only when the board scans it
     if path in scanned:
-        (repo_root / path).mkdir(parents=True, exist_ok=True)
+        _under(repo_root, path).mkdir(parents=True, exist_ok=True)
 
     # Install theme-matched Claude Code skills
     skills_src = _get_skills_dir()
@@ -861,10 +861,11 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     legacy = [p for p in (paths.features, paths.bugs, paths.epics, paths.tasks) if p]
     scanned = list(config.paths.scan_paths) + legacy
     if not config.is_multi_board and scanned:
-        board_path = Path(config._single_board_path())
+        # `~` and absolute spellings of one place are the same place (#494)
+        board_path = Path(config._single_board_path()).expanduser()
         uncovered = [
             p for p in scanned
-            if not (Path(p) == board_path or board_path in Path(p).parents)
+            if not _within(Path(p).expanduser(), board_path)
         ]
         if uncovered:
             # soft_wrap: never hard-wrap inside a path, or it can't be copied (#147)
@@ -905,7 +906,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     config.save(config_path)
 
     # Create the path directory if it doesn't exist
-    board_path = repo_root / path
+    board_path = _under(repo_root, path)
     if not board_path.exists():
         board_path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]Created directory: {escape(path)}[/green]")

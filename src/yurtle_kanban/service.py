@@ -1509,8 +1509,10 @@ class KanbanService:
         (#94: a default ``init`` says ``root: work/`` but scans ``kanban-work/*``).
         """
         root = self.config.paths.root
-        scans = [Path(p) for p in self.config.paths.scan_paths]
-        if root and all(Path(root) == s or Path(root) in s.parents for s in scans):
+        # `~` and absolute spellings of one place are the same place (#494)
+        scans = [Path(p).expanduser() for p in self.config.paths.scan_paths]
+        top = Path(root).expanduser() if root else None
+        if top and all(top == s or top in s.parents for s in scans):
             return root
         return self.config._single_board_path()
 
