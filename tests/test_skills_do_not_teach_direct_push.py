@@ -542,6 +542,21 @@ PUSH_TO_MAIN_CASES = [
     ("./gitx push origin main", False),
     ("~/bin/git push origin feature/x", False),
     ("builtin command git push origin feat", False),
+    # #529: quotes and escapes mid-token keep a `-n` inside the value
+    ("git push -o'a -n' origin main", True),
+    ('git push -o"a -n" origin main', True),
+    ("git push --push-option='a -n' origin main", True),
+    ("git push -o a\\ -n origin main", True),
+    # #529: long push options that take a separate value swallow it
+    ("git push --receive-pack -n origin main", True),
+    ("git push --exec -n origin main", True),
+    ("git push --repo -n origin main", True),
+    # #529 controls — a real `-n` after such values is still a dry run
+    ("git push -o'a b' -n origin main", False),
+    ("git push -o a\\ b -n origin main", False),
+    ("git push --receive-pack x -n origin main", False),
+    ("git push --exec=x -n origin main", False),
+    ("git push --repo origin -n main", False),
 ]
 
 
@@ -643,6 +658,14 @@ ADVERSARIAL_LINES = [
     "~/" + "a/" * 3000 + "git pull",
     "true;#" * 2000,
     "{git " * 2000,
+    # #529
+    "git push " + "-o'a -n' " * 2000 + "origin feature/x",
+    "git push -o " + "a\\ " * 3000,
+    "git push " + "'" * 3001 + " origin feature/x",
+    "git push -o" + "'x'" * 3000 + " origin feature/x",
+    "git push " + "--repo " * 3000 + "x",
+    "git push " + "\\" * 5001,
+    "git push " + "a'" * 3000 + " -n",
 ]
 
 # The child imports the guard FUNCTION (#472), so line splitting is timed too; it
@@ -861,6 +884,32 @@ MERGES_ON_MAIN_CASES = [
     ("git update-ref refs/heads/main-x x", []),
     ("{git checkout main;} && git merge x", []),
     ("true;# git checkout main && git merge x", []),
+    # #529: `git branch -f main <x>` / `-C`/`-M … main` move main with no checkout
+    ("git branch -f main feat", [1]),
+    ("git branch --force main feat", [1]),
+    ("git branch -q -f main origin/feat", [1]),
+    ("git branch -f main", [1]),
+    ("git branch -C main", [1]),
+    ("git branch -C feat main", [1]),
+    ("git branch -M feat main", [1]),
+    ("git checkout feat && git branch -f 'main' HEAD", [1]),
+    ("git checkout main && git reset --hard feat~1", [1]),
+    # #529 controls
+    ("git branch -f feat main", []),
+    ("git branch -C main feat", []),
+    ("git branch -f main-x x", []),
+    ("git branch main", []),
+    ("git branch -D main", []),
+    ("git branch --contains main", []),
+    ("git checkout main && git reset --hard @{u}", []),
+    ("git checkout main && git reset --hard @{upstream}", []),
+    ("git checkout main && git reset --hard '@{u}'", []),
+    ("git checkout main && git reset --hard FETCH_HEAD", []),
+    ("git checkout main && git reset --hard ORIG_HEAD", []),
+    ("git checkout main && git reset --hard HEAD~1", []),
+    ("git checkout main && git reset --hard HEAD^", []),
+    ("git checkout main && git reset --hard HEAD~2^", []),
+    ("git checkout main && git am --resolved", []),
 ]
 
 
@@ -914,6 +963,13 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git checkout " + "-t " * 3000 + "origin/main",
     "git checkout main && git rebase " + "refs/heads/" * 2000 + "main",
     "git checkout main && git am " + "--abort " * 3000,
+    # #529
+    "git branch " + "-f " * 3000 + "main",
+    "git branch -C " + "x " * 3000,
+    "git branch " + "-q " * 3000 + "-C main",
+    "git branch " + "-C " * 3000 + "x",
+    "git checkout main && git reset --hard HEAD" + "~1" * 3000,
+    "git checkout main && git reset --hard HEAD" + "^" * 5000 + "x",
 ]
 
 _TIMED_MERGE = (
