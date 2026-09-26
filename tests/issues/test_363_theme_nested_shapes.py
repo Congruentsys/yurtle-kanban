@@ -229,7 +229,7 @@ class TestLoaderDropsBadEntry:
 
     # a non-list transitions entry is now dropped (#457); covered by test_457
     @pytest.mark.parametrize("section", ["status_mappings"])
-    def test_control_status_mappings_and_transitions_entries_kept(
+    def test_control_status_mappings_entry_kept(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
