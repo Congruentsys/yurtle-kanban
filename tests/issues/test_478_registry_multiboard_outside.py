@@ -285,3 +285,117 @@ def test_message_path_normalised(tmp_path, monkeypatch, caplog):
     assert any(p in unwrapped for p in expected), (
         f"normalised path {expected} not printed:\n{unwrapped}"
     )
+
+
+# --- round 2 (review of PR #487): the registry board IS the hypothesis board -----
+
+THEMES = Path(__file__).resolve().parents[2] / "themes"
+
+
+def _hypothesis_dir(repo: Path) -> Path:
+    """Where `create` places hypotheses: the premise each round-2 test rests on."""
+    from yurtle_kanban.config import KanbanConfig
+    from yurtle_kanban.models import WorkItemType
+    from yurtle_kanban.service import KanbanService
+
+    config_mod._theme_cache.clear()
+    service = KanbanService(KanbanConfig.load(repo / ".kanban" / "config.yaml"), repo)
+    d = service._get_type_directory(WorkItemType.HYPOTHESIS)
+    d = d if d.is_absolute() else repo / d
+    return Path(os.path.normpath(d))
+
+
+@pytest.fixture
+def lab_no_path_theme(tmp_path: Path) -> tuple[Path, Path]:
+    """Default board `lab` in the repo, custom theme listing hypothesis with NO path;
+    board `h1` (preset hdd) outside git. Hypotheses go to `<outside>/h1/hypotheses`."""
+    import yaml
+
+    repo, h1 = tmp_path / "repo", (tmp_path / "outside" / "h1").resolve()
+    _paper(h1)
+    (repo / "work").mkdir(parents=True)
+    theme = yaml.safe_load((THEMES / "software.yaml").read_text())
+    theme.setdefault("item_types", {})["hypothesis"] = {"id_prefix": "H"}
+    (repo / ".kanban" / "themes").mkdir(parents=True)
+    (repo / ".kanban" / "themes" / "lab.yaml").write_text(yaml.safe_dump(theme))
+    yaml_text = _multi_yaml(
+        [("lab", "lab", "work/"), ("h1", "hdd", f"{h1}/")], default="lab",
+    )
+    _init_repo(repo, yaml_text)
+    return repo, h1
+
+
+def test_r2_no_path_theme_premise(lab_no_path_theme):
+    repo, h1 = lab_no_path_theme
+    assert _hypothesis_dir(repo) == h1 / "hypotheses"
+
+
+def test_r2_no_path_theme_registry_follows_hypothesis_board(
+    lab_no_path_theme, monkeypatch, caplog,
+):
+    repo, h1 = lab_no_path_theme
+    _registry(repo, [], monkeypatch, caplog)
+    assert (h1 / "REGISTRY.md").exists(), (
+        "registry must follow the board hypotheses are placed on (h1, outside git)"
+    )
+    assert PAPER_ID in (h1 / "REGISTRY.md").read_text()
+    assert not (repo / "research" / "REGISTRY.md").exists(), "repo registry created"
+
+
+def test_r2_no_path_theme_push_not_committed(lab_no_path_theme, monkeypatch, caplog):
+    repo, h1 = lab_no_path_theme
+    before = _commits(repo)
+    seen, _ = _registry(repo, ["--push"], monkeypatch, caplog)
+    assert _commits(repo) == before, "--push committed an index of untracked outside items"
+    assert OUTSIDE_NOTE in seen, f"no '{OUTSIDE_NOTE}' warning:\n{seen}"
+    assert (h1 / "REGISTRY.md").exists()
+    assert _git(repo, "status", "--porcelain").strip() == "", "repo left dirty"
+
+
+@pytest.fixture
+def no_theme_defines_hypothesis(tmp_path: Path) -> tuple[Path, Path]:
+    """No board's theme defines hypothesis; the default board is outside git, so
+    hypotheses fall back to it (#144)."""
+    repo, far = tmp_path / "repo", (tmp_path / "far").resolve()
+    far.mkdir(parents=True)
+    (repo / "work").mkdir(parents=True)
+    yaml_text = _multi_yaml(
+        [("dev", "software", "work/"), ("far", "software", f"{far}/")], default="far",
+    )
+    _init_repo(repo, yaml_text)
+    return repo, far
+
+
+def test_r2_fallback_premise(no_theme_defines_hypothesis):
+    repo, far = no_theme_defines_hypothesis
+    assert _hypothesis_dir(repo).is_relative_to(far)
+
+
+def test_r2_fallback_registry_follows_default_board(
+    no_theme_defines_hypothesis, monkeypatch, caplog,
+):
+    repo, far = no_theme_defines_hypothesis
+    before = _commits(repo)
+    seen, _ = _registry(repo, ["--push"], monkeypatch, caplog)
+    assert (far / "REGISTRY.md").exists(), (
+        "registry must follow the default board hypotheses fall back to"
+    )
+    assert not (repo / "research" / "REGISTRY.md").exists(), "repo registry created"
+    assert _commits(repo) == before, "--push committed for an outside hypothesis board"
+    assert OUTSIDE_NOTE in seen, f"no '{OUTSIDE_NOTE}' warning:\n{seen}"
+
+
+def test_r2_explicit_output_not_lexically_normalised(tmp_path, monkeypatch, caplog):
+    """`--output ./x/../R.md` with `x` a symlink: written where the OS resolves it
+    (the parent of x's target), not at the lexical `./R.md`."""
+    repo = tmp_path / "repo"
+    _paper(repo / "research")
+    _init_repo(repo, _single_yaml("research/"))
+    target = (tmp_path / "elsewhere" / "deep").resolve()
+    target.mkdir(parents=True)
+    (repo / "x").symlink_to(target, target_is_directory=True)
+    _registry(repo, ["--output", "./x/../R.md"], monkeypatch, caplog)
+    os_location = target.parent / "R.md"
+    assert os_location.exists(), f"--output not honoured as given (OS path {os_location})"
+    assert PAPER_ID in os_location.read_text()
+    assert not (repo / "R.md").exists(), "--output was lexically normalised to ./R.md"
