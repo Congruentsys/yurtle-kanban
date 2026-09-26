@@ -534,8 +534,16 @@ def run_server():
     logger.info("Starting yurtle-kanban MCP server")
 
     # Simple stdio-based MCP server
-    async def handle_request(request: dict) -> dict:
-        """Handle an MCP request."""
+    class RpcError(Exception):
+        """A JSON-RPC error reply: the explicit signal, never a guessed key (#568)."""
+
+        def __init__(self, code: int, message: str):
+            super().__init__(message)
+            self.code, self.message = code, message
+
+    async def handle_request(request: dict) -> dict | None:
+        """The success payload for `request` (None: nothing to send), or raise
+        RpcError."""
         method = request.get("method", "")
 
         if method == "initialize":
@@ -560,7 +568,7 @@ def run_server():
 
             result = server.handle_tool_call(tool_name, arguments)
 
-            return {
+            payload: dict[str, Any] = {
                 "content": [
                     {
                         "type": "text",
@@ -568,12 +576,17 @@ def run_server():
                     }
                 ]
             }
+            # a failed tool is a result the client must see as failed (MCP), not a
+            # protocol error (#568)
+            if isinstance(result, dict) and "error" in result:
+                payload["isError"] = True
+            return payload
 
         elif method == "notifications/initialized":
             return None  # No response for notifications
 
         else:
-            return {"error": {"code": -32601, "message": f"Unknown method: {method}"}}
+            raise RpcError(-32601, f"Unknown method: {method}")
 
     async def main():
         """Main server loop."""
@@ -584,27 +597,23 @@ def run_server():
                     break
 
                 request = json.loads(line)
-                response = await handle_request(request)
-                # JSON-RPC 2.0: a success payload goes under `result`; an error
-                # reply already carries `error` (#563)
-                if response is not None and "error" not in response:
-                    response = {"result": response}
-
-                if response is not None:
-                    response["jsonrpc"] = "2.0"
-                    if "id" in request:
-                        response["id"] = request["id"]
-                    print(json.dumps(response), flush=True)
-
             except json.JSONDecodeError:
                 continue
+            # JSON-RPC 2.0: a request without an `id` is a notification, and a
+            # notification is never answered, not even with an error (#568)
+            notification = not isinstance(request, dict) or "id" not in request
+            try:
+                payload = await handle_request(request)
+                # a success payload goes under `result` (#563)
+                reply = None if payload is None else {"result": payload}
+            except RpcError as e:
+                reply = {"error": {"code": e.code, "message": e.message}}
             except Exception as e:
                 logger.exception("Error in main loop")
-                error_response = {
-                    "jsonrpc": "2.0",
-                    "error": {"code": -32603, "message": str(e)},
-                }
-                print(json.dumps(error_response), flush=True)
+                reply = {"error": {"code": -32603, "message": str(e)}}
+            if reply is None or notification:
+                continue
+            print(json.dumps({"jsonrpc": "2.0", "id": request["id"], **reply}), flush=True)
 
     asyncio.run(main())
 
