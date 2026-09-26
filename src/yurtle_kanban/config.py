@@ -278,13 +278,14 @@ def _theme_name(
     return value
 
 
-def _scan_list(data: dict[str, Any]) -> list[str]:
+def _scan_list(data: dict[str, Any], where: str = "kanban.paths") -> list[str]:
     """`scan_paths` from a config mapping, read like `ignore` (#194, #204): absent
     or null → none; one path given as a string is that path, not its characters
-    (#503); anything else but a list is refused, naming the key."""
+    (#503); anything else but a list is refused, naming the key. `where` names the
+    section in a warning, e.g. the board (#527)."""
     value = data.get("scan_paths")
-    if value is None or value == "":
-        return []  # an empty string is no path, never the repo root
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return []  # an empty or blank string is no path, never the repo root (#527)
     if isinstance(value, str):
         return [value]
     if not isinstance(value, list):
@@ -296,8 +297,8 @@ def _scan_list(data: dict[str, Any]) -> list[str]:
         raise ValueError(f"scan_paths: every entry must be a path string, got {bad[0]!r}")
     # an empty entry is `Path('.')`, the repo root: never scan that by accident (#517)
     paths = [p for p in value if p.strip()]
-    if len(paths) != len(value):
-        logger.warning("config: an empty `scan_paths` entry ('') is ignored")
+    for dropped in (p for p in value if not p.strip()):
+        logger.warning(f"config: an empty `{where}.scan_paths` entry {dropped!r} is ignored")
     return paths
 
 
@@ -393,7 +394,7 @@ class BoardConfig:
             ),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
-            scan_paths=_scan_list(data),
+            scan_paths=_scan_list(data, f"board {data.get('name')!r}"),
             wip_limits=wip_limits,
             raw_wip_limits=copy.deepcopy(raw_wip),
             wip_exempt_types=data.get("wip_exempt_types") or [],
@@ -563,6 +564,7 @@ class KanbanConfig:
         paths_data = dict(raw_paths)
         # README long showed `ignore:` (and consumers wrote `scan_paths:`) beside
         # `paths:`, not in it: read them there too; `paths.*` wins (#482)
+        scan_where = "kanban.paths"
         for key in ("ignore", "scan_paths"):
             if key not in kanban_data:
                 continue
@@ -572,9 +574,11 @@ class KanbanConfig:
                 )
             else:
                 paths_data[key] = kanban_data[key]
+                if key == "scan_paths":
+                    scan_where = "kanban"
         paths = PathConfig(
             root=_or_default(paths_data, "root", "work/"),
-            scan_paths=_scan_list(paths_data),
+            scan_paths=_scan_list(paths_data, scan_where),
             ignore=_ignore_list(paths_data),
             features=paths_data.get("features"),
             bugs=paths_data.get("bugs"),
