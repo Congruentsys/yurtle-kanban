@@ -144,10 +144,24 @@ _PULL_FLAGS = (
     + r"(?![\w=-]))--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
 )
 _RESET_MODE = r"--(?:hard|soft|keep|merge)(?![\w-])"
+# #543: `am`'s arguments are walked token by token like a push's (quoted strings are
+# one token), and the long options that take a separate value swallow it — so
+# `--resolvemsg 'see --continue'` is no resume. In a short cluster `S`, `C` and `p`
+# take the REST as their value, so a cluster resumes only if its `r` comes first
+# (`-3r`, `-rS`; not `-Sr`). An abbreviated flag (`--cont`) is not recognised, so
+# that `am` is refused — the safe direction.
+_AM_OPT_WITH_VALUE = (
+    r"--(?:resolvemsg|directory|exclude|include|whitespace|patch-format|quoted-cr|empty)(?!\S)"
+)
+_AM_RESUME = (
+    r"(?:--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)"
+    r"|-(?=[A-BD-RT-Za-oq-z0-9]*r)[A-Za-z0-9]+)(?![\w-])"
+)
 # #529: a reset onto the upstream (`@{u}`, `@{upstream}`, `FETCH_HEAD`) is a sync, like
 # `origin/main`; onto `HEAD`, `@`, `ORIG_HEAD` or an ancestor of them (`HEAD~2^`) it is
 # local cleanup. Neither lands work on main. #536: `@{push}` and `<remote>/HEAD`
-# (`origin/HEAD`, `refs/remotes/origin/HEAD`) are the upstream too.
+# (`origin/HEAD`, `refs/remotes/origin/HEAD`) are the upstream too. #543: ANY
+# `<x>/HEAD` is read as a remote's HEAD — `feat/HEAD` included — and so as a sync.
 _RESET_NOT_LANDING = (
     r"(?!['\"]?(?:(?:HEAD|ORIG_HEAD|@)(?:[~^]\d*)*|FETCH_HEAD|@\{(?:u|upstream|push)\}"
     r"|(?:refs/remotes/)?[\w.-]+/HEAD)"
@@ -192,8 +206,17 @@ LANDS = re.compile(
     + _RESET_NOT_LANDING
     + r"['\"]?[^\s'\"`)-]"
     + r"|am(?![\w-])"
-    + r"(?!(?:\s+\S+)*?\s+(?:--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)"
-    + r"|-(?=[A-Za-z0-9]*r)[A-Za-z0-9]+)(?![\w-])))"
+    + r"(?!(?:\s+(?:"
+    + _AM_OPT_WITH_VALUE
+    + r"\s+"
+    + _TOKEN
+    + r"|(?!"
+    + _AM_OPT_WITH_VALUE
+    + r")"
+    + _TOKEN
+    + r"))*?\s+"
+    + _AM_RESUME
+    + r"))"
 )
 UPDATE_REF_MAIN = re.compile(
     _LEAD
@@ -993,6 +1016,27 @@ MERGES_ON_MAIN_CASES = [
     ("git checkout main && git am -r", []),
     ("git checkout main && git am -3r", []),
     ("git checkout main && git am --show-current-patch=diff", []),
+    # #543: `-S`, `-C` and `-p` take the REST of a cluster as their value, so `-Sr` is
+    # no `-r`; a cluster is resume only if its `r` comes before any of them
+    ("git checkout main && git am -Sr x.patch", [1]),
+    ("git checkout main && git am -Cr x.patch", [1]),
+    ("git checkout main && git am -pr x.patch", [1]),
+    ("git checkout main && git am -3Sr x.patch", [1]),
+    ("git checkout main && git am -rS", []),
+    ("git checkout main && git am -3r x.patch", []),
+    # #543: a resume flag inside a quoted value, or as the value of `--resolvemsg`
+    # (and the other value-taking long options), is no flag
+    ("git checkout main && git am --resolvemsg 'see --continue' x.patch", [1]),
+    ('git checkout main && git am --resolvemsg="run --skip" x.patch', [1]),
+    ("git checkout main && git am --resolvemsg --continue x.patch", [1]),
+    ("git checkout main && git am --directory --abort x.patch", [1]),
+    ("git checkout main && git am 'x --abort.patch'", [1]),
+    ("git checkout main && git am --resolvemsg x --continue", []),
+    ("git checkout main && git am -S --continue", []),
+    # #543, documented: `<x>/HEAD` is read as a remote's HEAD — a sync — and an
+    # abbreviated resume flag (`--cont`) is not recognised, so it is refused (safe side)
+    ("git checkout main && git reset --hard feat/HEAD", []),
+    ("git checkout main && git am --cont x.patch", [1]),
 ]
 
 
@@ -1062,6 +1106,13 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git checkout main && git am " + "x.patch " * 3000,
     "git checkout main && git am -" + "3" * 5000,
     "git checkout main && git reset --hard " + "a." * 3000 + "/HEAD",
+    # #543
+    "git checkout main && git am " + "--resolvemsg x " * 3000,
+    "git checkout main && git am " + "'a --continue' " * 3000,
+    "git checkout main && git am " + "--resolvemsg " * 3000,
+    "git checkout main && git am -" + "S" * 5000 + "r",
+    "git checkout main && git am -" + "a" * 5000 + "Sr",
+    "git checkout main && git am " + "'" * 3001,
 ]
 
 _TIMED_MERGE = (
