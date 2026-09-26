@@ -172,10 +172,12 @@ def _rejection(*words, root=main):
     looks like an option instead, click's `resolve_command` re-parses from there
     as the group's options: an eager one (`--version`, `--help`) runs and exits,
     an unknown one is "No such option", anything else is "No such command".
-    A group that ends at `--`, with no word after it, is "Missing command".
+    A group that ends at `--`, with no word after it, is "Missing command"; a
+    group that simply ends, with no eager option given to it, is click printing
+    the group's help and exiting 2 (#542).
     """
     cmd, path, i = root, [], 0
-    options_ended = False
+    options_ended = eager = False
     while i < len(words):
         word = words[i]
         where = " ".join(["yurtle-kanban", *path])
@@ -196,17 +198,23 @@ def _rejection(*words, root=main):
                 return f"`{where} {word}` is not a subcommand"
             cmd = cmd.commands[word]
             path.append(word)
-            options_ended, i = False, i + 1
+            options_ended, eager, i = False, False, i + 1
             continue
         if options_ended or not is_option:
             i += 1
             continue  # a positional argument of a leaf command
-        problem, i, _named = _consume_option(words, i, cmd, where)
+        problem, i, named = _consume_option(words, i, cmd, where)
         if problem:
             return problem
-    if options_ended and isinstance(cmd, click.Group):
-        # `hdd --` and nothing after: click's "Missing command" (#537)
-        return f"`{' '.join(['yurtle-kanban', *path])} --` is missing a subcommand"
+        eager = eager or any(p.is_eager for p in named)
+    if isinstance(cmd, click.Group) and not cmd.invoke_without_command:
+        where = " ".join(["yurtle-kanban", *path])
+        if options_ended:
+            # `hdd --` and nothing after: click's "Missing command" (#537)
+            return f"`{where} --` is missing a subcommand"
+        if not eager:
+            # `hdd` and nothing after (`--help` aside): help, then exit 2 (#542)
+            return f"`{where}` is missing a subcommand"
     return None
 
 
