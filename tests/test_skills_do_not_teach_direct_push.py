@@ -54,21 +54,27 @@ _CMD_PREFIX = (
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
     r"|[A-Za-z_]\w*=(?:'[^']*'|\"[^\"]*\"|[^\s'\"]\S*|)\s+)*"
 )
+_LEAD = r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
+_GIT = (
+    r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
+)
 PUSH_TO_MAIN = re.compile(
-    r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
-    + _CMD_PREFIX
-    + r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
-    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*push\b"
+    _LEAD + _CMD_PREFIX + _GIT + r"push\b"
     r"(?![^#;&|\n]*(?:--dry-run"
     r"|(?<!\s-o)(?<!--push-option)\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
     r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
 )
 
-# `git checkout main` immediately preceding a merge is the other half of the recipe:
-# it is how you end up ON main with something to push.
-CHECKOUT_MAIN = re.compile(r"^\s*\$?\s*git\s+checkout\s+main\s*$")
-MERGE = re.compile(r"^\s*\$?\s*git\s+merge\b")
-
+# #485: the other half of the recipe — a checkout of main, then a merge, is how you
+# end up merging ON main. Both are read per shell segment, with the same lead and
+# prefixes as a push. A checkout is OF main only when `main` is its last token (after
+# flags that take no value): `-b feat main` lands on feat, `main -- file` stays put.
+CHECKOUT_MAIN = re.compile(
+    _LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\s+(?:--?[A-Za-z][\w-]*\s+)*main[`'\")\s]*$"
+)
+CHECKOUT = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\b")
+MERGE = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"merge(?![\w-])")
 
 # A shell comment starts at a word boundary: `main#x` is still a word, `x # y` is not.
 _COMMENT = re.compile(r"(?<!\S)#")
@@ -79,6 +85,34 @@ def refuses_push_to_main(line: str) -> bool:
     """The guard applied to one skill line: any shell segment that pushes to main."""
     code = _COMMENT.split(line, maxsplit=1)[0]
     return any(PUSH_TO_MAIN.match(seg) for seg in _SEGMENT_SEP.split(code))
+
+
+# How far after a checkout of main a `git merge` still counts as a merge ON main.
+MERGE_WINDOW = 5
+
+
+def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
+    """The merge guard applied to a skill: every (1-based line, text) that merges on main.
+
+    One pass over the segments in order: a checkout of main opens a window through
+    the next MERGE_WINDOW lines, a checkout of anything else closes it, and a merge
+    inside the window is a merge on main.
+    """
+    offenders = []
+    opened = None  # 0-based line of the checkout of main whose window is open
+    for n, line in enumerate(lines):
+        code = _COMMENT.split(line, maxsplit=1)[0]
+        hit = False
+        for seg in _SEGMENT_SEP.split(code):
+            if CHECKOUT_MAIN.match(seg):
+                opened = n
+            elif CHECKOUT.match(seg):
+                opened = None
+            elif MERGE.match(seg) and opened is not None and n - opened <= MERGE_WINDOW:
+                hit = True
+        if hit:
+            offenders.append((n + 1, line.strip()))
+    return offenders
 
 
 # Self-tests of the guard itself (#88). A guard that silently misses a form is worse
@@ -278,6 +312,133 @@ def test_push_to_main_guard_is_linear(line):
     assert elapsed < 0.1, f"PUSH_TO_MAIN took {elapsed:.3f} s on {line[:40]!r}..."
 
 
+# #485: the merge half of the recipe. A checkout of main (`git checkout main` or
+# `git switch main`) followed by `git merge` — later on the SAME line, in any `&&`,
+# `||`, `;`, `|` or `&` segment, or on any of the next MERGE_WINDOW lines — is a merge
+# performed on main. Segments are read as in #472: markdown leads, `sudo`/`env`/
+# `KEY=val` prefixes and git global options still make a command. A checkout of any
+# other branch in between ends the window; a merge BEFORE the checkout, or `main` only
+# as part of a longer name, is not a merge on main.
+MERGES_ON_MAIN_CASES = [
+    # (skill text, the 1-based lines the guard must refuse)
+    # the whole-line form the old guard already caught
+    ("git checkout main\ngit merge x", [2]),
+    ("git checkout main\ngit pull\ngit merge x", [3]),
+    ("git checkout main\n\n\n\n\ngit merge x", [6]),
+    ("git checkout main\ngit merge a\ngit merge b", [2, 3]),
+    # the shipped shape (skills/hdd/experiment/SKILL.md:152)
+    ("git checkout main && git merge exp-{description}", [1]),
+    # every segment separator
+    ("git checkout main && git merge x", [1]),
+    ("git checkout main; git merge x", [1]),
+    ("git checkout main ; git merge x", [1]),
+    ("git checkout main || git merge x", [1]),
+    ("git checkout main | git merge x", [1]),
+    ("git checkout main & git merge x", [1]),
+    ("git checkout main && git pull && git merge x", [1]),
+    ("cd repo && git checkout main && git merge x", [1]),
+    ("git checkout main && git pull\ngit merge x", [2]),
+    # `git switch main` is the same checkout
+    ("git switch main && git merge x", [1]),
+    ("git switch main\ngit merge x", [2]),
+    # markdown leads, prefixes, global options, flags
+    ("- `git checkout main && git merge exp-x`", [1]),
+    ("$ git checkout main && git merge x", [1]),
+    ("> git checkout main && git merge x", [1]),
+    ("1. git checkout main && git merge x", [1]),
+    ("(git checkout main && git merge x)", [1]),
+    ("git checkout main\n- git merge x", [2]),
+    ("git checkout main\n`git merge x`", [2]),
+    ("sudo git checkout main && sudo git merge x", [1]),
+    ("GIT_TRACE=1 git checkout main && env git merge x", [1]),
+    ("git -C repo checkout main && git -C repo merge x", [1]),
+    ("git checkout -q main && git merge x", [1]),
+    ("git checkout main && git merge --no-ff x", [1]),
+    ("git checkout main && git merge x  # land it", [1]),
+    # controls — never refused
+    ("git checkout main && git pull", []),
+    ("git checkout main && git branch -D x", []),
+    ("git checkout main\ngit pull\ngit branch -d x", []),
+    ("git checkout feat && git merge main", []),
+    ("git checkout main\ngit checkout feat\ngit merge main", []),
+    ("git checkout main && git checkout feat && git merge main", []),
+    ("git checkout main && git switch feat && git merge main", []),
+    ("git checkout main-feature && git merge x", []),
+    ("git switch main-feature\ngit merge x", []),
+    ("git checkout feature/main && git merge x", []),
+    ("git checkout origin/main && git merge x", []),
+    ("git checkout -b feat main && git merge x", []),
+    ("git checkout main -- file.txt && git merge x", []),
+    ("git checkout main\n\n\n\n\n\ngit merge x", []),
+    ("git merge x && git checkout main", []),
+    ("git merge x", []),
+    ("git checkout main && git mergetool", []),
+    ("git checkout main && git merge-base main x", []),
+    ("git checkout main  # then git merge x", []),
+    ("git checkout main && echo git merge x", []),
+    ("Then git checkout main and git merge x.", []),
+    ("We never git checkout main && git merge x", []),
+    ("> Never run `git checkout main && git merge x`.", []),
+    ("| **VALIDATED** | Merge to main | `git merge` |", []),
+]
+
+
+@pytest.mark.parametrize(
+    "text,refused", MERGES_ON_MAIN_CASES, ids=[c[0] for c in MERGES_ON_MAIN_CASES]
+)
+def test_merge_on_main_guard_table(text, refused):
+    got = [n for n, _ in merges_on_main(text.splitlines())]
+    assert got == refused, f"merges_on_main({text!r}) refused lines {got}, expected {refused}"
+
+
+# #485: the merge guard is timed the same way as the push guard — the child splits
+# its argument into lines, so window handling across many lines is timed too.
+ADVERSARIAL_MERGE_TEXTS = [
+    "git checkout main && " * 2000 + "git pull",
+    "git checkout " + "-f " * 2000 + "x",
+    "git checkout " + "-f -f " * 2000 + "main-x && git merge x",
+    "git switch " + "--q " * 2000 + "x",
+    "sudo " * 2000 + "git checkout main",
+    "A=b " * 2000 + "git merge x",
+    "- " * 2000 + "git checkout main",
+    "(" * 5000 + "git checkout main",
+    ";" * 5000 + "git merge x",
+    "git checkout main\n" * 5000 + "git pull",
+    "git checkout main\ngit merge x\n" * 2000,
+    "git -C x " * 2000 + "checkout main",
+]
+
+_TIMED_MERGE = (
+    "import sys, time\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from test_skills_do_not_teach_direct_push import merges_on_main\n"
+    "lines = sys.argv[2].splitlines()\n"
+    "t = time.perf_counter()\n"
+    "merges_on_main(lines)\n"
+    "print(time.perf_counter() - t)\n"
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ADVERSARIAL_MERGE_TEXTS,
+    ids=[f"{c[:24]}...len{len(c)}" for c in ADVERSARIAL_MERGE_TEXTS],
+)
+def test_merge_on_main_guard_is_linear(text):
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", _TIMED_MERGE, str(Path(__file__).resolve().parent), text],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"merges_on_main backtracks catastrophically (>5 s) on {text[:40]!r}...")
+    elapsed = float(out.stdout)
+    assert elapsed < 0.1, f"merges_on_main took {elapsed:.3f} s on {text[:40]!r}..."
+
+
 def _skill_files():
     assert SKILLS_DIR.is_dir(), f"skills/ not found at {SKILLS_DIR}"
     files = sorted(SKILLS_DIR.rglob("SKILL.md"))
@@ -309,15 +470,11 @@ def test_skill_does_not_push_to_main(path):
 
 @pytest.mark.parametrize("path", _skill_files(), ids=lambda p: str(p.relative_to(SKILLS_DIR)))
 def test_skill_does_not_merge_on_main(path):
-    """`git checkout main` followed by `git merge` within a few lines."""
-    lines = path.read_text().splitlines()
-    for n, line in enumerate(lines):
-        if not CHECKOUT_MAIN.match(line):
-            continue
-        window = lines[n + 1 : n + 6]
-        merges = [w.strip() for w in window if MERGE.match(w)]
-        assert not merges, (
-            f"{path.relative_to(SKILLS_DIR.parent)}:{n + 1} checks out main and then merges "
-            f"({merges[0]}). That is the local half of a direct-to-main landing; "
-            f"merge through a pull request instead."
-        )
+    """A checkout of main followed by `git merge` — same line or within MERGE_WINDOW lines."""
+    offenders = merges_on_main(path.read_text().splitlines())
+    assert not offenders, (
+        f"{path.relative_to(SKILLS_DIR.parent)} merges on main: "
+        + "; ".join(f"line {n}: {t}" for n, t in offenders)
+        + ". That is the local half of a direct-to-main landing; "
+        "merge through a pull request instead (`gh pr merge`)."
+    )
