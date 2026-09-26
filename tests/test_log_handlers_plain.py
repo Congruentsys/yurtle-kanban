@@ -110,6 +110,21 @@ def rich_handler_violations(source: str, filename: str = "<string>") -> list[str
         "import rich.logging\nhandler_cls = rich.logging.RichHandler\n",
         # #518: per-record markup via `extra`
         "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra={'markup': True})\n",
+        # #524: turning markup on after construction
+        "h = make_handler()\nh.markup = True\n",
+        "h = make_handler()\nh.markup |= True\n",
+        "h = make_handler()\nsetattr(h, 'markup', True)\n",
+        "h = make_handler()\nh.__dict__['markup'] = True\n",
+        # #524: markup via extra=dict(...), or any 'markup' dict key
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra=dict(markup=True))\n",
+        "opts = {'markup': True}\n",
+        "opts = {}\nopts['markup'] = True\n",
+        # #524: fileConfig can name any handler class from an ini file
+        "import logging.config\nlogging.config.fileConfig('logging.ini')\n",
+        "from logging.config import fileConfig\nfileConfig('logging.ini')\n",
+        "from logging.config import fileConfig as fc\nfc('logging.ini')\n",
+        # prose counts: a docstring naming the handler is flagged too (a tripwire)
+        '"""Logs go through a RichHandler."""\n',
     ],
 )
 def test_checker_flags_markup_capable_rich_handler(source: str) -> None:
@@ -123,6 +138,16 @@ def test_checker_flags_markup_capable_rich_handler(source: str) -> None:
         "import rich.logging\nh = rich.logging.RichHandler(markup=False, show_path=False)\n",
         "import logging\nlogging.basicConfig(level=logging.INFO)\n",
         "from rich.console import Console\nConsole().print('[bold]x[/bold]')\n",
+        # #524 controls
+        "h = make_handler()\nprint(h.markup)\n",
+        "h = make_handler()\nattr = 'level'\nsetattr(h, attr, 10)\n",
+        "h = make_handler()\nh.__dict__['level'] = 10\n",
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra=dict(user=1))\n",
+        "import logging\nlogging.getLogger('yurtle-kanban').warning('x', extra={'user': 1})\n",
+        "opts = {'level': 'markup'}\nopts['level'] = 'markup'\n",
+        "import logging.config\nlogging.config.dictConfig({'version': 1})\n",
+        "from rich.text import Text\nt = Text.from_markup('[b]x[/b]')\n",
+        '"""Warnings are plain text, never Rich markup."""\n',
     ],
 )
 def test_checker_passes_plain_handlers(source: str) -> None:
