@@ -561,16 +561,12 @@ def _group_shapes():
     return [list(s) for s in unique]
 
 
-def _long_options(cmd):
-    return {o for o in _declared_options(cmd) if o.startswith("--")}
-
-
 def _parent_only_options(path):
-    """Long options some ancestor group of `path` declares and `path` itself does not."""
+    """Options, long and short, some ancestor group of `path` declares and it does not."""
     inherited = set()
     for depth in range(len(path)):
-        inherited |= _long_options(_command_at(path[:depth]))
-    return sorted(inherited - _long_options(_command_at(path)))
+        inherited |= set(_declared_options(_command_at(path[:depth])))
+    return sorted(inherited - set(_declared_options(_command_at(path))))
 
 
 def _command_at(path):
@@ -617,6 +613,25 @@ def test_group_shapes_agree_with_click(words, inert_callbacks):
         f"`yurtle-kanban {' '.join(words)}`: click exits {result.exit_code}, "
         f"the guard says {verdict!r}"
     )
+
+
+def test_parent_only_options_is_not_vacuous():
+    """If the root's `--version` moved or were renamed, the parent-only shapes in
+    the differential would drop out without a sound; say so instead (#556)."""
+    found = {opt for p in _command_paths() for opt in _parent_only_options(p)}
+    assert found, "no command has an option only its parent group declares"
+
+
+def test_parent_only_options_include_short_aliases(monkeypatch):
+    """A parent's short alias (`-V`) is a parent-only option too, and the guard
+    agrees with click that a leaf rejects it (#556)."""
+    extra = click.Option(["-V", "--vee"], is_flag=True, hidden=True)
+    monkeypatch.setattr(main, "params", [*main.params, extra])
+    assert {"-V", "--vee"} <= set(_parent_only_options(("move",)))
+    assert {"-V", "--vee"} <= set(_parent_only_options(("hdd", "validate")))
+    for words in (["move", "-V"], ["hdd", "validate", "-V"], ["-V", "--help"]):
+        click_accepts = CliRunner().invoke(main, words).exit_code == 0
+        assert (_rejection(*words) is None) is click_accepts, words
 
 
 def test_hidden_option_alias_is_accepted(monkeypatch):
