@@ -237,6 +237,14 @@ kanban:
     - "**/_TEMPLATE*"
 ```
 
+A board's **type folders under its root are always part of the board**, whatever
+`scan_paths` lists: `create` puts each type in its own folder, `<root>/<plural>/` (`features/`,
+`ideas/`, `papers/`, …), and `scan()` always walks those folders, so an item is never written
+where the board can't see it (#109, #113). With a broad root such as `root: .` and narrow
+`scan_paths`, that means `./ideas/`, `./papers/`, `./issues/` and so on at the repo root are
+scanned too, and any hand-written `.md` there with frontmatter shows up as an item. Give the
+board a dedicated root (`kanban-work/`), or exclude those folders with `paths.ignore` patterns such as `ideas/*` (#137).
+
 `ignore` patterns match a file's path relative to the repo. For a board root **outside the
 repo** (an absolute path, or one reached with `../`), items aren't under the repo, so patterns
 match the file's **absolute** path instead: write them as `**/archive/**`-style globs (or as
