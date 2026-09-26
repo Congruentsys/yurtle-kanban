@@ -470,7 +470,7 @@ MENTION = re.compile(r"(?<![\w/.-])yurtle-kanban\s+\S")
 # Mentions that are deliberately NOT commands. Each one needs a reason; anything
 # else that mentions `yurtle-kanban` must parse, or the guard is silently blind.
 NOT_COMMANDS = {
-    re.compile(r"^allowed-tools:.*Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
+    re.compile(r"^allowed-tools:\s*Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
     re.compile(r"^pip index versions yurtle-kanban(?=\s|$)"): "the package name, passed to pip",
     re.compile(r"^## yurtle-kanban "): "a markdown heading",
     re.compile(r"^Initialize yurtle-kanban in "): "init's one-line description",
