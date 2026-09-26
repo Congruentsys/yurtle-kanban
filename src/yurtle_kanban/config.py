@@ -392,7 +392,7 @@ class BoardConfig:
             # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
             name=board_name,
             preset=_theme_name(
-                data, "preset", f" for board {data.get('name')!r}", repo_root
+                data, "preset", f" for board {board_name!r}", repo_root
             ),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)

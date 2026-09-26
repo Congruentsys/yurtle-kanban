@@ -172,10 +172,15 @@ def _rejection(*words, root=main):
     looks like an option instead, click's `resolve_command` re-parses from there
     as the group's options: an eager one (`--version`, `--help`) runs and exits,
     an unknown one is "No such option", anything else is "No such command".
-    A group that ends at `--`, with no word after it, is "Missing command".
+    A group that ends at `--`, with no word after it, is "Missing command"; a
+    group that simply ends is click printing the group's help and exiting 2
+    (#542). Unless an eager option (`--help`, `--version`) was given: click runs
+    it while it parses that command's own words — which are therefore still
+    checked — and exits 0 before it would resolve a subcommand, so a group stops
+    being checked at the first word after it.
     """
     cmd, path, i = root, [], 0
-    options_ended = False
+    options_ended = eager = False
     while i < len(words):
         word = words[i]
         where = " ".join(["yurtle-kanban", *path])
@@ -183,8 +188,12 @@ def _rejection(*words, root=main):
             options_ended, i = True, i + 1
             continue
         is_option = OPTION_TOKEN.match(word)
+        if isinstance(cmd, click.Group) and eager and (options_ended or not is_option):
+            # An eager option ran while click parsed this group's own words; it
+            # exits 0 before the group resolves a subcommand, so nothing from
+            # here on is parsed at all (#542): `--version hdd`, `--help -- x`.
+            return None
         if isinstance(cmd, click.Group) and options_ended and is_option:
-            eager = False
             while i < len(words) and OPTION_TOKEN.match(words[i]):  # stops at `--`
                 problem, i, named = _consume_option(words, i, cmd, where)
                 if problem:
@@ -201,12 +210,17 @@ def _rejection(*words, root=main):
         if options_ended or not is_option:
             i += 1
             continue  # a positional argument of a leaf command
-        problem, i, _named = _consume_option(words, i, cmd, where)
+        problem, i, named = _consume_option(words, i, cmd, where)
         if problem:
             return problem
-    if options_ended and isinstance(cmd, click.Group):
-        # `hdd --` and nothing after: click's "Missing command" (#537)
-        return f"`{' '.join(['yurtle-kanban', *path])} --` is missing a subcommand"
+        eager = eager or any(p.is_eager for p in named)
+    if isinstance(cmd, click.Group) and not cmd.invoke_without_command and not eager:
+        where = " ".join(["yurtle-kanban", *path])
+        if options_ended:
+            # `hdd --` and nothing after: click's "Missing command" (#537)
+            return f"`{where} --` is missing a subcommand"
+        # `hdd` and nothing after: click prints the help, then exits 2 (#542)
+        return f"`{where}` is missing a subcommand"
     return None
 
 
@@ -360,6 +374,10 @@ def test_help_example_is_accepted_by_the_cli(parts, example, words):
 # --- blind spots found reviewing #89 (issue #476) --------------------------------
 
 
+# Every group below the root, e.g. `hdd`, `epic` — the shapes #542's review found.
+_SUBGROUPS = sorted(n for n, c in main.commands.items() if isinstance(c, click.Group))
+
+
 def _verdict(line):
     """What the guard says about one printed line: a rejection, None, or "unparsed"."""
     parsed = _parse(line)
@@ -455,6 +473,41 @@ def _verdict(line):
         ("yurtle-kanban hdd -- validate", None),
         ("yurtle-kanban -- --version --", None),
         ("yurtle-kanban move EXP-1 done --", None),
+        # #542: a bare group at the end of the input: click prints its help and
+        # exits 2; an eager option (--help, --version) is the accepted way to stop
+        ("yurtle-kanban", "`yurtle-kanban` is missing a subcommand"),
+        ("yurtle-kanban hdd", "`yurtle-kanban hdd` is missing a subcommand"),
+        ("yurtle-kanban epic", "`yurtle-kanban epic` is missing a subcommand"),
+        ("yurtle-kanban -- hdd", "`yurtle-kanban hdd` is missing a subcommand"),
+        ("yurtle-kanban hdd --quiet", "`yurtle-kanban hdd` is missing a subcommand"),
+        ("yurtle-kanban --help", None),
+        ("yurtle-kanban hdd --help", None),
+        ("yurtle-kanban hdd -- --help", None),
+        ("yurtle-kanban hdd --quiet --help", None),
+        ("yurtle-kanban hdd validate", None),
+        # #542 round 2: click runs an eager option's callback while it parses
+        # that command's own words, and exits 0 before it resolves a subcommand.
+        # So after `--version`/`--help`, the rest of that command's options are
+        # still checked, but a subcommand word and everything after it are not.
+        *[(f"yurtle-kanban --version {g}", None) for g in _SUBGROUPS],
+        *[(f"yurtle-kanban --help {g}", None) for g in _SUBGROUPS],
+        *[(f"yurtle-kanban {g} --help --", None) for g in _SUBGROUPS],
+        ("yurtle-kanban --help --", None),
+        ("yurtle-kanban --version bogus", None),
+        ("yurtle-kanban --version hdd bogus", None),
+        ("yurtle-kanban --version hdd --bogus", None),
+        ("yurtle-kanban hdd --help bogus", None),
+        ("yurtle-kanban --help -- bogus", None),
+        ("yurtle-kanban --help -- --bogus", None),
+        ("yurtle-kanban --version -- --", None),
+        ("yurtle-kanban --version --bogus", "`--bogus` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban --version -1", "`-1` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban hdd --help --bogus", "`--bogus` is not accepted by `yurtle-kanban hdd`"),
+        (
+            "yurtle-kanban move EXP-1 done --help --bogus",
+            "`--bogus` is not accepted by `yurtle-kanban move`",
+        ),
+        ("yurtle-kanban hdd --version", "`--version` is not accepted by `yurtle-kanban hdd`"),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
@@ -467,6 +520,35 @@ def test_guard_verdicts(monkeypatch, line, expected):
     quiet = click.Option(["--quiet"], is_flag=True, hidden=True)
     monkeypatch.setattr(hdd, "params", [*hdd.params, quiet])
     assert _verdict(line) == expected
+
+
+_GROUP_SUFFIXES = ["", "--", "--help", "--version", "-- --help", "-- --version", "--help --"]
+
+
+def _group_shapes():
+    """Lines that end at, or stop before, a group: none of them runs a command."""
+    shapes = [
+        f"{g} {suffix}".split() for g in ["", *_SUBGROUPS] for suffix in _GROUP_SUFFIXES
+    ]
+    shapes += [[eager, g] for eager in ("--version", "--help") for g in _SUBGROUPS]
+    return shapes
+
+
+@pytest.mark.parametrize("words", _group_shapes(), ids=" ".join)
+def test_group_shapes_agree_with_click(words):
+    """The guard's verdict IS click's: accepted exactly when click exits 0.
+
+    None of these lines reaches a leaf command, so click only parses them — it
+    exits 0 (an eager option ran) or 2 (a usage error), never runs anything.
+    """
+    result = CliRunner().invoke(main, words)
+    assert result.exit_code in (0, 2), result.output
+    click_accepts = result.exit_code == 0
+    verdict = _rejection(*words)
+    assert (verdict is None) is click_accepts, (
+        f"`yurtle-kanban {' '.join(words)}`: click exits {result.exit_code}, "
+        f"the guard says {verdict!r}"
+    )
 
 
 def test_hidden_option_alias_is_accepted(monkeypatch):
