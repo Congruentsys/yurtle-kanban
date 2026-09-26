@@ -645,17 +645,24 @@ class KanbanConfig:
         to ``root``); else the common parent of the scan paths.
         """
         root = self.paths.root
-        scans = [Path(p) for p in self.paths.scan_paths]
+        # `~` and absolute spellings of one place are the same place (#494)
+        scans = [Path(p).expanduser() for p in self.paths.scan_paths]
         if not scans:
             return root or "work/"
         if root:
+            top = Path(root).expanduser()
             for raw, scan in zip(self.paths.scan_paths, scans):
-                if Path(root) == scan or scan in Path(root).parents:
+                if top == scan or scan in top.parents:
                     return raw
         try:
-            common = Path(os.path.commonpath([str(s) for s in scans]))
-        except ValueError:  # absolute and relative scan paths mixed (#147)
-            return root or "work/"
+            # as spelled, so a `~` config keeps its `~`; the expanded paths only
+            # when the spellings mix `~` and absolute (#494)
+            common = Path(os.path.commonpath(self.paths.scan_paths))
+        except ValueError:
+            try:
+                common = Path(os.path.commonpath([str(s) for s in scans]))
+            except ValueError:  # absolute and relative scan paths mixed (#147)
+                return root or "work/"
         return f"{common.as_posix()}/" if str(common) not in ("", ".") else (root or "work/")
 
     def add_board(self, board: BoardConfig) -> None:
