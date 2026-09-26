@@ -20,7 +20,8 @@ The extraction is deliberately narrow: a line that STARTS with `yurtle-kanban`
 ...` backtick span. A URL or a flag NAMED in prose is a mention, not a use, and
 only a use is a promise about what the CLI accepts. Narrow must not mean blind:
 every other line that mentions `yurtle-kanban` is on the NOT_COMMANDS allow-list
-with a reason (issue #476).
+with a reason (issue #476). That mention check only sees the name
+`yurtle-kanban`: a shell alias would slip past it, and none exists today (#488).
 
 The CLI's own `--help` output is the second surface (issue #89): the Examples
 in each command's help print invocations too, and `--help` is what an agent
@@ -110,42 +111,64 @@ def _takes_value(param):
     return not (param.is_flag or param.count)
 
 
+def _needs(param):
+    """`requires a value` / `requires 2 values` — what a value-taking `param` is missing."""
+    return "requires a value" if param.nargs <= 1 else f"requires {param.nargs} values"
+
+
 def _rejection(*words, root=main):
     """Why the CLI would reject `yurtle-kanban <words>`, or None if it accepts it.
 
     The one definition of "a command the CLI accepts" shared by every surface.
     Words are consumed the way click does: while at a group, a word names a
     subcommand (so any depth resolves); an option is checked against the command
-    it is given to, and its value is skipped; anything else is an argument.
+    it is given to, and consumes its value words; anything else is an argument.
+    `--` ends options for the command it is given to — at a group the next word
+    is still a subcommand, whose own options are parsed as usual.
     """
     cmd, path, i = root, [], 0
+    options_ended = False
     while i < len(words):
         word = words[i]
         i += 1
         where = " ".join(["yurtle-kanban", *path])
-        if word == "--":
-            break
-        if OPTION_TOKEN.match(word):
-            declared = _declared_options(cmd)
-            name, eq, _ = word.partition("=") if word.startswith("--") else (word[:2], "", "")
-            param = declared.get(name)
-            if param is None:
-                return f"`{name}` is not accepted by `{where}`"
-            if not word.startswith("--") and len(word) > 2:
-                if _takes_value(param):
-                    continue  # `-mMESSAGE`: the rest is the value
-                for ch in word[2:]:  # `-fa`: a cluster of short flags
-                    if f"-{ch}" not in declared:
-                        return f"`-{ch}` is not accepted by `{where}`"
-                continue
-            if not eq and _takes_value(param):
-                i += param.nargs if param.nargs > 0 else 1
-        elif isinstance(cmd, click.Group):
+        if word == "--" and not options_ended:
+            options_ended = True
+            continue
+        if isinstance(cmd, click.Group) and (options_ended or not OPTION_TOKEN.match(word)):
             if word not in cmd.commands:
                 return f"`{where} {word}` is not a subcommand"
             cmd = cmd.commands[word]
             path.append(word)
-        # else: a positional argument of a leaf command
+            options_ended = False
+            continue
+        if options_ended or not OPTION_TOKEN.match(word):
+            continue  # a positional argument of a leaf command
+        declared = _declared_options(cmd)
+        if word.startswith("--"):
+            name, eq, _ = word.partition("=")
+            param = declared.get(name)
+            if param is None:
+                return f"`{name}` is not accepted by `{where}`"
+            if not _takes_value(param):
+                if eq:
+                    return f"`{name}` does not take a value in `{where}`"
+                continue
+            wanted = max(param.nargs, 1) - (1 if eq else 0)
+        else:
+            # `-fm msg`, `-fmmsg`: flags, until a value-taking option; the rest of
+            # the cluster is its first value, and it takes more words if it needs them.
+            wanted = 0
+            for j, ch in enumerate(word[1:], start=2):
+                name, param = f"-{ch}", declared.get(f"-{ch}")
+                if param is None:
+                    return f"`{name}` is not accepted by `{where}`"
+                if _takes_value(param):
+                    wanted = max(param.nargs, 1) - (1 if word[j:] else 0)
+                    break
+        if i + wanted > len(words):
+            return f"`{name}` {_needs(param)} in `{where}`"
+        i += wanted
     return None
 
 
@@ -404,8 +427,8 @@ MENTION = re.compile(r"(?<![\w/.-])yurtle-kanban\s+\S")
 # Mentions that are deliberately NOT commands. Each one needs a reason; anything
 # else that mentions `yurtle-kanban` must parse, or the guard is silently blind.
 NOT_COMMANDS = {
-    re.compile(r"Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
-    re.compile(r"pip index versions yurtle-kanban"): "the package name, passed to pip",
+    re.compile(r"^allowed-tools:.*Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
+    re.compile(r"^pip index versions yurtle-kanban(?=\s|$)"): "the package name, passed to pip",
     re.compile(r"^## yurtle-kanban "): "a markdown heading",
     re.compile(r"^Initialize yurtle-kanban in "): "init's one-line description",
 }
