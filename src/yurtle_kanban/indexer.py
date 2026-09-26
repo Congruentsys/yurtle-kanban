@@ -7,6 +7,7 @@ is the scanner. Kept only because it is part of the published package. Its
 board's own ``BoardConfig.ignore`` (#124, #129, #153).
 """
 
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -23,9 +24,19 @@ PM = Namespace("https://yurtle.dev/pm/")
 
 
 class WorkItemIndexer:
-    """Discovers and indexes work items from Yurtle markdown files."""
+    """Discovers and indexes work items from Yurtle markdown files.
+
+    Deprecated (#434): it diverges from `KanbanService.scan` (types, status
+    spellings, theme types, id fallback); use `KanbanService.scan` instead.
+    """
 
     def __init__(self, config: KanbanConfig, repo_root: Path):
+        warnings.warn(
+            "WorkItemIndexer is deprecated: it diverges from KanbanService.scan, which "
+            "is the one way to read a board (#434)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config
         self.repo_root = repo_root
         self._items: dict[str, WorkItem] = {}
