@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from .._logging import get_logger
 from ..config import KanbanConfig
 from ..models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
@@ -545,7 +546,7 @@ def run_server():
                 },
                 "serverInfo": {
                     "name": "yurtle-kanban",
-                    "version": "0.1.0",
+                    "version": __version__,  # the package's, one source of truth (#561)
                 },
             }
 
