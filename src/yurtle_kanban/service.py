@@ -3001,7 +3001,13 @@ class KanbanService:
                 value = forward.get(native, native)
                 # exactly a status value, as `move` compares it: `in-progress` isn't
                 # offered because `move` would refuse it (#461)
-                if value in canonical_values and value not in allowed:
+                # and only if `move` would take it: it maps the target back to the
+                # theme's name and looks for that in the list (#467)
+                if (
+                    value in canonical_values
+                    and reverse.get(value, value) == native
+                    and value not in allowed
+                ):
                     allowed.append(value)
             return allowed
         workflow = self._workflow_parser.load_workflow(item.item_type.value)
