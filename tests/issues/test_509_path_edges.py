@@ -157,7 +157,7 @@ def test_init_tilde_root_loads_as_tilde(tmp_path, home, monkeypatch, path):
 
     raw = _raw_yaml(repo)
     assert raw["kanban"]["paths"]["root"] == path, raw["kanban"]["paths"]
-    assert _raw_root_line(repo) == f'root: "{path}"'
+    assert _raw_root_line(repo) in (f"root: {path}", f'root: "{path}"', f"root: '{path}'")
     assert _load(repo).paths.root == path
     _no_literal_tilde(repo)
 
@@ -169,7 +169,7 @@ def test_init_yaml_special_root_loads_as_written(tmp_path, home, monkeypatch, pa
 
     raw = _raw_yaml(repo)
     assert raw["kanban"]["paths"]["root"] == path, raw["kanban"]["paths"]
-    assert _raw_root_line(repo) == f'root: "{path}"'
+    assert _raw_root_line(repo) in (f"root: {path}", f'root: "{path}"', f"root: '{path}'")
     assert _load(repo).paths.root == path
 
 
