@@ -18,6 +18,9 @@ What this guard covers, and what it deliberately does not:
                passes here, where click says "Got unexpected extra argument".
                Arity is a fact about each command's signature, not drift in a
                name, and counting it would mean modelling every argument (#525).
+  not covered  whether a value has the right TYPE: `rank EXP-1 -- -1.5` passes
+               here, where click says "'-1.5' is not a valid integer". Like
+               arity, a value type is a fact about one command's signature (#537).
 
 The extraction is deliberately narrow: a line that STARTS with `yurtle-kanban`
 (after an optional `$` prompt and `VAR=value` env prefixes), or a `yurtle-kanban
@@ -169,6 +172,7 @@ def _rejection(*words, root=main):
     looks like an option instead, click's `resolve_command` re-parses from there
     as the group's options: an eager one (`--version`, `--help`) runs and exits,
     an unknown one is "No such option", anything else is "No such command".
+    A group that ends at `--`, with no word after it, is "Missing command".
     """
     cmd, path, i = root, [], 0
     options_ended = False
@@ -200,6 +204,9 @@ def _rejection(*words, root=main):
         problem, i, _named = _consume_option(words, i, cmd, where)
         if problem:
             return problem
+    if options_ended and isinstance(cmd, click.Group):
+        # `hdd --` and nothing after: click's "Missing command" (#537)
+        return f"`{' '.join(['yurtle-kanban', *path])} --` is missing a subcommand"
     return None
 
 
@@ -439,6 +446,15 @@ def _verdict(line):
         ("yurtle-kanban history --since=-5", None),
         ("yurtle-kanban show -", None),
         ("yurtle-kanban -- --", "`yurtle-kanban --` is not a subcommand"),
+        # #537: a group that ends at `--`, with no subcommand after it, is click's
+        # "Missing command"; `--` then a subcommand, or an eager option, is fine
+        ("yurtle-kanban --", "`yurtle-kanban --` is missing a subcommand"),
+        ("yurtle-kanban hdd --", "`yurtle-kanban hdd --` is missing a subcommand"),
+        ("yurtle-kanban epic --", "`yurtle-kanban epic --` is missing a subcommand"),
+        ("yurtle-kanban -- hdd --", "`yurtle-kanban hdd --` is missing a subcommand"),
+        ("yurtle-kanban hdd -- validate", None),
+        ("yurtle-kanban -- --version --", None),
+        ("yurtle-kanban move EXP-1 done --", None),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
