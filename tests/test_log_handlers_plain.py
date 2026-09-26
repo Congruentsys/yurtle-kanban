@@ -21,8 +21,9 @@ What backstops them differs:
   with a variable key, `__dict__.update`) turn markup on in the handler itself.
   The runtime check (`test_no_markup_rich_handler_installed_after_import`)
   catches that, but only for a handler attached to the root or a
-  `yurtle-kanban*` logger by the time the package is imported. One switched on
-  inside a command body, after import, is not seen.
+  `yurtle-kanban*` logger by the time the package, its CLI and its MCP server
+  are imported. One switched on inside a command body, after import, is not
+  seen.
 - The two `extra=` gaps are NOT backstopped. Rich lets the record override the
   handler (`getattr(record, "markup", self.markup)`), so a `RichHandler(markup=False)`
   still renders markup for a record carrying `markup=True`, and the runtime check
@@ -37,7 +38,6 @@ import ast
 import importlib
 import io
 import logging
-import sys
 from pathlib import Path
 
 import pytest
@@ -310,81 +310,15 @@ def test_no_package_module_builds_a_markup_rich_handler() -> None:
 
 
 def _import_package() -> None:
+    """Import the package, its CLI and its MCP server, all unconditionally.
+
+    `yurtle_kanban.mcp.server` uses only the standard library and yurtle_kanban
+    modules, never the `mcp` package, so there is nothing optional to skip (#551).
+    If it ever starts depending on `mcp`, this import fails loudly, as it should.
+    """
     importlib.import_module("yurtle_kanban")
     importlib.import_module("yurtle_kanban.cli")
-    try:
-        importlib.import_module("yurtle_kanban.mcp.server")
-    except ModuleNotFoundError as e:
-        if not _is_missing_mcp(e):  # a broken internal import fails loudly (#547)
-            raise
-
-
-def _is_missing_mcp(e: ModuleNotFoundError) -> bool:
-    """The optional `mcp` extra itself (or a submodule of it) isn't installed."""
-    return e.name is not None and (e.name == "mcp" or e.name.startswith("mcp."))
-
-
-_REAL_IMPORT = importlib.import_module
-
-
-def _failing_mcp_server_import(exc: ImportError):  # type: ignore[no-untyped-def]
-    def fake(name: str, package: str | None = None):  # type: ignore[no-untyped-def]
-        if name == "yurtle_kanban.mcp.server":
-            raise exc
-        return _REAL_IMPORT(name, package)
-
-    return fake
-
-
-@pytest.mark.parametrize(
-    "exc",
-    [
-        pytest.param(ModuleNotFoundError("No module named 'mcp'", name="mcp"), id="mcp"),
-        pytest.param(
-            ModuleNotFoundError("No module named 'mcp.types'", name="mcp.types"),
-            id="mcp-submodule",
-        ),
-    ],
-)
-def test_import_package_skips_only_a_missing_mcp(
-    monkeypatch: pytest.MonkeyPatch, exc: ImportError
-) -> None:
-    monkeypatch.setattr(importlib, "import_module", _failing_mcp_server_import(exc))
-    _import_package()  # the optional extra is absent: skipped quietly
-
-
-@pytest.mark.parametrize(
-    "exc",
-    [
-        pytest.param(ImportError("boom"), id="plain-importerror"),
-        pytest.param(
-            ImportError("cannot import name 'X' from 'yurtle_kanban.service'"),
-            id="bad-internal-name",
-        ),
-        pytest.param(
-            ModuleNotFoundError("No module named 'yurtle_kanban.gone'", name="yurtle_kanban.gone"),
-            id="missing-internal-module",
-        ),
-        pytest.param(ModuleNotFoundError("No module named 'mcpx'", name="mcpx"), id="mcp-prefix"),
-        pytest.param(ModuleNotFoundError("no name"), id="no-name"),
-    ],
-)
-def test_import_package_does_not_swallow_a_broken_import(
-    monkeypatch: pytest.MonkeyPatch, exc: ImportError
-) -> None:
-    monkeypatch.setattr(importlib, "import_module", _failing_mcp_server_import(exc))
-    with pytest.raises(ImportError) as info:
-        _import_package()
-    assert info.value is exc
-
-
-def test_import_package_fails_on_a_halted_internal_import(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A real import failure, not a patched one: `None` in sys.modules halts it."""
-    monkeypatch.setitem(sys.modules, "yurtle_kanban.mcp.server", None)
-    with pytest.raises(ModuleNotFoundError):
-        _import_package()
+    importlib.import_module("yurtle_kanban.mcp.server")
 
 
 def _markup_rich_handlers() -> list[str]:
