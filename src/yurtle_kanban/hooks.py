@@ -12,6 +12,7 @@ kanban operation.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from collections.abc import Callable
@@ -402,7 +403,9 @@ def _action_nats_publish(action: dict, context: HookContext) -> None:
 def _action_log(action: dict, context: HookContext) -> None:
     """Append a JSON line to a log file."""
     log_path = action.get("path", ".kanban/hooks.log")
-    log_path = Path(context.render_path(log_path)).expanduser()  # `~` is home (#509)
+    # only a `~` the config author wrote means home: expanded before rendering, so
+    # item data (an assignee `~x`) stays a plain path segment (#357, #509)
+    log_path = Path(context.render_path(os.path.expanduser(log_path)))
     if context.repo_root is not None and not log_path.is_absolute():
         log_path = context.repo_root / log_path
 
