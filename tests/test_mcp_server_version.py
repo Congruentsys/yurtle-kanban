@@ -23,7 +23,7 @@ PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
 def _initialize(monkeypatch, tmp_path: Path) -> dict:
-    """Pipe one JSON-RPC initialize request through run_server; return the reply."""
+    """Pipe one JSON-RPC initialize request through run_server; return its `result`."""
     monkeypatch.chdir(tmp_path)
     request = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
     stdin = io.StringIO(json.dumps(request) + "\n")
@@ -37,8 +37,12 @@ def _initialize(monkeypatch, tmp_path: Path) -> dict:
     assert len(lines) == 1, f"expected one reply, got {lines!r}"
     reply = json.loads(lines[0])
     assert reply.get("id") == 1
-    # Accept the JSON-RPC `result` envelope or the current flat shape.
-    return reply.get("result", reply)
+    # JSON-RPC 2.0 envelope (#563/#567): the payload lives under `result`.
+    assert "result" in reply, f"reply has no `result` envelope: {reply!r}"
+    assert "serverInfo" not in reply, "serverInfo must be inside `result`, not top level"
+    result = reply["result"]
+    assert "serverInfo" in result, f"`result` has no serverInfo: {result!r}"
+    return result
 
 
 def test_initialize_reports_package_version(monkeypatch, tmp_path):
