@@ -554,13 +554,15 @@ class KanbanService:
         lexical: an in-repo directory that is a symlink to elsewhere counts as
         inside; no fleet repo has such a board (measured for #501)."""
         root = self.repo_root if root is None else root
+        # a relative path is relative to the cwd: made absolute first, so a bare
+        # `..` can't pass as inside (#511)
+        normal = Path(os.path.abspath(path))
         try:
-            return Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
+            return normal.relative_to(os.path.abspath(root))
         except ValueError:
             pass
-        # resolve the normalised path's directory: `R/..` must not become `R/..`
-        # again under a resolved `R` (#501)
-        normal = Path(os.path.normpath(path))
+        # resolve the normalised path's parent, so `R/..` can't reappear as
+        # `<resolved R>/..` (#501)
         try:
             return (normal.parent.resolve() / normal.name).relative_to(root.resolve())
         except (ValueError, OSError):
