@@ -328,9 +328,43 @@ def _verdict(line):
         # unchanged: a group given a subcommand it lacks; a command plus an argument
         ("yurtle-kanban hdd validat --strict", "`yurtle-kanban hdd validat` is not a subcommand"),
         ("yurtle-kanban board research", None),
+        # #488: `--` at a group ends the group's options, not subcommand resolution
+        ("yurtle-kanban -- bogus", "`yurtle-kanban bogus` is not a subcommand"),
+        ("yurtle-kanban -- list --bogus", "`--bogus` is not accepted by `yurtle-kanban list`"),
+        ("yurtle-kanban -- list --status done", None),
+        ("yurtle-kanban move EXP-1 done -- --not-an-option", None),
+        # #488: a value given to a flag
+        (
+            "yurtle-kanban move EXP-1 done --force=yes",
+            "`--force` does not take a value in `yurtle-kanban move`",
+        ),
+        ("yurtle-kanban move EXP-1 done --force", None),
+        # #488: a value-taking option at the end of the line, with no value
+        ("yurtle-kanban list --status", "`--status` requires a value in `yurtle-kanban list`"),
+        ("yurtle-kanban list --status=", None),
+        # #488: a short cluster ending in a value-taking option takes the next word
+        ("yurtle-kanban move EXP-1 done -fm msg", None),
+        ("yurtle-kanban move EXP-1 done -fm --not-an-option", None),
+        ("yurtle-kanban move EXP-1 done -fmmsg", None),
+        ("yurtle-kanban move EXP-1 done -fm", "`-m` requires a value in `yurtle-kanban move`"),
+        # #488: nargs=2 (`--between`, planted below): `--opt=a b` is both values
+        ("yurtle-kanban history --between=a --not-an-option", None),
+        ("yurtle-kanban history --between a --not-an-option", None),
+        (
+            "yurtle-kanban history --between a",
+            "`--between` requires 2 values in `yurtle-kanban history`",
+        ),
+        (
+            "yurtle-kanban history --between=a",
+            "`--between` requires 2 values in `yurtle-kanban history`",
+        ),
     ],
 )
-def test_guard_verdicts(line, expected):
+def test_guard_verdicts(monkeypatch, line, expected):
+    # no real option takes nargs=2 today; plant one so the rows above exercise it
+    history = main.commands["history"]
+    between = click.Option(["--between"], nargs=2, hidden=True)
+    monkeypatch.setattr(history, "params", [*history.params, between])
     assert _verdict(line) == expected
 
 
@@ -386,6 +420,21 @@ def _mention_lines():
     for parts, chunk in _help_chunks():
         out.append((" ".join(["yurtle-kanban", *parts, "--help"]), chunk))
     return [(where, text) for where, text in out if MENTION.search(text)]
+
+
+@pytest.mark.parametrize(
+    "text,allowed",
+    [
+        ("allowed-tools: Bash(yurtle-kanban *), Bash(git *)", True),
+        ("pip index versions yurtle-kanban 2>/dev/null | head -2", True),
+        # #488: the same words elsewhere on a line are not the allow-listed use
+        ("Then run Bash(yurtle-kanban *) to see", False),
+        ("cd x && pip index versions yurtle-kanban", False),
+        ("pip index versions yurtle-kanban-extra", False),
+    ],
+)
+def test_allow_list_is_anchored(text, allowed):
+    assert any(p.search(text) for p in NOT_COMMANDS) is allowed
 
 
 def test_every_mention_parses_or_is_allow_listed():
