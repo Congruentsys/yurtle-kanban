@@ -87,6 +87,35 @@ def _is_str(value: Any) -> bool:
     return isinstance(value, str)
 
 
+def _clean_transitions(transitions: Any, where: str) -> dict[str, list[str]] | None:
+    """`transitions` with every entry a list of status names: a lone name is a
+    one-item list, as `item_types: expedition` is (#432); a name that isn't a
+    string is dropped (#461), and so is an entry that is neither (#457), each with
+    a warning naming `where`. None when `transitions` isn't a mapping. Both `move`
+    and the offered transitions rely on this shape (#474, #480)."""
+    if not isinstance(transitions, dict):
+        return None
+    cleaned: dict[str, list[str]] = {}
+    for status, allowed in transitions.items():
+        if isinstance(allowed, str):
+            cleaned[status] = [allowed]
+        elif isinstance(allowed, list):
+            names = [name for name in allowed if isinstance(name, str)]
+            if len(names) != len(allowed):
+                # a number or mapping in the list is no status name (#461)
+                logger.warning(
+                    f"{where}: `transitions.{status}` has entries that "
+                    "aren't status names; they are ignored"
+                )
+            cleaned[status] = names
+        else:
+            logger.warning(
+                f"{where}: `transitions.{status}` is not a list "
+                f"({type(allowed).__name__}); ignored"
+            )
+    return cleaned
+
+
 def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
     """`data` without any section that isn't a mapping: it is ignored, with one
     warning, as if it were absent (a `null` one too), so board/init/move fall back
@@ -101,28 +130,8 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
                     f"({type(value).__name__}); ignored"
                 )
     had_columns = bool(data.get("columns"))
-    # each transitions entry is a list of statuses; a lone name is a one-item list,
-    # as `item_types: expedition` is (#432); anything else is dropped (#457)
-    transitions = data.get("transitions", {})
-    for status in list(transitions):
-        allowed = transitions[status]
-        if isinstance(allowed, str):
-            transitions[status] = [allowed]
-        elif isinstance(allowed, list):
-            names = [name for name in allowed if isinstance(name, str)]
-            if len(names) != len(allowed):
-                # a number or mapping in the list is no status name (#461)
-                transitions[status] = names
-                logger.warning(
-                    f"theme file {theme_path}: `transitions.{status}` has entries that "
-                    "aren't status names; they are ignored"
-                )
-        else:
-            transitions.pop(status)
-            logger.warning(
-                f"theme file {theme_path}: `transitions.{status}` is not a list "
-                f"({type(allowed).__name__}); ignored"
-            )
+    if "transitions" in data:
+        data["transitions"] = _clean_transitions(data["transitions"], f"theme file {theme_path}")
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
         entries = data.get(section, {})
