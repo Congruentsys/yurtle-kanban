@@ -278,7 +278,7 @@ def _theme_name(
     return value
 
 
-def _scan_list(data: dict[str, Any], where: str = "kanban.paths") -> list[str]:
+def _scan_list(data: dict[str, Any], where: str = "in kanban.paths") -> list[str]:
     """`scan_paths` from a config mapping, read like `ignore` (#194, #204): absent
     or null → none; one path given as a string is that path, not its characters
     (#503); anything else but a list is refused, naming the key. `where` names the
@@ -298,7 +298,7 @@ def _scan_list(data: dict[str, Any], where: str = "kanban.paths") -> list[str]:
     # an empty entry is `Path('.')`, the repo root: never scan that by accident (#517)
     paths = [p for p in value if p.strip()]
     for dropped in (p for p in value if not p.strip()):
-        logger.warning(f"config: an empty `{where}.scan_paths` entry {dropped!r} is ignored")
+        logger.warning(f"config: `scan_paths` entry {dropped!r} {where} is ignored")
     return paths
 
 
@@ -379,22 +379,24 @@ class BoardConfig:
         - dict with int values: legacy aggregate limits
         - dict with dict values: per-type limits
         """
+        # warnings name the board as it loads: an unnamed one is `default` (#535)
+        board_name = _or_default(data, "name", "default")
         raw_wip = data.get("wip_limits", {})
         # Preserve None (explicitly unlimited board); a bad limit is dropped (#411)
         wip_limits = (
-            _clean_wip_limits(raw_wip, f"config.yaml board {data.get('name')!r}")
+            _clean_wip_limits(raw_wip, f"config.yaml board {board_name!r}")
             if raw_wip is not None else None
         )
         return cls(
             # a bare (null) key means its default, like an absent one (#220); an
             # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
-            name=_or_default(data, "name", "default"),
+            name=board_name,
             preset=_theme_name(
                 data, "preset", f" for board {data.get('name')!r}", repo_root
             ),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
-            scan_paths=_scan_list(data, f"board {data.get('name')!r}"),
+            scan_paths=_scan_list(data, f"on board {board_name!r}"),
             wip_limits=wip_limits,
             raw_wip_limits=copy.deepcopy(raw_wip),
             wip_exempt_types=data.get("wip_exempt_types") or [],
@@ -564,7 +566,7 @@ class KanbanConfig:
         paths_data = dict(raw_paths)
         # README long showed `ignore:` (and consumers wrote `scan_paths:`) beside
         # `paths:`, not in it: read them there too; `paths.*` wins (#482)
-        scan_where = "kanban.paths"
+        scan_where = "in kanban.paths"
         for key in ("ignore", "scan_paths"):
             if key not in kanban_data:
                 continue
@@ -575,7 +577,7 @@ class KanbanConfig:
             else:
                 paths_data[key] = kanban_data[key]
                 if key == "scan_paths":
-                    scan_where = "kanban"
+                    scan_where = "in kanban"
         paths = PathConfig(
             root=_or_default(paths_data, "root", "work/"),
             scan_paths=_scan_list(paths_data, scan_where),
