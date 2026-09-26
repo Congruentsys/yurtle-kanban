@@ -950,6 +950,37 @@ MERGES_ON_MAIN_CASES = [
     ("git checkout main && git reset --hard HEAD^", []),
     ("git checkout main && git reset --hard HEAD~2^", []),
     ("git checkout main && git am --resolved", []),
+    # #536: a short cluster holding `f` forces; with `C`/`M` (or `f` plus `m`/`c`) it
+    # copies or moves ONTO the last name
+    ("git branch -fq main feat", [1]),
+    ("git branch -qf main", [1]),
+    ("git branch -fm feat main", [1]),
+    ("git branch -mf feat main", [1]),
+    ("git branch -cf feat main", [1]),
+    ("git branch -qC feat main", [1]),
+    ("git branch -Mq feat main", [1]),
+    ("git checkout main && git am --reject x.patch", [1]),
+    ("git checkout main && git am -k x.patch", [1]),
+    # #536 controls — another branch forced, or a delete
+    ("git branch -fq feat main", []),
+    ("git branch -qfm main feat", []),
+    ("git branch -fq main-x", []),
+    ("git branch -Df main", []),
+    ("git branch -fd main", []),
+    # #536: `@{push}` and `<remote>/HEAD` are the upstream — a reset onto them syncs
+    ("git checkout main && git reset --hard @{push}", []),
+    ("git checkout main && git reset --hard origin/HEAD", []),
+    ("git checkout main && git reset --hard 'origin/HEAD'", []),
+    ("git checkout main && git reset --hard upstream/HEAD", []),
+    ("git checkout main && git reset --hard refs/remotes/origin/HEAD", []),
+    # #536: `am` in resume mode (any of --continue/--resolved/-r/--skip/--abort/…,
+    # wherever it sits) applies nothing — git ignores patch arguments there
+    ("git checkout main && git am --resolved x.patch", []),
+    ("git checkout main && git am -3 --continue x.patch", []),
+    ("git checkout main && git am x.patch --skip", []),
+    ("git checkout main && git am -r", []),
+    ("git checkout main && git am -3r", []),
+    ("git checkout main && git am --show-current-patch=diff", []),
 ]
 
 
@@ -1010,6 +1041,15 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git branch " + "-C " * 3000 + "x",
     "git checkout main && git reset --hard HEAD" + "~1" * 3000,
     "git checkout main && git reset --hard HEAD" + "^" * 5000 + "x",
+    # #536
+    "git branch -" + "q" * 5000 + "f main",
+    "git branch -" + "f" * 5000 + "x main",
+    "git branch -" + "f" * 5000 + " x",
+    "git branch " + "-fq " * 3000 + "x",
+    "git branch -" + "m" * 5000 + " x main",
+    "git checkout main && git am " + "x.patch " * 3000,
+    "git checkout main && git am -" + "3" * 5000,
+    "git checkout main && git reset --hard " + "a." * 3000 + "/HEAD",
 ]
 
 _TIMED_MERGE = (
