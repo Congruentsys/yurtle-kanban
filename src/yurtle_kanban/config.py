@@ -278,6 +278,22 @@ def _theme_name(
     return value
 
 
+def _scan_list(data: dict[str, Any]) -> list[str]:
+    """`scan_paths` from a config mapping, read like `ignore` (#194, #204): absent
+    or null → none; one path given as a string is that path, not its characters
+    (#503); anything else but a list is refused, naming the key."""
+    value = data.get("scan_paths")
+    if value is None or value == "":
+        return []  # an empty string is no path, never the repo root
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        raise ValueError(
+            f"scan_paths: expected a list of paths, got {type(value).__name__} {value!r}"
+        )
+    return list(value)
+
+
 def _ignore_list(data: dict[str, Any]) -> list[str]:
     """`ignore` patterns from a config mapping: absent → the defaults; a bare
     `ignore:` (YAML null) → none, not a crash in the scan (#194)."""
@@ -370,7 +386,7 @@ class BoardConfig:
             ),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
-            scan_paths=data.get("scan_paths") or [],
+            scan_paths=_scan_list(data),
             wip_limits=wip_limits,
             raw_wip_limits=copy.deepcopy(raw_wip),
             wip_exempt_types=data.get("wip_exempt_types") or [],
@@ -530,7 +546,12 @@ class KanbanConfig:
         # a bare key (YAML null) means empty, never None (#194, #204)
         kanban_data = data.get("kanban", data) or {}
 
-        paths_data = dict(kanban_data.get("paths") or {})
+        raw_paths = kanban_data.get("paths") or {}
+        if not isinstance(raw_paths, dict):
+            raise ValueError(
+                f"kanban.paths must be a mapping, got {type(raw_paths).__name__} {raw_paths!r}"
+            )
+        paths_data = dict(raw_paths)
         # README long showed `ignore:` (and consumers wrote `scan_paths:`) beside
         # `paths:`, not in it: read them there too; `paths.*` wins (#482)
         for key in ("ignore", "scan_paths"):
@@ -544,7 +565,7 @@ class KanbanConfig:
                 paths_data[key] = kanban_data[key]
         paths = PathConfig(
             root=_or_default(paths_data, "root", "work/"),
-            scan_paths=paths_data.get("scan_paths") or [],
+            scan_paths=_scan_list(paths_data),
             ignore=_ignore_list(paths_data),
             features=paths_data.get("features"),
             bugs=paths_data.get("bugs"),
