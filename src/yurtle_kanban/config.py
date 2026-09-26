@@ -453,7 +453,8 @@ class KanbanConfig:
     def get_board_for_path(self, path: Path, repo_root: Path | None = None) -> BoardConfig | None:
         """Get the board that matches a given path.
 
-        Matches are based on the path being inside the board's configured path.
+        Matches are based on the path being inside the board's configured path;
+        with nested boards, the deepest one wins (#501).
         """
         if not self.is_multi_board:
             return None
@@ -464,18 +465,19 @@ class KanbanConfig:
         else:
             abs_path = path.resolve()
 
+        # the deepest board holding the path owns it, whatever the config order:
+        # a board nested in another is the more specific one (#501)
+        best: BoardConfig | None = None
+        best_depth = -1
         for board in self.boards:
             if repo_root:
                 board_path = _under(repo_root, board.path).resolve()
             else:
                 board_path = Path(board.path).expanduser().resolve()
-            try:
-                abs_path.relative_to(board_path)
-                return board
-            except ValueError:
-                continue
-
-        return None
+            if board_path == abs_path or board_path in abs_path.parents:
+                if len(board_path.parts) > best_depth:
+                    best, best_depth = board, len(board_path.parts)
+        return best
 
     def get_default_board(self) -> BoardConfig | None:
         """Get the default board."""

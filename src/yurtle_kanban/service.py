@@ -550,14 +550,19 @@ class KanbanService:
         outside. `..` is normalised first (`R/../O/x` is outside R), and a path
         reached through a symlinked directory (macOS `/tmp` → `/private/tmp`) is
         tried again with its directory resolved, never the file itself: an item
-        file that is a symlink stays where it is linked from (#174)."""
+        file that is a symlink stays where it is linked from (#174). "Outside" is
+        lexical: an in-repo directory that is a symlink to elsewhere counts as
+        inside; no fleet repo has such a board (measured for #501)."""
         root = self.repo_root if root is None else root
         try:
             return Path(os.path.normpath(path)).relative_to(os.path.normpath(root))
         except ValueError:
             pass
+        # resolve the normalised path's directory: `R/..` must not become `R/..`
+        # again under a resolved `R` (#501)
+        normal = Path(os.path.normpath(path))
         try:
-            return (path.parent.resolve() / path.name).relative_to(root.resolve())
+            return (normal.parent.resolve() / normal.name).relative_to(root.resolve())
         except (ValueError, OSError):
             return None
 
