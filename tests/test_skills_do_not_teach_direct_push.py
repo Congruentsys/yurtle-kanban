@@ -372,6 +372,13 @@ PUSH_TO_MAIN_CASES = [
     ("git push -nfo x origin main", False),
     ("git push -fn origin main", False),
     ("git push -n -o x origin main", False),
+    # #489 round 2: a `{ …; }` brace group opens a segment like a subshell does
+    ("{ git push origin main; }", True),
+    ("{ git push origin main; } && echo ok", True),
+    ("cd x && { git push origin main; }", True),
+    ("{ echo; } && git push origin feature/x", False),
+    ("{ git push origin feature/x; }", False),
+    ("{ echo hi; }", False),
 ]
 
 
@@ -457,6 +464,8 @@ ADVERSARIAL_LINES = [
     "git push -" + "a" * 5000 + "1 origin main",
     "git push -" + "o" * 5000 + "n origin feature/x",
     "git push " + "-ao " * 2000 + "origin feature/x",
+    "{ " * 5000 + "git pull",
+    "{" * 5000 + " git push origin feature/x",
 ]
 
 # The child imports the guard FUNCTION (#472), so line splitting is timed too; it
@@ -574,6 +583,11 @@ MERGES_ON_MAIN_CASES = [
     ('git commit -m "x; git checkout main" && git merge x', []),
     ("git commit -m 'git checkout main' && git merge x", []),
     ("command git checkout feat && git merge main", []),
+    # #489 round 2: brace groups
+    ("{ git checkout main; git merge x; }", [1]),
+    ("{ git checkout main; }\ngit merge x", [2]),
+    ("{ git checkout main; git pull; }", []),
+    ("{ echo; } && git merge x", []),
 ]
 
 
@@ -605,6 +619,7 @@ ADVERSARIAL_MERGE_TEXTS = [
     "/usr/bin/git checkout main \\\n" * 2000 + "&& git merge x",
     'git commit -m "' + "; git checkout main" * 1000,
     "'" * 5001 + " && git checkout main && git merge x",
+    "{ " * 5000 + "git checkout main",
 ]
 
 _TIMED_MERGE = (
