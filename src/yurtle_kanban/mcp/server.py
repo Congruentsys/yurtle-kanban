@@ -588,20 +588,36 @@ def run_server():
         else:
             raise RpcError(-32601, f"Unknown method: {method}")
 
+    def send_error(req_id: Any, code: int, message: str) -> None:
+        reply = {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+        print(json.dumps(reply), flush=True)
+
+    def line_is_blank(raw: bytes | str) -> bool:
+        return not (raw.strip() if isinstance(raw, (bytes, str)) else raw)
+
     async def main():
         """Main server loop."""
         while True:
+            # bytes, decoded one line at a time: a bad line costs only itself,
+            # never the requests after it (#568)
+            stream = getattr(sys.stdin, "buffer", sys.stdin)
+            raw = stream.readline()
+            if not raw:
+                break
             try:
-                line = sys.stdin.readline()
-                if not line:
-                    break
-
+                line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 request = json.loads(line)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError) as e:  # bad UTF-8 or JSON, too deep
+                if line_is_blank(raw):
+                    continue
+                send_error(None, -32700, f"Parse error: {e}")
+                continue
+            if not isinstance(request, dict):
+                send_error(None, -32600, "Invalid Request: not a JSON object")
                 continue
             # JSON-RPC 2.0: a request without an `id` is a notification, and a
             # notification is never answered, not even with an error (#568)
-            notification = not isinstance(request, dict) or "id" not in request
+            notification = "id" not in request
             try:
                 payload = await handle_request(request)
                 # a success payload goes under `result` (#563)
