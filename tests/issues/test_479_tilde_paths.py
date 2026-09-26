@@ -157,7 +157,11 @@ def test_single_board_tilde_create_writes_under_home(
 
 
 def test_single_board_legacy_type_path_tilde(tmp_path, home, monkeypatch):
-    """`paths.features: ~/board/feats/` places features there, and they are scanned."""
+    """`paths.features: ~/board/feats/` alongside a `~` root. The software theme defines a
+    `features` path, and theme placement (priority 1) beats the legacy attribute
+    (priority 2), exactly as for the relative spelling (`root: board/`,
+    `features: board/feats/` -> `board/features/`). So the item lands in
+    $HOME/board/features/, never in a literal `repo/~`, and it is scanned."""
     repo = _init_repo(
         tmp_path / "repo",
         _single_yaml("~/board/", ["~/board/"], ['features: "~/board/feats/"']),
@@ -167,7 +171,7 @@ def test_single_board_legacy_type_path_tilde(tmp_path, home, monkeypatch):
 
     _no_literal_tilde(repo)
     made = sorted((home / "board").rglob("FEAT-*.md")) if (home / "board").exists() else []
-    assert [p.parent for p in made] == [home / "board" / "feats"], made
+    assert [p.parent for p in made] == [home / "board" / "features"], made
     assert "FEAT-001" in _list_ids(repo, monkeypatch)
 
 
