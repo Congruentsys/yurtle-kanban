@@ -173,8 +173,11 @@ def _rejection(*words, root=main):
     as the group's options: an eager one (`--version`, `--help`) runs and exits,
     an unknown one is "No such option", anything else is "No such command".
     A group that ends at `--`, with no word after it, is "Missing command"; a
-    group that simply ends, with no eager option given to it, is click printing
-    the group's help and exiting 2 (#542).
+    group that simply ends is click printing the group's help and exiting 2
+    (#542). Unless an eager option (`--help`, `--version`) was given: click runs
+    it while it parses that command's own words — which are therefore still
+    checked — and exits 0 before it would resolve a subcommand, so a group stops
+    being checked at the first word after it.
     """
     cmd, path, i = root, [], 0
     options_ended = eager = False
@@ -185,8 +188,12 @@ def _rejection(*words, root=main):
             options_ended, i = True, i + 1
             continue
         is_option = OPTION_TOKEN.match(word)
+        if isinstance(cmd, click.Group) and eager and (options_ended or not is_option):
+            # An eager option ran while click parsed this group's own words; it
+            # exits 0 before the group resolves a subcommand, so nothing from
+            # here on is parsed at all (#542): `--version hdd`, `--help -- x`.
+            return None
         if isinstance(cmd, click.Group) and options_ended and is_option:
-            eager = False
             while i < len(words) and OPTION_TOKEN.match(words[i]):  # stops at `--`
                 problem, i, named = _consume_option(words, i, cmd, where)
                 if problem:
@@ -198,7 +205,7 @@ def _rejection(*words, root=main):
                 return f"`{where} {word}` is not a subcommand"
             cmd = cmd.commands[word]
             path.append(word)
-            options_ended, eager, i = False, False, i + 1
+            options_ended, i = False, i + 1
             continue
         if options_ended or not is_option:
             i += 1
@@ -207,14 +214,13 @@ def _rejection(*words, root=main):
         if problem:
             return problem
         eager = eager or any(p.is_eager for p in named)
-    if isinstance(cmd, click.Group) and not cmd.invoke_without_command:
+    if isinstance(cmd, click.Group) and not cmd.invoke_without_command and not eager:
         where = " ".join(["yurtle-kanban", *path])
         if options_ended:
             # `hdd --` and nothing after: click's "Missing command" (#537)
             return f"`{where} --` is missing a subcommand"
-        if not eager:
-            # `hdd` and nothing after (`--help` aside): help, then exit 2 (#542)
-            return f"`{where}` is missing a subcommand"
+        # `hdd` and nothing after: click prints the help, then exits 2 (#542)
+        return f"`{where}` is missing a subcommand"
     return None
 
 
