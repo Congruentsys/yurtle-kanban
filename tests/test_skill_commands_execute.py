@@ -381,13 +381,31 @@ def _verdict(line):
             "yurtle-kanban history --between=a",
             "`--between` requires 2 values in `yurtle-kanban history`",
         ),
+        # #516: after `--` at a group, click's resolve_command re-parses an
+        # option-looking word as the group's option: an eager one (--version,
+        # --help) runs, an unknown one is "No such option", and any other known
+        # one falls through to "No such command"
+        ("yurtle-kanban -- --version", None),
+        ("yurtle-kanban -- --help", None),
+        ("yurtle-kanban hdd -- --help", None),
+        ("yurtle-kanban -- --version list", None),
+        ("yurtle-kanban -- --bogus", "`--bogus` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban hdd -- --bogus", "`--bogus` is not accepted by `yurtle-kanban hdd`"),
+        ("yurtle-kanban -- --version --bogus", "`--bogus` is not accepted by `yurtle-kanban`"),
+        ("yurtle-kanban hdd -- --quiet", "`yurtle-kanban hdd --quiet` is not a subcommand"),
+        ("yurtle-kanban hdd -- --quiet --help", None),
+        ("yurtle-kanban hdd --quiet validate", None),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
-    # no real option takes nargs=2 today; plant one so the rows above exercise it
+    # No real option takes nargs=2, and no group has a non-eager option: plant
+    # one of each (hidden) so the rows above exercise them.
     history = main.commands["history"]
     between = click.Option(["--between"], nargs=2, hidden=True)
     monkeypatch.setattr(history, "params", [*history.params, between])
+    hdd = main.commands["hdd"]
+    quiet = click.Option(["--quiet"], is_flag=True, hidden=True)
+    monkeypatch.setattr(hdd, "params", [*hdd.params, quiet])
     assert _verdict(line) == expected
 
 
@@ -434,6 +452,11 @@ NOT_COMMANDS = {
 }
 
 
+def _allow_listed(text):
+    """True if `text` is a NOT_COMMANDS mention."""
+    return any(p.search(text) for p in NOT_COMMANDS)
+
+
 def _mention_lines():
     """(where, text) for every skill line and --help chunk that mentions yurtle-kanban."""
     out = []
@@ -454,10 +477,15 @@ def _mention_lines():
         ("Then run Bash(yurtle-kanban *) to see", False),
         ("cd x && pip index versions yurtle-kanban", False),
         ("pip index versions yurtle-kanban-extra", False),
+        # #516: prose on an allow-listed line must not hide a command mention
+        ("allowed-tools: Bash(yurtle-kanban *) — then yurtle-kanban move X done", False),
+        ("pip index versions yurtle-kanban 2>/dev/null   # or yurtle-kanban list", False),
+        ("## yurtle-kanban HDD Board: run yurtle-kanban hdd validate", False),
+        ("## yurtle-kanban HDD Board", True),
     ],
 )
 def test_allow_list_is_anchored(text, allowed):
-    assert any(p.search(text) for p in NOT_COMMANDS) is allowed
+    assert _allow_listed(text) is allowed
 
 
 def test_every_mention_parses_or_is_allow_listed():
@@ -467,7 +495,7 @@ def test_every_mention_parses_or_is_allow_listed():
     blind = [
         f"{where}: {text.strip()}"
         for where, text in mentions
-        if not _commands_in(text) and not any(p.search(text) for p in NOT_COMMANDS)
+        if not _commands_in(text) and not _allow_listed(text)
     ]
     assert not blind, "mentions the guard neither checks nor allow-lists:\n" + "\n".join(blind)
     # and every allow-list entry still earns its place
