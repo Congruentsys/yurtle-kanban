@@ -1000,7 +1000,8 @@ class KanbanService:
         return found if found is not None else mapping.get(status_str.lower())
 
     def _single_board_theme(self) -> dict | None:
-        """The configured theme, looked up once until the next scan (#448)."""
+        """The configured theme: memoised within a scan scope, the current one
+        outside a scope (#448, #459, #463)."""
         if not self._scanning:
             return self.config.get_theme()  # the current theme outside a scan (#459)
         cache = self._status_names_cache
