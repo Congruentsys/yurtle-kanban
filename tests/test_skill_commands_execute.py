@@ -455,6 +455,18 @@ def _verdict(line):
         ("yurtle-kanban hdd -- validate", None),
         ("yurtle-kanban -- --version --", None),
         ("yurtle-kanban move EXP-1 done --", None),
+        # #542: a bare group at the end of the input: click prints its help and
+        # exits 2; an eager option (--help, --version) is the accepted way to stop
+        ("yurtle-kanban", "`yurtle-kanban` is missing a subcommand"),
+        ("yurtle-kanban hdd", "`yurtle-kanban hdd` is missing a subcommand"),
+        ("yurtle-kanban epic", "`yurtle-kanban epic` is missing a subcommand"),
+        ("yurtle-kanban -- hdd", "`yurtle-kanban hdd` is missing a subcommand"),
+        ("yurtle-kanban hdd --quiet", "`yurtle-kanban hdd` is missing a subcommand"),
+        ("yurtle-kanban --help", None),
+        ("yurtle-kanban hdd --help", None),
+        ("yurtle-kanban hdd -- --help", None),
+        ("yurtle-kanban hdd --quiet --help", None),
+        ("yurtle-kanban hdd validate", None),
     ],
 )
 def test_guard_verdicts(monkeypatch, line, expected):
