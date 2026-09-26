@@ -85,6 +85,38 @@ Specification-driven development. Best for teams using RFCs, ADRs, and formal sp
 | Does formal design-first development | `spec` |
 | Has existing vocabulary | Create a custom theme |
 
+## Research and Maintenance in One Repo
+
+A research repo does science *and* maintenance: hypotheses and experiments, but also CI
+fixes, packaging bugs and chores. The `hdd` theme covers only the science, and `software`
+only the maintenance. Don't fork a mixed theme; run **two boards in one config**, one per
+theme (#84):
+
+```yaml
+# .kanban/config.yaml
+version: "2.0"
+default_board: development
+boards:
+  - name: development
+    preset: software
+    path: kanban-work/
+  - name: research
+    preset: hdd
+    path: research/
+```
+
+Each type goes to the board whose theme defines it:
+
+```bash
+yurtle-kanban create bug "CI red on unpinned ruff"     # → kanban-work/bugs/BUG-001-…
+yurtle-kanban create hypothesis "H1: caching halves p95" # → research/hypotheses/H-001-…
+yurtle-kanban board research                            # one board's view
+```
+
+Each board keeps its own columns, transitions and WIP limits, so research work never
+counts against development WIP. `version: "2.0"` is required: without it, `boards:` is
+not read and the config loads as a single board.
+
 ## Custom Themes
 
 Create your own theme in `.kanban/themes/my-theme.yaml`:

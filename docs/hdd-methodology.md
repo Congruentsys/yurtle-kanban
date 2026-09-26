@@ -495,10 +495,12 @@ yurtle-kanban supports multiple boards with different workflows. The standard pa
 for HDD teams is two boards:
 
 ```yaml
-# .yurtle-kanban/config.yaml
+# .kanban/config.yaml
+version: "2.0"               # required: without it, `boards:` is not read
+default_board: development   # where `create` puts types no board's theme defines
 boards:
   - name: development
-    preset: software      # or nautical
+    preset: software          # or nautical
     path: kanban-work/
     wip_limits:
       in_progress: 4
@@ -508,25 +510,14 @@ boards:
     preset: hdd
     path: research/
     wip_limits:
-      active: 5           # Research can have more concurrent items
-    phases:
-      - discovery          # IDEA -> Literature review
-      - design             # HYPOTHESIS -> Experiment protocol
-      - execution          # Running experiment
-      - analysis           # Comparing to targets
-      - writing            # Drafting paper section
-
-# Cross-board linking
-relationships:
-  implements:
-    from_board: development
-    to_board: research
-    predicate: "expr:implements"
-  spawns:
-    from_board: research
-    to_board: development
-    predicate: "expr:spawns"
+      active: 5               # Research can have more concurrent items
 ```
+
+Each item type goes to the board whose theme defines it: `yurtle-kanban create bug …`
+lands in `kanban-work/bugs/`, `yurtle-kanban create hypothesis …` in
+`research/hypotheses/`. Links between the boards live in the items themselves, in their
+turtle knowledge blocks (for example an experiment's `expr:implements`), not in
+`config.yaml`.
 
 Research items don't count against development WIP limits. The boards are separate
 workflows with separate rhythms, connected by cross-board relationships.
