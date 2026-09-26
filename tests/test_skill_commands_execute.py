@@ -20,7 +20,8 @@ The extraction is deliberately narrow: a line that STARTS with `yurtle-kanban`
 ...` backtick span. A URL or a flag NAMED in prose is a mention, not a use, and
 only a use is a promise about what the CLI accepts. Narrow must not mean blind:
 every other line that mentions `yurtle-kanban` is on the NOT_COMMANDS allow-list
-with a reason (issue #476).
+with a reason (issue #476). That mention check only sees the name
+`yurtle-kanban`: a shell alias would slip past it, and none exists today (#488).
 
 The CLI's own `--help` output is the second surface (issue #89): the Examples
 in each command's help print invocations too, and `--help` is what an agent
@@ -110,42 +111,64 @@ def _takes_value(param):
     return not (param.is_flag or param.count)
 
 
+def _needs(param):
+    """`requires a value` / `requires 2 values` — what a value-taking `param` is missing."""
+    return "requires a value" if param.nargs <= 1 else f"requires {param.nargs} values"
+
+
 def _rejection(*words, root=main):
     """Why the CLI would reject `yurtle-kanban <words>`, or None if it accepts it.
 
     The one definition of "a command the CLI accepts" shared by every surface.
     Words are consumed the way click does: while at a group, a word names a
     subcommand (so any depth resolves); an option is checked against the command
-    it is given to, and its value is skipped; anything else is an argument.
+    it is given to, and consumes its value words; anything else is an argument.
+    `--` ends options for the command it is given to — at a group the next word
+    is still a subcommand, whose own options are parsed as usual.
     """
     cmd, path, i = root, [], 0
+    options_ended = False
     while i < len(words):
         word = words[i]
         i += 1
         where = " ".join(["yurtle-kanban", *path])
-        if word == "--":
-            break
-        if OPTION_TOKEN.match(word):
-            declared = _declared_options(cmd)
-            name, eq, _ = word.partition("=") if word.startswith("--") else (word[:2], "", "")
-            param = declared.get(name)
-            if param is None:
-                return f"`{name}` is not accepted by `{where}`"
-            if not word.startswith("--") and len(word) > 2:
-                if _takes_value(param):
-                    continue  # `-mMESSAGE`: the rest is the value
-                for ch in word[2:]:  # `-fa`: a cluster of short flags
-                    if f"-{ch}" not in declared:
-                        return f"`-{ch}` is not accepted by `{where}`"
-                continue
-            if not eq and _takes_value(param):
-                i += param.nargs if param.nargs > 0 else 1
-        elif isinstance(cmd, click.Group):
+        if word == "--" and not options_ended:
+            options_ended = True
+            continue
+        if isinstance(cmd, click.Group) and (options_ended or not OPTION_TOKEN.match(word)):
             if word not in cmd.commands:
                 return f"`{where} {word}` is not a subcommand"
             cmd = cmd.commands[word]
             path.append(word)
-        # else: a positional argument of a leaf command
+            options_ended = False
+            continue
+        if options_ended or not OPTION_TOKEN.match(word):
+            continue  # a positional argument of a leaf command
+        declared = _declared_options(cmd)
+        if word.startswith("--"):
+            name, eq, _ = word.partition("=")
+            param = declared.get(name)
+            if param is None:
+                return f"`{name}` is not accepted by `{where}`"
+            if not _takes_value(param):
+                if eq:
+                    return f"`{name}` does not take a value in `{where}`"
+                continue
+            wanted = max(param.nargs, 1) - (1 if eq else 0)
+        else:
+            # `-fm msg`, `-fmmsg`: flags, until a value-taking option; the rest of
+            # the cluster is its first value, and it takes more words if it needs them.
+            wanted = 0
+            for j, ch in enumerate(word[1:], start=2):
+                name, param = f"-{ch}", declared.get(f"-{ch}")
+                if param is None:
+                    return f"`{name}` is not accepted by `{where}`"
+                if _takes_value(param):
+                    wanted = max(param.nargs, 1) - (1 if word[j:] else 0)
+                    break
+        if i + wanted > len(words):
+            return f"`{name}` {_needs(param)} in `{where}`"
+        i += wanted
     return None
 
 
@@ -328,9 +351,43 @@ def _verdict(line):
         # unchanged: a group given a subcommand it lacks; a command plus an argument
         ("yurtle-kanban hdd validat --strict", "`yurtle-kanban hdd validat` is not a subcommand"),
         ("yurtle-kanban board research", None),
+        # #488: `--` at a group ends the group's options, not subcommand resolution
+        ("yurtle-kanban -- bogus", "`yurtle-kanban bogus` is not a subcommand"),
+        ("yurtle-kanban -- list --bogus", "`--bogus` is not accepted by `yurtle-kanban list`"),
+        ("yurtle-kanban -- list --status done", None),
+        ("yurtle-kanban move EXP-1 done -- --not-an-option", None),
+        # #488: a value given to a flag
+        (
+            "yurtle-kanban move EXP-1 done --force=yes",
+            "`--force` does not take a value in `yurtle-kanban move`",
+        ),
+        ("yurtle-kanban move EXP-1 done --force", None),
+        # #488: a value-taking option at the end of the line, with no value
+        ("yurtle-kanban list --status", "`--status` requires a value in `yurtle-kanban list`"),
+        ("yurtle-kanban list --status=", None),
+        # #488: a short cluster ending in a value-taking option takes the next word
+        ("yurtle-kanban move EXP-1 done -fm msg", None),
+        ("yurtle-kanban move EXP-1 done -fm --not-an-option", None),
+        ("yurtle-kanban move EXP-1 done -fmmsg", None),
+        ("yurtle-kanban move EXP-1 done -fm", "`-m` requires a value in `yurtle-kanban move`"),
+        # #488: nargs=2 (`--between`, planted below): `--opt=a b` is both values
+        ("yurtle-kanban history --between=a --not-an-option", None),
+        ("yurtle-kanban history --between a --not-an-option", None),
+        (
+            "yurtle-kanban history --between a",
+            "`--between` requires 2 values in `yurtle-kanban history`",
+        ),
+        (
+            "yurtle-kanban history --between=a",
+            "`--between` requires 2 values in `yurtle-kanban history`",
+        ),
     ],
 )
-def test_guard_verdicts(line, expected):
+def test_guard_verdicts(monkeypatch, line, expected):
+    # no real option takes nargs=2 today; plant one so the rows above exercise it
+    history = main.commands["history"]
+    between = click.Option(["--between"], nargs=2, hidden=True)
+    monkeypatch.setattr(history, "params", [*history.params, between])
     assert _verdict(line) == expected
 
 
@@ -370,8 +427,8 @@ MENTION = re.compile(r"(?<![\w/.-])yurtle-kanban\s+\S")
 # Mentions that are deliberately NOT commands. Each one needs a reason; anything
 # else that mentions `yurtle-kanban` must parse, or the guard is silently blind.
 NOT_COMMANDS = {
-    re.compile(r"Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
-    re.compile(r"pip index versions yurtle-kanban"): "the package name, passed to pip",
+    re.compile(r"^allowed-tools:.*Bash\(yurtle-kanban \*\)"): "an allowed-tools permission glob",
+    re.compile(r"^pip index versions yurtle-kanban(?=\s|$)"): "the package name, passed to pip",
     re.compile(r"^## yurtle-kanban "): "a markdown heading",
     re.compile(r"^Initialize yurtle-kanban in "): "init's one-line description",
 }
@@ -386,6 +443,21 @@ def _mention_lines():
     for parts, chunk in _help_chunks():
         out.append((" ".join(["yurtle-kanban", *parts, "--help"]), chunk))
     return [(where, text) for where, text in out if MENTION.search(text)]
+
+
+@pytest.mark.parametrize(
+    "text,allowed",
+    [
+        ("allowed-tools: Bash(yurtle-kanban *), Bash(git *)", True),
+        ("pip index versions yurtle-kanban 2>/dev/null | head -2", True),
+        # #488: the same words elsewhere on a line are not the allow-listed use
+        ("Then run Bash(yurtle-kanban *) to see", False),
+        ("cd x && pip index versions yurtle-kanban", False),
+        ("pip index versions yurtle-kanban-extra", False),
+    ],
+)
+def test_allow_list_is_anchored(text, allowed):
+    assert any(p.search(text) for p in NOT_COMMANDS) is allowed
 
 
 def test_every_mention_parses_or_is_allow_listed():
