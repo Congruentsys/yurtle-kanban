@@ -87,6 +87,11 @@ def refuses_push_to_main(line: str) -> bool:
     return any(PUSH_TO_MAIN.match(seg) for seg in _SEGMENT_SEP.split(code))
 
 
+def pushes_to_main(lines: list[str]) -> list[tuple[int, str]]:
+    """The push guard applied to a skill: every (1-based line, text) that pushes to main."""
+    return [(n + 1, line.strip()) for n, line in enumerate(lines) if refuses_push_to_main(line)]
+
+
 # How far after a checkout of main a `git merge` still counts as a merge ON main.
 MERGE_WINDOW = 5
 
@@ -242,6 +247,52 @@ PUSH_TO_MAIN_CASES = [
     ("git log --oneline | grep main", False),
     ("git push origin feature/x  # then && git push origin main", False),
     ("we never git push to main; ever", False),
+    # #489: a `#` or a separator inside quotes is not a comment and not a segment break
+    ('git commit -m "fix #472" && git push origin main', True),
+    ("git commit -m 'fix #472' && git push origin main", True),
+    ('git tag -a v1 -m "v1 # notes"; git push origin main', True),
+    ('git commit -m "it\'s done" && git push origin main', True),
+    ('git commit -m "a \\" # b" && git push origin main', True),
+    ('git push -o "ci #1" origin main', True),
+    # #489: an unterminated quote is a literal character — it never hides a push
+    ("echo don't && git push origin main", True),
+    ('echo "oops && git push origin main', True),
+    # #489: more command prefixes, an absolute git path, and compound-command keywords
+    ("command git push origin main", True),
+    ("command -p git push origin main", True),
+    ("nohup git push origin main &", True),
+    ("time git push origin main", True),
+    ("time -p git push origin main", True),
+    ("exec git push origin main", True),
+    ("! git push origin main", True),
+    ("/usr/bin/git push origin main", True),
+    ("sudo /usr/local/bin/git push origin main", True),
+    ("nohup /usr/bin/git -C x push origin main", True),
+    ("if git fetch; then git push origin main; fi", True),
+    ("for r in a b; do git push origin main; done", True),
+    ("if false; then :; else git push origin main; fi", True),
+    ("then sudo git push origin main", True),
+    # #489: `o` takes the rest of a short cluster as its value, so `-on` is not a dry run
+    ("git push -on origin main", True),
+    ("git push -fon origin main", True),
+    ("git push -o n origin main", True),
+    ("git push --push-option=n origin main", True),
+    ("git push --push-option=-n origin main", True),
+    # #489 controls — quoted text, prefixes and clusters that are still not a push to main
+    ('git commit -m "x; git push origin main"', False),
+    ("git commit -m 'x && git push origin main'", False),
+    ('git commit -m "git push origin main"', False),
+    ('git push origin feature/x # "quoted" && git push origin main', False),
+    ("echo 'a # b' # git push origin main", False),
+    ("git push origin feature/x  # it's && git push origin main", False),
+    ("command git push origin feat", False),
+    ("/usr/bin/git push origin feature/x", False),
+    ("/usr/bin/gitx push origin main", False),
+    ("then git push origin feature/x", False),
+    ("do not git push to main", False),
+    ("git push -nfo x origin main", False),
+    ("git push -fn origin main", False),
+    ("git push -n -o x origin main", False),
 ]
 
 
@@ -250,6 +301,33 @@ def test_push_to_main_guard_table(line, refused):
     assert refuses_push_to_main(line) is refused, (
         f"PUSH_TO_MAIN {'missed' if refused else 'falsely refused'}: {line!r}"
     )
+
+
+# #489: a backslash-continued command is ONE command — the lines are joined before
+# the check, and an offender is reported at the line the command starts on.
+PUSHES_TO_MAIN_TEXT_CASES = [
+    # (skill text, the 1-based lines the guard must refuse)
+    ("git push origin \\\nmain", [1]),
+    ("git push \\\n  origin \\\n  main", [1]),
+    ("cd x && \\\ngit push origin main", [1]),
+    ("- git push origin \\\n  main", [1]),
+    ("echo x\ngit push \\\norigin main", [2]),
+    ("echo a \\\n\ngit push origin main", [3]),
+    ("git push origin main\ngit push origin main", [1, 2]),
+    # controls
+    ("git push origin feature/x \\\n  --force", []),
+    ("git push origin feat \\\n&& echo main", []),
+    ("git push origin feature/x\nmain", []),
+    ("git push origin feature/x # \\\ngit push origin main", [2]),
+]
+
+
+@pytest.mark.parametrize(
+    "text,refused", PUSHES_TO_MAIN_TEXT_CASES, ids=[c[0] for c in PUSHES_TO_MAIN_TEXT_CASES]
+)
+def test_push_to_main_guard_text_table(text, refused):
+    got = [n for n, _ in pushes_to_main(text.splitlines())]
+    assert got == refused, f"pushes_to_main({text!r}) refused lines {got}, expected {refused}"
 
 
 # #465 round 2: the guard runs on every line of every skill, so it must be linear on
@@ -281,15 +359,36 @@ ADVERSARIAL_LINES = [
     "A='" + "x " * 2000 + "git pull",
     "git push " + "-o -n " * 2000 + "origin feature/x",
     "(" * 5000 + "git pull",
+    # #489: quotes (balanced, unbalanced, escaped), continuations, new prefixes,
+    # absolute paths and `o`-clusters
+    '"' * 5000 + " git push origin feature/x",
+    "'" * 5001 + " && git push origin feature/x",
+    '"a #' * 2000,
+    "'#" * 3000 + "&& git pull",
+    'x "' + '\\"' * 3000,
+    'x "' + "&& # " * 2000,
+    "git push origin \\\n" * 3000 + "feature/x",
+    "\\\n" * 5000,
+    "cd x && \\\n" * 2000 + "git pull",
+    "command nohup time exec ! " * 1000 + "git pull",
+    "then do else " * 1000 + "git pull",
+    "command -p " * 2000 + "git pull",
+    "/usr" * 3000 + "/git pull",
+    "/a/" * 3000 + "gitx push origin main",
+    "git push -" + "a" * 5000 + "1 origin main",
+    "git push -" + "o" * 5000 + "n origin feature/x",
+    "git push " + "-ao " * 2000 + "origin feature/x",
 ]
 
-# The child imports the guard FUNCTION (#472), so line splitting is timed too.
+# The child imports the guard FUNCTION (#472), so line splitting is timed too; it
+# passes the text as LINES (#489), so continuation joining is timed as well.
 _TIMED_MATCH = (
     "import sys, time\n"
     "sys.path.insert(0, sys.argv[1])\n"
-    "from test_skills_do_not_teach_direct_push import refuses_push_to_main\n"
+    "from test_skills_do_not_teach_direct_push import pushes_to_main\n"
+    "lines = sys.argv[2].splitlines()\n"
     "t = time.perf_counter()\n"
-    "refuses_push_to_main(sys.argv[2])\n"
+    "pushes_to_main(lines)\n"
     "print(time.perf_counter() - t)\n"
 )
 
@@ -380,6 +479,22 @@ MERGES_ON_MAIN_CASES = [
     ("We never git checkout main && git merge x", []),
     ("> Never run `git checkout main && git merge x`.", []),
     ("| **VALIDATED** | Merge to main | `git merge` |", []),
+    # #489 (shared with #502): the new prefixes, absolute git, keywords, quotes and
+    # continuations reach the merge guard too
+    ("command git checkout main && nohup git merge x", [1]),
+    ("time git checkout main\ngit merge x", [2]),
+    ("exec git checkout main\ngit merge x", [2]),
+    ("! git checkout main && git merge x", [1]),
+    ("/usr/bin/git checkout main && /usr/bin/git merge x", [1]),
+    ("if true; then git checkout main; fi && git merge x", [1]),
+    ("git checkout main\nfor b in a c; do git merge $b; done", [2]),
+    ('git commit -m "wip #1" && git checkout main && git merge x', [1]),
+    ("git checkout main \\\n  && git merge x", [1]),
+    ("git checkout \\\nmain\ngit merge x", [3]),
+    # #489 controls
+    ('git commit -m "x; git checkout main" && git merge x', []),
+    ("git commit -m 'git checkout main' && git merge x", []),
+    ("command git checkout feat && git merge main", []),
 ]
 
 
@@ -406,6 +521,11 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git checkout main\n" * 5000 + "git pull",
     "git checkout main\ngit merge x\n" * 2000,
     "git -C x " * 2000 + "checkout main",
+    # #489
+    "command nohup time exec ! then do else " * 500 + "git checkout main",
+    "/usr/bin/git checkout main \\\n" * 2000 + "&& git merge x",
+    'git commit -m "' + "; git checkout main" * 1000,
+    "'" * 5001 + " && git checkout main && git merge x",
 ]
 
 _TIMED_MERGE = (
@@ -456,11 +576,7 @@ def test_the_scan_is_not_vacuous():
 
 @pytest.mark.parametrize("path", _skill_files(), ids=lambda p: str(p.relative_to(SKILLS_DIR)))
 def test_skill_does_not_push_to_main(path):
-    offenders = [
-        (n, line.strip())
-        for n, line in enumerate(path.read_text().splitlines(), start=1)
-        if refuses_push_to_main(line)
-    ]
+    offenders = pushes_to_main(path.read_text().splitlines())
     assert not offenders, (
         f"{path.relative_to(SKILLS_DIR.parent)} teaches a push to main: "
         + "; ".join(f"line {n}: {t}" for n, t in offenders)
