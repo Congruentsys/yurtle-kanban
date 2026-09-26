@@ -464,7 +464,16 @@ class KanbanService:
 
         from .config import _clean_transitions
 
-        return _clean_transitions(theme["transitions"], "theme")
+        # name what the warning is about: the board, else the theme's own name (#492)
+        meta = theme.get("theme")
+        name = meta.get("name") if isinstance(meta, dict) else None
+        if board_config is not None:
+            where = f"board {board_config.name} (theme {board_config.preset})"
+        elif isinstance(name, str):
+            where = f"theme {name}"
+        else:
+            where = "theme"
+        return _clean_transitions(theme["transitions"], where)
 
     def scan(self) -> list[WorkItem]:
         """Scan configured paths for work items."""
