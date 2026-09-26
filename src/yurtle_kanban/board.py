@@ -193,7 +193,11 @@ def render_card(item: WorkItem) -> Panel:
     )
 
 
-def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
+def render_item_detail(
+    item: WorkItem,
+    console: Console | None = None,
+    status_label: Callable[[WorkItem], str] | None = None,
+) -> None:
     """Render detailed view of a single work item."""
     if console is None:
         console = Console()
@@ -214,7 +218,8 @@ def render_item_detail(item: WorkItem, console: Console | None = None) -> None:
     table.add_column("Value")
 
     table.add_row("Type", item.item_type.value)
-    table.add_row("Status", item.status.value)
+    # the theme's name for it (hdd `draft`) when the caller knows the theme (#448)
+    table.add_row("Status", escape(status_label(item) if status_label else item.status.value))
     table.add_row("Priority", escape(str(item.priority or "medium")))
     table.add_row("Assignee", escape(str(item.assignee or "unassigned")))
 
@@ -307,6 +312,7 @@ def render_roadmap(
     console: Console | None = None,
     by_type: bool = False,
     ranked: bool = False,
+    status_label: Callable[[WorkItem], str] | None = None,
 ) -> None:
     """Render a prioritized roadmap view."""
     if console is None:
@@ -333,14 +339,19 @@ def render_roadmap(
         for type_name, group_items in groups.items():
             icon = TYPE_ICONS.get(type_name, "•")
             console.print(f"\n[bold]{icon} {escape(type_name.title())}s[/bold]")
-            _render_roadmap_table(group_items, console, ranked=ranked)
+            _render_roadmap_table(group_items, console, ranked=ranked, status_label=status_label)
     else:
-        _render_roadmap_table(items, console, ranked=ranked)
+        _render_roadmap_table(items, console, ranked=ranked, status_label=status_label)
 
     console.print()
 
 
-def _render_roadmap_table(items: list[WorkItem], console: Console, ranked: bool = False) -> None:
+def _render_roadmap_table(
+    items: list[WorkItem],
+    console: Console,
+    ranked: bool = False,
+    status_label: Callable[[WorkItem], str] | None = None,
+) -> None:
     """Render a roadmap table for a group of items."""
     table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
 
@@ -377,7 +388,9 @@ def _render_roadmap_table(items: list[WorkItem], console: Console, ranked: bool 
             escape(item.id),
             escape(title),
             f"[{priority_color}]{escape(str(item.priority or 'medium'))}[/{priority_color}]",
-            f"[{status_color}]{item.status.value}[/{status_color}]",
+            f"[{status_color}]"
+            f"{escape(status_label(item) if status_label else item.status.value)}"
+            f"[/{status_color}]",
             escape(assignee),
         ])
         if ranked:
