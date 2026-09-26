@@ -243,7 +243,7 @@ def hdd_registry(output_path: str | None, push: bool):
             root = root if root.is_absolute() else service.repo_root / root
             if service._outside_git(root):
                 out = root / "REGISTRY.md"
-    out = Path(os.path.normpath(out))
+        out = Path(os.path.normpath(out))  # the default only: --output is used as given
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines))

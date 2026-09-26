@@ -573,18 +573,10 @@ class KanbanService:
         return self._repo_relative(path, self._git_toplevel()) is None
 
     def _hdd_board(self) -> BoardConfig | None:
-        """The board `hdd` items are created on: the default_board first, then the
-        others in config order, taking the first whose theme defines hypotheses,
-        as `_get_type_directory` does (#114, #478)."""
-        default = self.config.get_default_board()
-        boards = ([default] if default else []) + [
-            b for b in self.config.boards if b is not default
-        ]
-        for board in boards:
-            theme = board.get_theme(self.repo_root)
-            if theme and WorkItemType.HYPOTHESIS.value in (theme.get("item_types") or {}):
-                return board
-        return None
+        """The board holding the folder new hypotheses are written to, found through
+        `_get_type_directory` itself so the two can't drift (#114, #478)."""
+        folder = self._get_type_directory(WorkItemType.HYPOTHESIS)
+        return self.config.get_board_for_path(folder, self.repo_root)
 
     def _outside_repo(self, *paths: Path) -> bool:
         """True, with a warning, when any of `paths` lies outside the git repository,
