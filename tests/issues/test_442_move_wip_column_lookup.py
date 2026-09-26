@@ -147,9 +147,11 @@ def _candidate(
     runner: CliRunner, wide: io.StringIO, item_type: str, title: str, stage: str
 ) -> str:
     """Create the item to move and --force it to `stage`, a status from which the
-    move into the target column is a valid transition. (Single-board mode checks
-    the default workflow, not the theme's: hdd `draft -> active` is refused there
-    as `backlog -> in_progress`; staging keeps these tests about WIP only.)"""
+    move into the target column is a valid transition, so these tests stay about
+    WIP only. Themes without `transitions` use the default workflow, which refuses
+    `backlog -> in_progress`, so their candidates are staged; hdd validates against
+    its own transitions (#450), where `draft -> active` is allowed and
+    `abandoned -> active` is not, so its candidate starts in draft (`backlog`)."""
     item_id = _created_id(runner, wide, ["create", item_type, title])
     if stage != "backlog":
         result, out = _move(runner, wide, item_id, stage, "--force")
@@ -164,7 +166,7 @@ def _candidate(
 # (theme, type, column id, column name, the theme's limit, status the column holds)
 THEMED_LIMITS = [
     pytest.param(
-        "hdd", "idea", "active", "Active", 5, WorkItemStatus.IN_PROGRESS, "blocked",
+        "hdd", "idea", "active", "Active", 5, WorkItemStatus.IN_PROGRESS, "backlog",
         id="hdd-active",
     ),
     pytest.param(
@@ -261,12 +263,12 @@ def test_hdd_move_via_canonical_status_name_is_refused_too(
     """`move X in_progress` on hdd lands in the same Active column: same limit."""
     _invoke(runner, ["init", "--theme", "hdd"])
     _fill(runner, wide, "idea", "active", 5)
-    extra = _candidate(runner, wide, "idea", "one too many", "blocked")
+    extra = _candidate(runner, wide, "idea", "one too many", "backlog")
 
     result, out = _move(runner, wide, extra, "in_progress", "--skip-gates")
 
     _assert_refused(result, out, "Active", 5, 5)
-    assert _status(repo, extra) == WorkItemStatus.BLOCKED
+    assert _status(repo, extra) == WorkItemStatus.BACKLOG
 
 
 # ---------------------------------------------------------------------------
