@@ -146,9 +146,11 @@ _PULL_FLAGS = (
 _RESET_MODE = r"--(?:hard|soft|keep|merge)(?![\w-])"
 # #529: a reset onto the upstream (`@{u}`, `@{upstream}`, `FETCH_HEAD`) is a sync, like
 # `origin/main`; onto `HEAD`, `@`, `ORIG_HEAD` or an ancestor of them (`HEAD~2^`) it is
-# local cleanup. Neither lands work on main.
+# local cleanup. Neither lands work on main. #536: `@{push}` and `<remote>/HEAD`
+# (`origin/HEAD`, `refs/remotes/origin/HEAD`) are the upstream too.
 _RESET_NOT_LANDING = (
-    r"(?!['\"]?(?:(?:HEAD|ORIG_HEAD|@)(?:[~^]\d*)*|FETCH_HEAD|@\{(?:u|upstream)\})"
+    r"(?!['\"]?(?:(?:HEAD|ORIG_HEAD|@)(?:[~^]\d*)*|FETCH_HEAD|@\{(?:u|upstream|push)\}"
+    r"|(?:refs/remotes/)?[\w.-]+/HEAD)"
     r"['\"]?(?:[\s`)]|$))"
 )
 CHECKOUT_MAIN = re.compile(
@@ -190,7 +192,8 @@ LANDS = re.compile(
     + _RESET_NOT_LANDING
     + r"['\"]?[^\s'\"`)-]"
     + r"|am(?![\w-])"
-    + r"(?!\s+--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)(?![\w-])))"
+    + r"(?!(?:\s+\S+)*?\s+(?:--(?:abort|continue|skip|quit|retry|resolved|show-current-patch)"
+    + r"|-(?=[A-Za-z0-9]*r)[A-Za-z0-9]+)(?![\w-])))"
 )
 UPDATE_REF_MAIN = re.compile(
     _LEAD
@@ -203,8 +206,17 @@ UPDATE_REF_MAIN = re.compile(
 # #529: `git branch -f main [<x>]` resets main, and `git branch -C|-M [<old>] main`
 # copies or moves a branch ONTO main — both move main with no checkout, like
 # update-ref. `-f feat main` and `-C main feat` move another branch instead.
-_BRANCH_FORCE = r"(?:-f|--force)(?![\w-])"
-_BRANCH_ONTO = r"-[CM](?![\w-])"
+# #536: flags come in short clusters. A cluster holding `f` forces (`-fq`, `-qf`); one
+# holding `C`/`M`, or `f` together with `m`/`c` (`-fm` = `-M`), copies or moves ONTO
+# the last name; one holding `d`/`D` deletes, which lands nothing. Each test is a
+# lookahead over one cluster, so a run of clusters stays linear.
+# `am` in resume mode — `--continue`/`--resolved`/`-r`, `--skip`, `--abort`, `--quit`,
+# `--retry`, `--show-current-patch`, wherever it sits among the arguments — applies
+# nothing: git resumes (or refuses) and ignores any patch argument. So it is accepted.
+_BRANCH_FORCE = r"(?:--force|-(?![A-Za-z]*[dDCMmc])(?=[A-Za-z]*f)[A-Za-z]+)(?![\w-])"
+_BRANCH_ONTO = (
+    r"-(?![A-Za-z]*[dD])(?:(?=[A-Za-z]*[CM])|(?=[A-Za-z]*f)(?=[A-Za-z]*[mc]))[A-Za-z]+(?![\w-])"
+)
 BRANCH_MOVES_MAIN = re.compile(
     _LEAD
     + _CMD_PREFIX
@@ -950,6 +962,37 @@ MERGES_ON_MAIN_CASES = [
     ("git checkout main && git reset --hard HEAD^", []),
     ("git checkout main && git reset --hard HEAD~2^", []),
     ("git checkout main && git am --resolved", []),
+    # #536: a short cluster holding `f` forces; with `C`/`M` (or `f` plus `m`/`c`) it
+    # copies or moves ONTO the last name
+    ("git branch -fq main feat", [1]),
+    ("git branch -qf main", [1]),
+    ("git branch -fm feat main", [1]),
+    ("git branch -mf feat main", [1]),
+    ("git branch -cf feat main", [1]),
+    ("git branch -qC feat main", [1]),
+    ("git branch -Mq feat main", [1]),
+    ("git checkout main && git am --reject x.patch", [1]),
+    ("git checkout main && git am -k x.patch", [1]),
+    # #536 controls — another branch forced, or a delete
+    ("git branch -fq feat main", []),
+    ("git branch -qfm main feat", []),
+    ("git branch -fq main-x", []),
+    ("git branch -Df main", []),
+    ("git branch -fd main", []),
+    # #536: `@{push}` and `<remote>/HEAD` are the upstream — a reset onto them syncs
+    ("git checkout main && git reset --hard @{push}", []),
+    ("git checkout main && git reset --hard origin/HEAD", []),
+    ("git checkout main && git reset --hard 'origin/HEAD'", []),
+    ("git checkout main && git reset --hard upstream/HEAD", []),
+    ("git checkout main && git reset --hard refs/remotes/origin/HEAD", []),
+    # #536: `am` in resume mode (any of --continue/--resolved/-r/--skip/--abort/…,
+    # wherever it sits) applies nothing — git ignores patch arguments there
+    ("git checkout main && git am --resolved x.patch", []),
+    ("git checkout main && git am -3 --continue x.patch", []),
+    ("git checkout main && git am x.patch --skip", []),
+    ("git checkout main && git am -r", []),
+    ("git checkout main && git am -3r", []),
+    ("git checkout main && git am --show-current-patch=diff", []),
 ]
 
 
@@ -1010,6 +1053,15 @@ ADVERSARIAL_MERGE_TEXTS = [
     "git branch " + "-C " * 3000 + "x",
     "git checkout main && git reset --hard HEAD" + "~1" * 3000,
     "git checkout main && git reset --hard HEAD" + "^" * 5000 + "x",
+    # #536
+    "git branch -" + "q" * 5000 + "f main",
+    "git branch -" + "f" * 5000 + "x main",
+    "git branch -" + "f" * 5000 + " x",
+    "git branch " + "-fq " * 3000 + "x",
+    "git branch -" + "m" * 5000 + " x main",
+    "git checkout main && git am " + "x.patch " * 3000,
+    "git checkout main && git am -" + "3" * 5000,
+    "git checkout main && git reset --hard " + "a." * 3000 + "/HEAD",
 ]
 
 _TIMED_MERGE = (
