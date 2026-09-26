@@ -26,7 +26,7 @@ from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
 from ._graph_iri import set_self_iri
 from ._logging import get_logger
-from .config import KanbanConfig
+from .config import KanbanConfig, _under
 from .hooks import HookContext, HookEngine, HookEvent
 
 if TYPE_CHECKING:
@@ -495,7 +495,7 @@ class KanbanService:
 
         work_paths = [Path(p) for p in self.config.get_work_paths()]
         for scan_path in work_paths:
-            full_path = self.repo_root / scan_path
+            full_path = _under(self.repo_root, scan_path)
             if full_path.exists():
                 for item in self._scan_directory(full_path):
                     self._items[item.id] = item
@@ -1133,7 +1133,7 @@ class KanbanService:
 
     def _scan_board_items(self, board_config: BoardConfig) -> list[WorkItem]:
         items = []
-        board_path = self.repo_root / board_config.path
+        board_path = _under(self.repo_root, board_config.path)
 
         if board_path.exists():
             for md_file in board_path.rglob("*.md"):
@@ -1475,16 +1475,16 @@ class KanbanService:
         # Priority 2: Legacy PathConfig attributes (features, bugs, epics, tasks)
         type_path = getattr(self.config.paths, item_type.value + "s", None)
         if type_path:
-            return self.repo_root / type_path
+            return _under(self.repo_root, type_path)
 
         # Priority 3: Match scan_paths by type keyword
         plural = self._type_folder(item_type)
         for scan_path in self.config.paths.scan_paths:
             if plural in scan_path.lower() or item_type.value in scan_path.lower():
-                return self.repo_root / scan_path
+                return _under(self.repo_root, scan_path)
 
         # Priority 4: the type's own named folder under the board root (#113)
-        return self.repo_root / root / plural
+        return _under(self.repo_root, root) / plural
 
     def _board_root(self) -> str:
         """The folder a single board's type folders live under (#113).
@@ -1522,10 +1522,10 @@ class KanbanService:
             return any(p == s or s in p.parents for s in scanned)
 
         if is_scanned(path):
-            return self.repo_root / path
+            return _under(self.repo_root, path)
         base = Path(root or "work/")
         type_folder = Path(*path.parts[1:]) if len(path.parts) > 1 else path
-        return self.repo_root / base / type_folder
+        return _under(self.repo_root, base) / type_folder
 
     @staticmethod
     def _slugify(title: str) -> str:
@@ -1952,7 +1952,7 @@ class KanbanService:
 
         # Source 3: Scan filenames directly to catch files without frontmatter
         for scan_path in self.config.get_work_paths():
-            full_path = self.repo_root / scan_path
+            full_path = _under(self.repo_root, scan_path)
             if full_path.exists():
                 for md_file in full_path.rglob("*.md"):
                     filename = md_file.stem  # e.g., "EXP-608-Some-Title"
