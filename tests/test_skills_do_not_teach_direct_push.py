@@ -54,21 +54,27 @@ _CMD_PREFIX = (
     r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
     r"|[A-Za-z_]\w*=(?:'[^']*'|\"[^\"]*\"|[^\s'\"]\S*|)\s+)*"
 )
+_LEAD = r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
+_GIT = (
+    r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
+    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*"
+)
 PUSH_TO_MAIN = re.compile(
-    r"^\s*(?:(?:[-*>`$(]|\d+[.)])\s*)*"
-    + _CMD_PREFIX
-    + r"git\s+(?:(?:(?:-[Cc]|--(?:git-dir|work-tree|namespace))\s+[^\s-]\S*"
-    r"|--?[A-Za-z][\w-]*(?:=\S+)?)\s+)*push\b"
+    _LEAD + _CMD_PREFIX + _GIT + r"push\b"
     r"(?![^#;&|\n]*(?:--dry-run"
     r"|(?<!\s-o)(?<!--push-option)\s-(?=[A-Za-z]*n)[A-Za-z]+(?![\w-])))"
     r"[^#\n]*(?<=[\s:+'\"])(?:refs/heads/)?main(?=[\s#;&|'\"`)]|$)"
 )
 
-# `git checkout main` immediately preceding a merge is the other half of the recipe:
-# it is how you end up ON main with something to push.
-CHECKOUT_MAIN = re.compile(r"^\s*\$?\s*git\s+checkout\s+main\s*$")
-MERGE = re.compile(r"^\s*\$?\s*git\s+merge\b")
-
+# #485: the other half of the recipe — a checkout of main, then a merge, is how you
+# end up merging ON main. Both are read per shell segment, with the same lead and
+# prefixes as a push. A checkout is OF main only when `main` is its last token (after
+# flags that take no value): `-b feat main` lands on feat, `main -- file` stays put.
+CHECKOUT_MAIN = re.compile(
+    _LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\s+(?:--?[A-Za-z][\w-]*\s+)*main[`'\")\s]*$"
+)
+CHECKOUT = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"(?:checkout|switch)\b")
+MERGE = re.compile(_LEAD + _CMD_PREFIX + _GIT + r"merge(?![\w-])")
 
 # A shell comment starts at a word boundary: `main#x` is still a word, `x # y` is not.
 _COMMENT = re.compile(r"(?<!\S)#")
@@ -86,14 +92,26 @@ MERGE_WINDOW = 5
 
 
 def merges_on_main(lines: list[str]) -> list[tuple[int, str]]:
-    """The merge guard applied to a skill: every (1-based line, text) that merges on main."""
+    """The merge guard applied to a skill: every (1-based line, text) that merges on main.
+
+    One pass over the segments in order: a checkout of main opens a window through
+    the next MERGE_WINDOW lines, a checkout of anything else closes it, and a merge
+    inside the window is a merge on main.
+    """
     offenders = []
+    opened = None  # 0-based line of the checkout of main whose window is open
     for n, line in enumerate(lines):
-        if not CHECKOUT_MAIN.match(line):
-            continue
-        for k, w in enumerate(lines[n + 1 : n + 1 + MERGE_WINDOW], start=n + 2):
-            if MERGE.match(w):
-                offenders.append((k, w.strip()))
+        code = _COMMENT.split(line, maxsplit=1)[0]
+        hit = False
+        for seg in _SEGMENT_SEP.split(code):
+            if CHECKOUT_MAIN.match(seg):
+                opened = n
+            elif CHECKOUT.match(seg):
+                opened = None
+            elif MERGE.match(seg) and opened is not None and n - opened <= MERGE_WINDOW:
+                hit = True
+        if hit:
+            offenders.append((n + 1, line.strip()))
     return offenders
 
 
