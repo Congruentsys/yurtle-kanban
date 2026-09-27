@@ -1168,7 +1168,7 @@ class KanbanService:
         # the item's theme's own names (hdd `abandoned` is blocked): `move` and
         # `create` write them, so a scan must read them back (#439) — through the
         # item's own board, so two themes can give one name different meanings (#448)
-        found = self._theme_status_names(file_path).get(status_str.lower())
+        found = self._theme_status_names(file_path).get(_fold_status_name(status_str))
         return found if found is not None else mapping.get(status_str.lower())
 
     def _single_board_theme(self) -> dict | None:
@@ -1205,7 +1205,7 @@ class KanbanService:
                     status = WorkItemStatus.from_string(str(canonical))
                 except ValueError:
                     continue
-                names.setdefault(str(native).lower(), status)
+                names.setdefault(_fold_status_name(str(native)), status)
         cache[key] = names
         return names
 
