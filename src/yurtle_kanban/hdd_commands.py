@@ -84,15 +84,74 @@ def _update_parent(
         )
 
 
-def _commit_or_exit(service, path, message: str) -> None:
-    """Commit just `path`; a refused commit is an error: nothing is pushed (#584)."""
+def _commit_or_exit(service, path, message: str) -> bool:
+    """Commit just `path`; a refused commit is an error: nothing is pushed (#584).
+    True when a commit was made, False when `path` was unchanged (#614)."""
     import sys
 
     try:
-        service._commit_paths([path], message)
+        return service._commit_paths([path], message)
     except ValueError as e:  # GitCommitError
         console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
         sys.exit(1)
+
+
+def _push_only_head_or_exit(service, what: str) -> None:
+    """Push HEAD (the commit just made for `what`) to its branch's upstream — and
+    only it (#614). Refuses, exiting 1 with nothing pushed, when the branch holds
+    other unpushed commits: a bare `git push` would publish them too. With no
+    upstream to push to it pushes nothing and warns, like a failed push (the #192 /
+    #478 contract). The commit stays local either way."""
+    import sys
+    from typing import NoReturn
+
+    kept = f"The {what} commit is kept locally"
+
+    def refuse(reason: str) -> NoReturn:
+        console.print(
+            f"[red]Error: not pushed: {safe(reason)}. {safe(kept)} — push it yourself "
+            "once that's sorted.[/red]",
+            soft_wrap=True,
+        )
+        sys.exit(1)
+
+    def no_upstream(reason: str) -> None:
+        console.print(
+            f"  [yellow]Warning: not pushed: {safe(reason)}. {safe(kept)}.[/yellow]",
+            soft_wrap=True,
+        )
+
+    branch = service._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
+    name = branch.stdout.strip()
+    if branch.returncode != 0 or not name:
+        return no_upstream("HEAD is detached, so there is no upstream branch to push to")
+    remote = service._git_run("config", "--get", f"branch.{name}.remote").stdout.strip()
+    merge = service._git_run("config", "--get", f"branch.{name}.merge").stdout.strip()
+    upstream = service._git_run("rev-parse", "--verify", "--quiet", "@{u}")
+    if not remote or not merge or upstream.returncode != 0:
+        return no_upstream(f"branch {name} has no upstream (set one with `git push -u`)")
+    head = service._git_run("rev-parse", "HEAD").stdout.strip()
+    listed = service._git_run("log", "--format=%H %h %s", "@{u}..HEAD")
+    if listed.returncode != 0:
+        refuse(f"could not list unpushed commits: {service._git_output(listed)}")
+    others = [
+        line.split(" ", 1)[1]
+        for line in listed.stdout.splitlines()
+        if line.strip() and line.split(" ", 1)[0] != head
+    ]
+    if others:
+        refuse(
+            f"branch {name} has {len(others)} other unpushed commit(s) that a push "
+            f"would publish too: {'; '.join(others)}"
+        )
+    done = service._git_run("push", remote, f"HEAD:{merge}")
+    if done.returncode != 0:
+        console.print(
+            f"  [yellow]Warning: git push failed: {safe(service._git_output(done))}[/yellow]",
+            soft_wrap=True,
+        )
+        return
+    console.print("  [dim]Committed and pushed[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +226,6 @@ def hdd_registry(output_path: str | None, push: bool):
         yurtle-kanban hdd registry --output research/REGISTRY.md --push
     """
     import os
-    import subprocess
 
     service = _get_service()
     xrefs = service.get_hdd_cross_references()
@@ -283,17 +341,12 @@ def hdd_registry(output_path: str | None, push: bool):
     if push and service._outside_repo(out):
         push = False  # outside the repo: nothing to commit; it warned why (#174, #192)
     if push:
-        _commit_or_exit(service, out, "hdd: update research registry")
-        try:
-            subprocess.run(
-                ["git", "push"],
-                cwd=str(service.repo_root),
-                capture_output=True,
-                check=True,
-            )
-            console.print("  [dim]Committed and pushed[/dim]")
-        except subprocess.CalledProcessError as e:
-            console.print(f"  [yellow]Warning: git push failed: {safe(e)}[/yellow]")
+        # nothing changed: nothing to publish, and a push would only publish
+        # whatever unrelated commits the branch holds (#614)
+        if not _commit_or_exit(service, out, "hdd: update research registry"):
+            console.print("  [dim]Registry unchanged — nothing committed or pushed[/dim]")
+        else:
+            _push_only_head_or_exit(service, "registry")
 
 
 @hdd.command("validate")
