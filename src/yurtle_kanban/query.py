@@ -53,10 +53,12 @@ def _iri_safe(value: str) -> bool:
     return not any(ch in _IRI_UNSAFE for ch in value)
 
 
-# single-valued facts frontmatter owns: a fenced block can't redefine them (#395)
+# facts the markdown file itself owns (its frontmatter, body and comments
+# section): a fenced block can't redefine them for an item (#395), nor attach a
+# comment to one (#635)
 _FRONTMATTER_OWNED = frozenset({
     KB.id, KB.status, KB.title, KB.priority, KB.created, KB.priorityRank,
-    KB.description, KB.numericId,
+    KB.description, KB.numericId, KB.comment,
 })
 
 
@@ -131,6 +133,17 @@ class UnifiedGraph:
             self._graph.add((item_uri, KB.related, self._ref_or_literal(rel)))
         for sup in item.superseded_by or []:
             self._graph.add((item_uri, KB.supersededBy, self._ref_or_literal(sup)))
+
+        # Comments are their own field (#605): one `kb:comment` node each, so SPARQL
+        # reaches them; a preamble comment has no time (#644, #635)
+        for comment in item.comments or []:
+            node = BNode()
+            self._graph.add((item_uri, KB.comment, node))
+            self._graph.add((node, KB.author, Literal(comment.author or "")))
+            self._graph.add((node, KB.text, Literal(comment.content)))
+            if comment.created_at is not None:
+                at = Literal(comment.created_at.isoformat(), datatype=XSD.dateTime)
+                self._graph.add((node, KB.at, at))
 
         # Extended metadata
         if item.priority_rank is not None:

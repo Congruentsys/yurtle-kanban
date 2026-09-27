@@ -101,7 +101,8 @@ The unified graph materializes all frontmatter metadata as RDF triples:
 | `kb:dependsOn` | URI | Dependency link to another item |
 | `kb:related` | URI | Related item link |
 | `kb:supersededBy` | URI | Supersession link |
-| `kb:description` | Literal | Full description text |
+| `kb:description` | Literal | The body text (not comments) |
+| `kb:comment` | blank node | One per comment: `kb:author`, `kb:text`, and `kb:at` (xsd:dateTime; absent for text before the first comment heading) |
 | `kb:priorityRank` | xsd:integer | Captain's priority rank |
 | `kb:computeRequirement` | Literal | Compute requirement (e.g., "dgx-training") |
 
