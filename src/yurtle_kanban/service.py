@@ -16,7 +16,7 @@ import os
 import re
 import subprocess
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
@@ -113,6 +113,8 @@ def git_toplevel(cwd: Path) -> Path | None:
             capture_output=True,
             text=True,
             check=True,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
         ).stdout.strip()
     except (subprocess.CalledProcessError, OSError):
         return None
@@ -1649,13 +1651,7 @@ class KanbanService:
     def _has_remote(self) -> bool:
         """Check if git remote 'origin' is configured."""
         try:
-            result = subprocess.run(
-                ["git", "remote"],
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-            )
-            return "origin" in result.stdout.split()
+            return "origin" in self._git_run("remote").stdout.split()
         except Exception:
             return False
 
@@ -1809,16 +1805,63 @@ class KanbanService:
         with a new id, and a failure of any kind leaves nothing behind. Only when the
         push has landed, and HEAD is on the default branch, is the checkout
         fast-forwarded to it."""
+        failed = self._push_failed
+        branch = "main"
+        try:
+            branch = self._default_branch()
+            return self._race_to_branch(
+                branch, item_type, title, priority, assignee, description, tags,
+                max_retries, content, item_id,
+            )
+        except subprocess.TimeoutExpired as e:
+            if "push" in [str(a) for a in (e.cmd or [])]:
+                return failed(
+                    f"Timed out pushing to origin/{branch}: the push may have landed. "
+                    f"Check origin/{branch} (git fetch origin, then look for the item) "
+                    "before creating it again"
+                )
+            return failed(
+                f"Timed out talking to origin ({' '.join(map(str, e.cmd or []))}); "
+                "nothing was created"
+            )
+        except OSError as e:
+            return failed(f"Could not run git for origin/{branch}: {e}; nothing was created")
+
+    @staticmethod
+    def _push_failed(message: str) -> dict[str, Any]:
+        """The result of a `create --push` that created nothing."""
+        return {"success": False, "item": None, "id": None, "pushed": False, "message": message}
+
+    def _default_branch(self) -> str:
+        """The remote's default branch: `origin/HEAD` when set locally, else what the
+        remote itself says (`ls-remote --symref`), else `main` (#585)."""
+        known = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+        if known.returncode == 0 and known.stdout.strip().startswith("origin/"):
+            return known.stdout.strip().removeprefix("origin/")
+        asked = self._git_run("ls-remote", "--symref", "origin", "HEAD")
+        match = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", asked.stdout, re.M)
+        return match.group(1) if match else "main"
+
+    def _race_to_branch(
+        self,
+        branch: str,
+        item_type: WorkItemType,
+        title: str,
+        priority: str,
+        assignee: str | None,
+        description: str | None,
+        tags: list[str] | None,
+        max_retries: int,
+        content: str | None,
+        item_id: str | None,
+    ) -> dict[str, Any]:
+        """The fetch / build / push loop of `_create_on_default_branch`. Only a lost
+        race (a non-fast-forward rejection) is retried; any other refusal fails at
+        once with the remote's own words."""
         import json
         import tempfile
 
-        def failed(message: str) -> dict[str, Any]:
-            return {"success": False, "item": None, "id": None, "pushed": False,
-                    "message": message}
-
-        default = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-        branch = default.stdout.strip().removeprefix("origin/") if default.returncode == 0 else ""
-        branch = branch or "main"
+        failed = self._push_failed
         top = self._git_toplevel()
         lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
         lock_rel = self._repo_relative(lock_file, top)
@@ -1881,9 +1924,16 @@ class KanbanService:
 
             push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
             if push.returncode != 0:
+                err = push.stderr.strip()
+                if "[rejected]" not in err or not (
+                    "fetch first" in err or "non-fast-forward" in err
+                ):
+                    return failed(
+                        f"The remote refused the push to origin/{branch}: {err} "
+                        "(nothing was created)"
+                    )
                 logger.warning(
-                    f"Push to origin/{branch} rejected (attempt {attempt + 1}): "
-                    f"{push.stderr.strip()}"
+                    f"Push to origin/{branch} rejected (attempt {attempt + 1}): {err}"
                 )
                 continue
 
@@ -1900,11 +1950,16 @@ class KanbanService:
                 "item": item,
                 "id": current_id,
                 "pushed": True,
+                "local": local,
+                "branch": branch,
                 "message": f"Created and pushed {current_id} to origin/{branch}: {title}{note}",
             }
 
         # Best effort: leave origin/<default> showing the commits that beat us
-        self._git_run("fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        with suppress(subprocess.TimeoutExpired, OSError):
+            self._git_run(
+                "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+            )
         return failed(
             f"Failed to create item: the push to origin/{branch} was rejected "
             f"{attempts} time(s) (lost the race to another writer each attempt); "
@@ -1914,15 +1969,21 @@ class KanbanService:
     def _git_run(
         self, *args: str, env: dict[str, str] | None = None, input: str | None = None
     ) -> subprocess.CompletedProcess[str]:
-        """Run one git command in the repo root, capturing text output."""
+        """Run one git command in the repo root, capturing text output. Never
+        interactive (#585): stdin is closed (unless `input` feeds it) and git may not
+        prompt for credentials, so a remote that wants a password fails instead of
+        hanging on the terminal."""
+        extra: dict[str, Any] = {"input": input} if input is not None else {
+            "stdin": subprocess.DEVNULL
+        }
         return subprocess.run(
             ["git", *args],
             cwd=self.repo_root,
             capture_output=True,
             text=True,
             timeout=30,
-            env=env,
-            input=input,
+            env={**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0"},
+            **extra,
         )
 
     def _next_item_id(self, item_type: WorkItemType, floor: int) -> str:
@@ -2779,13 +2840,7 @@ class KanbanService:
     def _get_git_user(self) -> str:
         """Get current git user name."""
         try:
-            result = subprocess.run(
-                ["git", "config", "user.name"],
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-            )
-            return result.stdout.strip() or "unknown"
+            return self._git_run("config", "user.name").stdout.strip() or "unknown"
         except Exception:
             return "unknown"
 
