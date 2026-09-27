@@ -3688,7 +3688,8 @@ class KanbanService:
                     return fresh
                 # the parsed text (`"a b"` -> `a b`, `2026` -> `2026`) or, for a
                 # non-string, the text as written (`yes`, `null`, #639)
-                entries.append(({str(parsed), text.strip()}, line, pending))
+                keys = {parsed} if isinstance(parsed, str) else {str(parsed), text.strip()}
+                entries.append((keys, line, pending))
                 pending = []
             else:
                 return fresh  # a multi-line item: no safe anchoring
