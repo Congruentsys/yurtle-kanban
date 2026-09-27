@@ -153,6 +153,7 @@ class TestWorkflowParser:
         assert "in_progress" in state_ids
         assert "done" in state_ids
 
+
 class TestRuleEvaluation:
     """Tests for _evaluate_rule_condition (fail-closed enforcement)."""
 

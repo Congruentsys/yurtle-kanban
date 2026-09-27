@@ -56,7 +56,9 @@ def read_fragments(directory: Path) -> list[tuple[int, str, str, Path]]:
             headings(rest, "\0", first_line=2)
         except ValueError as e:
             raise FragmentError(f"{path}: {e}") from None
-        if headings(rest, "<!-- section:", first_line=2):
+        # an indented marker (under a list item) counts too (#660)
+        markers = re.sub(r"(?m)^[ \t]+(?=<!-- section:)", "", rest)
+        if headings(markers, "<!-- section:", first_line=2):
             # only line 1 names the section: a second one would be filed under the
             # first as text (#673)
             raise FragmentError(

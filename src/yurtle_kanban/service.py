@@ -67,6 +67,7 @@ class _CasRefusedError(Exception):
     """A compare-and-swap commit (#585, #590) that can't be built; its message is
     the failure the caller reports."""
 
+
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
 _HYP = Namespace(PREFIXES["hyp"])
 _PAPER_NS = Namespace(PREFIXES["paper"])
@@ -114,7 +115,6 @@ _TURTLE_FRONTMATTER = re.compile(
 # Turtle literal escaping lives in models (one escaper for every literal, #141)
 _turtle_string = turtle_string
 _turtle_unescape = turtle_unescape
-
 
 
 def git_toplevel(cwd: Path) -> Path | None:
@@ -392,11 +392,22 @@ class LineEndings:
             n = back[n]
         return run[::-1]
 
+
 def pull_note_text(branch: str) -> str:
     """Where a `--push` create landed when it isn't in this checkout (a feature
     branch, detached HEAD, diverged main), and to pull: the one wording the CLI
     line and the service message share (#625, #637)."""
     return f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
+
+
+def _created_and_pushed_message(item_id: str, branch: str, title: str, *, local: bool) -> str:
+    """The service result message for a `--push` create: where it landed, and the
+    pull note when this checkout doesn't have it yet (#637), without doubling a
+    title's own closing period (#660)."""
+    message = f"Created and pushed {item_id} to origin/{branch}: {title}"
+    if local:
+        return message
+    return f"{message.removesuffix('.')}. {pull_note_text(branch)}"
 
 
 class KanbanService:
@@ -2014,7 +2025,7 @@ class KanbanService:
             if local:
                 self._items[current_id] = item
             self._fire_create_hook(item)
-            message = f"Created and pushed {current_id} to origin/{branch}: {title}"
+            message = _created_and_pushed_message(current_id, branch, title, local=local)
             return {
                 "success": True,
                 "item": item,
@@ -2023,7 +2034,7 @@ class KanbanService:
                 "local": local,
                 "branch": branch,
                 "parent_linked": made["parent_linked"],
-                "message": message if local else f"{message}. {pull_note_text(branch)}",
+                "message": message,
             }
 
         return self._cas_on_default_branch(build, landed, max_retries, "item")
@@ -4477,7 +4488,7 @@ class KanbanService:
 
         # who started the run: --agent, then $YURTLE_AGENT, then git user.name; no
         # actor is refused before the run folder exists (#620)
-        run_by = resolve_actor(run_by, cwd=self.repo_root)
+        run_by = resolve_actor(run_by, cwd=self.repo_root, flag="--agent/--run-by")
 
         # Look up the experiment to get hypothesis link
         item = self.get_item(expr_id)

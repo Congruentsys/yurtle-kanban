@@ -421,8 +421,6 @@ def _cli_json(root: Path, args: list[str]) -> Any:
 def _service(root: Path) -> KanbanService:
     config_mod._theme_cache.clear()
     service = KanbanService(KanbanConfig.load(root / ".kanban" / "config.yaml"), root)
-    # speed only: `move` asks git for the user once per move (kb:by); not legality
-    service._get_git_user = lambda: "T"  # type: ignore[method-assign]
     return service
 
 
