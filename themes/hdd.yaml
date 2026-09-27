@@ -85,7 +85,6 @@ transitions:
   complete: []  # Terminal state (can reopen via new hypothesis if needed)
   abandoned: [draft]  # Can resurrect abandoned work
 
-# ID format specifications
 # State mappings for compatibility with WorkItemStatus
 status_mappings:
   draft: backlog

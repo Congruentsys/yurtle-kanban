@@ -77,6 +77,17 @@ def test_other_project_themes_not_in_theme_dirs(
     assert _share().resolve() in dirs, dirs
 
 
+# pyproject.toml spellings that name yurtle-kanban, so count as its checkout
+COUNTS = {
+    "single-quotes": "[project]\nname = 'yurtle-kanban'\n",
+    "extra-spacing": "[project]\nname   =   'yurtle-kanban'\n",
+    "no-spacing": '[project]\nname="yurtle-kanban"\n',
+    "indented-after-table": (
+        '[build-system]\nrequires = ["setuptools"]\n\n[project]\n  name  =  "yurtle-kanban"\n'
+    ),
+}
+
+
 # --- 2. controls ---------------------------------------------------------------------
 
 
@@ -91,16 +102,7 @@ def test_real_checkout_still_counts() -> None:
 
 
 @pytest.mark.usefixtures("share")
-@pytest.mark.parametrize(
-    "pyproject",
-    [
-        "[project]\nname = 'yurtle-kanban'\n",
-        "[project]\nname   =   'yurtle-kanban'\n",
-        '[project]\nname="yurtle-kanban"\n',
-        '[build-system]\nrequires = ["setuptools"]\n\n[project]\n  name  =  "yurtle-kanban"\n',
-    ],
-    ids=["single-quotes", "extra-spacing", "no-spacing", "indented-after-table"],
-)
+@pytest.mark.parametrize("pyproject", list(COUNTS.values()), ids=list(COUNTS))
 def test_yurtle_kanban_pyproject_counts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pyproject: str
 ) -> None:
