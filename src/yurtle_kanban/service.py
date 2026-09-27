@@ -3078,7 +3078,8 @@ class KanbanService:
                 )
 
             def landed(branch: str, local: bool) -> dict[str, Any]:
-                num = int(made["id"].rsplit("-", 1)[1])
+                space = self._id_space(made["id"])  # `H130.2` has no dash (#655)
+                num = space[1] if space else None
                 return {
                     "success": True,
                     "id": made["id"],
