@@ -1643,6 +1643,23 @@ def validate(fix: bool, as_json: bool):
         )
 
     for item in items:
+        # a body fence never closed swallows the history (#727)
+        try:
+            text = item.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        except (OSError, UnicodeDecodeError):
+            text = None
+        if text is not None and (line := service.swallowed_fence_line(text)) is not None:
+            issues.append(
+                {
+                    "type": "unclosed_fence",
+                    "id": item.id,
+                    "line": line,
+                    "message": f"{item.id}: the body's code fence on line {line} is never "
+                    "closed (it swallows the status history)",
+                }
+            )
+
+    for item in items:
         # Check file name matches ID
         file_stem = item.file_path.stem  # e.g., "EXP-300-Some-Title"
         expected_prefix = item.id  # e.g., "EXP-300"
@@ -1690,6 +1707,12 @@ def validate(fix: bool, as_json: bool):
         elif issue["type"] == "dependency_cycle":
             console.print(
                 f"[red]DEPENDENCY CYCLE:[/red] {safe(' → '.join(issue['ids']))}", soft_wrap=True
+            )
+        elif issue["type"] == "unclosed_fence":
+            console.print(
+                f"[yellow]UNCLOSED FENCE:[/yellow] {safe(issue['id'])}: the body's code "
+                f"fence on line {safe(str(issue['line']))} is never closed",
+                soft_wrap=True,
             )
         elif issue["type"] == "dangling_dependency":
             console.print(
