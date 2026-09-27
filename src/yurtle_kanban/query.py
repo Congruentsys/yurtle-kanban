@@ -53,10 +53,12 @@ def _iri_safe(value: str) -> bool:
     return not any(ch in _IRI_UNSAFE for ch in value)
 
 
-# single-valued facts frontmatter owns: a fenced block can't redefine them (#395)
+# facts the markdown file itself owns (its frontmatter, body and comments
+# section): a fenced block can't redefine them for an item (#395), nor attach a
+# comment to one (#635)
 _FRONTMATTER_OWNED = frozenset({
     KB.id, KB.status, KB.title, KB.priority, KB.created, KB.priorityRank,
-    KB.description, KB.numericId,
+    KB.description, KB.numericId, KB.comment,
 })
 
 
