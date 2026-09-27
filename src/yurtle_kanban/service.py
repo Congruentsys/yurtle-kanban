@@ -67,6 +67,7 @@ class _CasRefusedError(Exception):
     """A compare-and-swap commit (#585, #590) that can't be built; its message is
     the failure the caller reports."""
 
+
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
 _HYP = Namespace(PREFIXES["hyp"])
 _PAPER_NS = Namespace(PREFIXES["paper"])
@@ -114,7 +115,6 @@ _TURTLE_FRONTMATTER = re.compile(
 # Turtle literal escaping lives in models (one escaper for every literal, #141)
 _turtle_string = turtle_string
 _turtle_unescape = turtle_unescape
-
 
 
 def git_toplevel(cwd: Path) -> Path | None:
@@ -399,6 +399,7 @@ def pull_note_text(branch: str) -> str:
     line and the service message share (#625, #637)."""
     return f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
 
+
 def _created_and_pushed_message(item_id: str, branch: str, title: str, *, local: bool) -> str:
     """The service result message for a `--push` create: where it landed, and the
     pull note when this checkout doesn't have it yet (#637), without doubling a
@@ -406,7 +407,7 @@ def _created_and_pushed_message(item_id: str, branch: str, title: str, *, local:
     message = f"Created and pushed {item_id} to origin/{branch}: {title}"
     if local:
         return message
-    return f"{message.rstrip('.')}. {pull_note_text(branch)}"
+    return f"{message.removesuffix('.')}. {pull_note_text(branch)}"
 
 
 class KanbanService:
