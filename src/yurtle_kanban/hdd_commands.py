@@ -135,6 +135,16 @@ def _print_parent_linked(parent_id: str, result: dict | None = None) -> None:
     console.print(f"  [dim]Updated {safe(parent_id)} with inverse reference[/dim]")
 
 
+def _refuse_duplicate_parent(service, parent_id: str | None) -> None:
+    """A parent whose ID is on more than one board is refused before anything is
+    written: which copy the link would go in is ambiguous (#742, #754)."""
+    if parent_id and (parent := service.get_item(parent_id)) is not None:
+        try:
+            service.refuse_duplicate(parent, "a parent link")
+        except ValueError as e:
+            raise click.ClickException(str(e)) from None
+
+
 def _commit_or_exit(service, path, message: str) -> bool:
     """Commit just `path`; a refused commit is an error: nothing is pushed (#584).
     True when a commit was made, False when `path` was unchanged (#614)."""
@@ -795,6 +805,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
     except FileNotFoundError:
         raise click.ClickException("HDD literature template not found")
 
+    _refuse_duplicate_parent(service, source_idea)
     if push:
         result = service.create_item_and_push(
             item_type=WorkItemType.LITERATURE,
@@ -1055,6 +1066,7 @@ def hypothesis_create(
     except FileNotFoundError:
         raise click.ClickException("HDD hypothesis template not found")
 
+    _refuse_duplicate_parent(service, None if paper_num is None else f"PAPER-{paper_num}")
     if push:
         result = service.create_item_and_push(
             item_type=WorkItemType.HYPOTHESIS,
@@ -1193,6 +1205,7 @@ def experiment_create(
     except FileNotFoundError:
         raise click.ClickException("HDD experiment template not found")
 
+    _refuse_duplicate_parent(service, hyp_id)
     if push:
         result = service.create_item_and_push(
             item_type=WorkItemType.EXPERIMENT,
