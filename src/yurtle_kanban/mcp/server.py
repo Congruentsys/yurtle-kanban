@@ -238,7 +238,7 @@ class KanbanMCPServer:
                 "description": (
                     "Update a work item's properties"
                     " (title, priority, assignee, description,"
-                    " tags). Use move_item for status changes."
+                    " tags, depends_on, related). Use move_item for status changes."
                 ),
                 "inputSchema": {
                     "type": "object",
@@ -268,6 +268,24 @@ class KanbanMCPServer:
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "New tags (replaces existing tags)",
+                        },
+                        "depends_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Item IDs this item depends on (replaces the list);"
+                                " a self-dependency, an unknown or duplicated ID, or a"
+                                " cycle is refused"
+                            ),
+                        },
+                        "related": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Related item IDs (replaces the list)",
+                        },
+                        "allow_unknown": {
+                            "type": "boolean",
+                            "description": "Accept depends_on IDs that are on no board",
                         },
                     },
                     "required": ["item_id"],
@@ -511,6 +529,9 @@ class KanbanMCPServer:
             assignee=args.get("assignee"),
             description=args.get("description"),
             tags=args.get("tags"),
+            depends_on=args.get("depends_on"),
+            related=args.get("related"),
+            allow_unknown=bool(args.get("allow_unknown", False)),
         )
 
         return {

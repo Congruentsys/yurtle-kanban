@@ -169,7 +169,6 @@ def _item_with_relations(value: str) -> WorkItem:
         file_path=Path("test.md"),
         depends_on=[value],
         related=[value],
-        blocks=[value],
     )
 
 

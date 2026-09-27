@@ -453,6 +453,9 @@ class KanbanService:
             # a file keeps its own (#287, #300, #341)
             config.repo_root = self.repo_root
         self._items: dict[str, WorkItem] = {}
+        # IDs the last scan found in more than one file, with every file; `_items`
+        # keeps only one of them, so this is recorded before the merge (#576)
+        self.duplicate_ids: dict[str, list[Path]] = {}
         # Files that look like items (start with `---`) but don't parse, with a
         # reason; the CLI reports them instead of dropping them silently (#139)
         self.parse_warnings: list[tuple[Path, str]] = []
@@ -607,8 +610,19 @@ class KanbanService:
         finally:
             self._scanning = outer
 
+    def _index_item(self, item: WorkItem) -> None:
+        """Put a scanned item in `_items`, recording its ID in `duplicate_ids` when
+        another file already holds it (#576): the dict keeps one, silently."""
+        prior = self._items.get(item.id)
+        if prior is not None and prior.file_path.resolve() != item.file_path.resolve():
+            files = self.duplicate_ids.setdefault(item.id, [prior.file_path])
+            if item.file_path not in files:
+                files.append(item.file_path)
+        self._items[item.id] = item
+
     def _scan(self) -> list[WorkItem]:
         self._items.clear()
+        self.duplicate_ids = {}
         self.parse_warnings = []
 
         if self.config.is_multi_board:
@@ -616,7 +630,7 @@ class KanbanService:
             # as `board` does, so list/show/move agree with it (#124)
             for board in self.config.boards:
                 for item in self._scan_board(board):
-                    self._items[item.id] = item
+                    self._index_item(item)
             return list(self._items.values())
 
         work_paths = [Path(p) for p in self.config.get_work_paths()]
@@ -624,7 +638,7 @@ class KanbanService:
             full_path = _under(self.repo_root, scan_path)
             if full_path.exists():
                 for item in self._scan_directory(full_path):
-                    self._items[item.id] = item
+                    self._index_item(item)
 
         # The board always scans the type folders it writes into (#113), even
         # when the configured scan_paths leave one out
@@ -636,7 +650,7 @@ class KanbanService:
             rel = type_dir.relative_to(self.repo_root)
             if not any(rel == s or s in rel.parents for s in work_paths):
                 for item in self._scan_directory(type_dir):
-                    self._items[item.id] = item
+                    self._index_item(item)
 
         return list(self._items.values())
 
@@ -3722,6 +3736,13 @@ class KanbanService:
             if s in shown
         ]
 
+    # The opening of the status-history block this method writes: the one canonical
+    # ```yurtle fence; a hand-written ```yurtle block is not history (#576)
+    _HISTORY_OPEN_RE = re.compile(
+        r"```yurtle\n@prefix kb: <https://yurtle\.dev/kanban/> \.\n"
+        r"@prefix xsd: <http://www\.w3\.org/2001/XMLSchema#> \.\n\n<> kb:statusChange"
+    )
+
     def _update_item_file_with_history(
         self,
         item: WorkItem,
@@ -3791,13 +3812,9 @@ class KanbanService:
 
         # Check if yurtle block with status changes exists
         # Match block with prefix declarations and statusChange predicates
-        yurtle_pattern = (
-            r"```yurtle\n@prefix kb: <https://yurtle\.dev/"
-            r"kanban/> \.\n@prefix xsd: <http://www\.w3\.org/"
-            r"2001/XMLSchema#> \.\n\n<> kb:statusChange"
-            r"(.*?)\.\n```"
+        match = re.search(
+            self._HISTORY_OPEN_RE.pattern + r"(.*?)\.\n```", content, re.DOTALL
         )
-        match = re.search(yurtle_pattern, content, re.DOTALL)
 
         if match:
             # Append to existing block - add new blank node
@@ -4385,6 +4402,7 @@ class KanbanService:
         tags: list[str] | None = None,
         commit: bool = True,
         message: str | None = None,
+        **edges: Any,
     ) -> WorkItem:
         """Update a work item's properties (not status - use move_item for that).
 
@@ -4397,74 +4415,283 @@ class KanbanService:
             tags: New tags list (optional, replaces existing)
             commit: Whether to git commit the change
             message: Optional commit message
+            **edges: the tag and dependency edits of `update_item_changes`
+        """
+        item, _ = self.update_item_changes(
+            item_id, title=title, priority=priority, assignee=assignee,
+            description=description, tags=tags, commit=commit, message=message, **edges,
+        )
+        return item
+
+    def update_item_changes(
+        self,
+        item_id: str,
+        *,
+        title: str | None = None,
+        priority: str | None = None,
+        assignee: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+        depends_on: list[str] | None = None,
+        add_depends_on: list[str] | None = None,
+        remove_depends_on: list[str] | None = None,
+        related: list[str] | None = None,
+        allow_unknown: bool = False,
+        commit: bool = True,
+        message: str | None = None,
+    ) -> tuple[WorkItem, list[str]]:
+        """`update_item`, also returning what changed, as the commit message names it
+        (`["depends_on +EXP-3 -EXP-2", "priority high"]`; empty for a no-op).
+
+        Lists: `tags` / `depends_on` replace the list, then `add_*` append what is
+        missing (in order) and `remove_*` drop. Dependency and related IDs are
+        upper-cased (#576). A dependency this edit adds is refused when it is the
+        item itself, an ID on more than one board, an ID on no board (unless
+        `allow_unknown`), or a step on a path back to this item (a cycle). Every
+        refusal is a ValueError raised before anything is written.
         """
         priority = self._normalize_priority(priority)
+        if title is not None:
+            self._check_title(title)
+        self._check_text(
+            title=title, description=description, assignee=assignee, tags=tags,
+            add_tags=add_tags, remove_tags=remove_tags, depends_on=depends_on,
+            add_depends_on=add_depends_on, remove_depends_on=remove_depends_on,
+            related=related,
+        )
+        self._check_no_comments_heading(description)
+        editing_deps = (
+            depends_on is not None or bool(add_depends_on) or bool(remove_depends_on)
+        )
+        if editing_deps:
+            self.scan()  # the whole graph as the files say now (#638)
         item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
 
-        self._check_text(title=title, description=description, assignee=assignee, tags=tags)
-        self._check_no_comments_heading(description)
+        new_tags: list[str] | None = None
+        if tags is not None or add_tags or remove_tags:
+            new_tags = list(item.tags if tags is None else tags)
+            new_tags += [t for t in dict.fromkeys(add_tags or []) if t not in new_tags]
+            new_tags = [t for t in new_tags if t not in (remove_tags or [])]
+        new_deps: list[str] | None = None
+        if editing_deps:
+            new_deps = self._id_list(item.depends_on if depends_on is None else depends_on)
+            new_deps += [d for d in self._id_list(add_depends_on or []) if d not in new_deps]
+            dropped = set(self._id_list(remove_depends_on or []))
+            new_deps = [d for d in new_deps if d not in dropped]
+            self._check_new_dependencies(item, new_deps, allow_unknown)
+        new_related = None if related is None else self._id_list(related)
 
         # Field-level edits only, like rank_item (#583): every line the update
         # doesn't touch - unknown keys, the native status, the history block,
         # comments - stays byte-for-byte, and so do the file's line endings.
         content, eol = self._read_item_text(item.file_path)
         original = content
-        changes = []
+        changes: list[str] = []
 
         if title is not None and title != item.title:
             content = self._add_or_update_frontmatter_field(content, "title", yaml_quote(title))
             content = self._replace_h1(content, title)
-            item.title = title
             changes.append("title")
 
         if priority is not None and priority != item.priority:
             content = self._add_or_update_frontmatter_field(content, "priority", priority)
-            item.priority = priority
-            changes.append("priority")
+            changes.append(f"priority {priority}")
 
         if assignee is not None and assignee != item.assignee:
             content = self._add_or_update_frontmatter_field(
                 content, "assignee", yaml_scalar(assignee) if assignee else "null"
             )
-            item.assignee = assignee
             changes.append("assignee")
 
         if description is not None:
             updated = self._replace_body(content, description)
             if updated != content:
                 content = updated
-                item.description = description
                 changes.append("description")
 
-        if tags is not None and tags != item.tags:
-            content = self._add_or_update_frontmatter_field(
-                content, "tags", yaml_flow_list(tags), items=tags
-            )
-            item.tags = tags
-            changes.append("tags")
+        for key, old, new in (
+            ("tags", item.tags, new_tags),
+            ("depends_on", item.depends_on, new_deps),
+            ("related", item.related, new_related),
+        ):
+            if new is not None and new != old:
+                content = self._add_or_update_frontmatter_field(
+                    content, key, yaml_flow_list(new), items=new
+                )
+                changes.append(self._list_change(key, old, new))
 
         if not changes or content == original:
-            return item  # Nothing to update: no write, no commit
+            return item, []  # Nothing to update: no write, no commit
 
-        item.updated = datetime.now()
         self._write_item_text(item.file_path, content, eol)
         item = self._reread_item(item) or item  # the cache holds the file now (#638)
 
-        # Git commit if requested
+        # Git commit if requested: the item file only (#584)
         if commit:
-            change_summary = ", ".join(changes)
             self._git_commit(
                 item.file_path,
-                message or f"Update {item_id}: {change_summary}",
+                message or f"Update {item_id}: {', '.join(changes)}",
             )
 
-        return item
+        return item, changes
 
-    def _body_start(self, content: str) -> int:
+    @staticmethod
+    def _check_title(title: str) -> None:
+        """Refuse a title that is empty, blank or more than one line (#576)."""
+        if not title.strip():
+            raise ValueError("The title is empty: give a title")
+        if "\n" in title or "\r" in title:
+            raise ValueError("The title has a line break: a title is one line")
+
+    @staticmethod
+    def _id_list(ids: list[Any]) -> list[str]:
+        """Item IDs as written and looked up: stripped, upper-cased, blanks and
+        repeats dropped, order kept (#576)."""
+        return list(dict.fromkeys(s for i in ids if (s := str(i).strip().upper())))
+
+    @staticmethod
+    def _list_change(key: str, old: list[Any], new: list[str]) -> str:
+        """`depends_on +EXP-3 -EXP-2`: a list edit as the commit message names it."""
+        old_ids = [str(i) for i in old]
+        edits = [f"+{i}" for i in new if i not in old_ids]
+        edits += [f"-{i}" for i in old_ids if i not in new]
+        return " ".join([key, *edits])
+
+    def _check_new_dependencies(
+        self, item: WorkItem, new_deps: list[str], allow_unknown: bool
+    ) -> None:
+        """Refuse the targets this edit adds to `item.depends_on` (#576): the item
+        itself, an ID on more than one board, an ID on no board (unless
+        `allow_unknown`), or one that leads back to the item. Edges the item already
+        has are not re-checked, so an unrelated edit on an item already in a cycle,
+        or with a dangling target, still goes through."""
+        me = item.id.upper()
+        had = set(self._id_list(item.depends_on))
+        added = [d for d in new_deps if d not in had]
+        if not added:
+            return
+        graph = self.dependency_graph()
+        duplicated = {i.upper(): files for i, files in self.duplicate_ids.items()}
+        for target in added:
+            if target == me:
+                raise ValueError(f"{me} can't depend on itself")
+            if target in duplicated:
+                where = ", ".join(self._display_path(f) for f in duplicated[target])
+                raise ValueError(
+                    f"{target} is on more than one board ({where}): a dependency on it "
+                    "is ambiguous; fix the duplicate ID first"
+                )
+            if target not in graph and not allow_unknown:
+                raise ValueError(
+                    f"{target} is on no board: check the ID, or allow an item outside "
+                    "this repo with --allow-unknown"
+                )
+        graph[me] = new_deps
+        cycle = self.find_cycle(me, graph, via=added)
+        if cycle:
+            raise ValueError(
+                f"{me} can't depend on {cycle[1]}: it closes a dependency "
+                f"cycle: {' → '.join(cycle)}"
+            )
+
+    def _display_path(self, path: Path) -> str:
+        """`path` relative to the repo when it is inside it."""
+        with suppress(ValueError):
+            return path.relative_to(self.repo_root).as_posix()
+        return str(path)
+
+    def dependency_graph(self) -> dict[str, list[str]]:
+        """Each item's `depends_on` targets, keyed by item ID, over every board (#576).
+
+        IDs are upper-cased. A target on no board is kept in its item's list and has
+        no key of its own. Reused by `find_cycle`, `validate`, #575 and #577.
+        """
+        if not self._items:
+            self.scan()
+        return {
+            item.id.upper(): self._id_list(item.depends_on) for item in self._items.values()
+        }
+
+    def find_cycle(
+        self,
+        start: str,
+        graph: dict[str, list[str]] | None = None,
+        *,
+        via: list[str] | None = None,
+    ) -> list[str] | None:
+        """A dependency path from `start` back to itself, as
+        `["EXP-1", "EXP-3", "EXP-1"]`, or None (#576).
+
+        `graph` defaults to `dependency_graph()`. `via` limits the first step to
+        these targets, so an edit checks only the cycles its new edges close. A cycle
+        elsewhere in the graph, not through `start`, is not reported.
+        """
+        graph = self.dependency_graph() if graph is None else graph
+        start = start.upper()
+        dead: set[str] = set()  # nodes with no path back to `start`
+        for first in graph.get(start, []) if via is None else self._id_list(via):
+            path = self._path_back(graph, first, start, dead)
+            if path is not None:
+                return [start, *path]
+        return None
+
+    @staticmethod
+    def _path_back(
+        graph: dict[str, list[str]], source: str, target: str, dead: set[str]
+    ) -> list[str] | None:
+        """A path `[source, ..., target]` along dependency edges, or None; `dead`
+        collects the nodes found to have none (iterative DFS: no recursion limit)."""
+        if source == target:
+            return [source]
+        if source in dead:
+            return None
+        dead.add(source)
+        path = [source]
+        stack = [iter(graph.get(source, []))]
+        while stack:
+            step = next(stack[-1], None)
+            if step is None:
+                stack.pop()
+                path.pop()
+            elif step == target:
+                return [*path, step]
+            elif step not in dead:
+                dead.add(step)
+                path.append(step)
+                stack.append(iter(graph.get(step, [])))
+        return None
+
+    def dependency_cycles(self) -> list[list[str]]:
+        """Every dependency cycle, each once, starting at its smallest ID (#576)."""
+        graph = self.dependency_graph()
+        cycles: dict[tuple[str, ...], list[str]] = {}
+        for node in sorted(graph):
+            cycle = self.find_cycle(node, graph)
+            if cycle:
+                ring = cycle[:-1]
+                first = ring.index(min(ring))
+                ring = ring[first:] + ring[:first]
+                cycles.setdefault(tuple(ring), [*ring, ring[0]])
+        return list(cycles.values())
+
+    def dangling_dependencies(self) -> list[tuple[str, str]]:
+        """`(item, target)` for each `depends_on` target that is on no board (#576)."""
+        graph = self.dependency_graph()
+        return [
+            (item_id, dep)
+            for item_id, deps in sorted(graph.items())
+            for dep in deps
+            if dep not in graph
+        ]
+
+    @classmethod
+    def _body_start(cls, content: str) -> int:
         """Offset just past the frontmatter's closing `---` line (0 without frontmatter)."""
-        match = self._FRONTMATTER_RE.match(content)
+        match = cls._FRONTMATTER_RE.match(content)
         if not match:
             return 0
         eol = content.find("\n", match.end())
@@ -4473,16 +4700,25 @@ class KanbanService:
     _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 
     @classmethod
-    def _find_line_outside_fences(cls, content: str, start: int, pattern: re.Pattern[str]) -> int:
+    def _find_line_outside_fences(
+        cls,
+        content: str,
+        start: int,
+        pattern: re.Pattern[str],
+        block: re.Pattern[str] | None = None,
+    ) -> int:
         """Offset of the first line at or after `start` that matches `pattern` and is
-        not inside a fenced code block, or -1 (#583). A matching fence opener counts."""
+        not inside a fenced code block, or -1 (#583). A matching fence opener counts.
+        With `block`, the text from that line on must also match it (#576)."""
         fence: str | None = None  # the open fence's marker, e.g. "```"
         pos = start
         while pos < len(content):
             eol = content.find("\n", pos)
             end = len(content) if eol < 0 else eol
             line = content[pos:end]
-            if fence is None and pattern.match(line):
+            if fence is None and pattern.match(line) and (
+                block is None or block.match(content, pos)
+            ):
                 return pos
             marker = cls._FENCE_RE.match(line)
             if marker:
@@ -4540,15 +4776,32 @@ class KanbanService:
         heading = "# " + " ".join(title.splitlines())
         return content[: span[0]] + heading + content[span[1] :]
 
-    # The description ends at the first knowledge block or the comments section
-    # (outside fenced code, #583)
-    _BODY_END_RE = re.compile(r"(?:```(?:yurtle|turtle)\b|## Comments[ \t]*$)")
     _COMMENTS_RE = re.compile(r"## Comments[ \t]*$")
+    # The body ends at the `## Comments` line or the canonical status-history
+    # block, outside fenced code (#576): the line test, then the text from there on
+    _BODY_END_LINE_RE = re.compile(r"(?:```yurtle|## Comments)")
+    _BODY_END_RE = re.compile(
+        r"## Comments[ \t]*(?:\n|\Z)|" + _HISTORY_OPEN_RE.pattern
+    )
+
+    @classmethod
+    def body_span(cls, text: str) -> tuple[int, int]:
+        """The item body in `text` (an item file as LF text), as `(start, end)`
+        offsets (#576): from just past the frontmatter's closing `---` line to the
+        first `## Comments` line or canonical status-history ```yurtle block outside
+        fenced code, else the end of the text. The H1 and any hand-written knowledge
+        block are inside the span; the history block and comments are not. The one
+        definition of "body", for `update --body` and #578's body hash.
+        """
+        start = cls._body_start(text)
+        end = cls._find_line_outside_fences(
+            text, start, cls._BODY_END_LINE_RE, cls._BODY_END_RE
+        )
+        return start, len(text) if end < 0 else end
 
     def _replace_body(self, content: str, description: str) -> str:
-        """Replace only the body span: after the H1 (or the frontmatter when there is
-        no H1) up to the first ```yurtle fence or `## Comments` outside fenced code
-        (#583).
+        """Replace the part of the body span (`body_span`) after the H1, or after the
+        frontmatter and any leading knowledge blocks when there is no H1 (#583, #576).
 
         Returns `content` unchanged when the span, or the description the parser
         reads from the file, already equals `description`, so a read-modify-write
@@ -4560,10 +4813,8 @@ class KanbanService:
         start = self._leading_knowledge_end(content)
         if h1:
             start = h1[1] + 1 if h1[1] < len(content) else len(content)
-        end = self._find_line_outside_fences(content, start, self._BODY_END_RE)
-        tail = end >= 0
-        if not tail:
-            end = len(content)
+        end = max(self.body_span(content)[1], start)
+        tail = end < len(content)
         if content[start:end].strip() == description.strip():
             return content
         text = description.strip("\n")

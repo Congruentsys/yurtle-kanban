@@ -129,8 +129,6 @@ class UnifiedGraph:
             self._graph.add((item_uri, KB.dependsOn, self._ref_or_literal(dep)))
         for rel in item.related or []:
             self._graph.add((item_uri, KB.related, self._ref_or_literal(rel)))
-        for blk in item.blocks or []:
-            self._graph.add((item_uri, KB.blocks, self._ref_or_literal(blk)))
         for sup in item.superseded_by or []:
             self._graph.add((item_uri, KB.supersededBy, self._ref_or_literal(sup)))
 
