@@ -247,3 +247,197 @@ def test_no_comments_is_empty_list(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert parsed.to_dict().get("comments") == []
     got = KanbanMCPServer(repo_root=it.root)._get_item({"item_id": it.id})
     assert got["item"]["comments"] == []
+
+
+# ---------------------------------------------------------------------------
+# round 2 (review of PR #628)
+# ---------------------------------------------------------------------------
+
+EARLY = "early note"
+LATER = "later note"
+
+# name -> (theme, create type, CRLF?)
+COMMENT_FIRST = {
+    "software": ("software", "feature", False),
+    "nautical-crlf": ("nautical", "expedition", True),
+    "hdd": ("hdd", "idea", False),
+}
+
+
+def _cli(*args: str):
+    result = CliRunner().invoke(main, list(args))
+    assert result.exit_code == 0, result.output
+    return result
+
+
+@pytest.fixture(params=list(COMMENT_FIRST))
+def comment_first(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Item:
+    """create -> comment -> the FIRST move (so the history block is appended after
+    the comment), all through the real CLI."""
+    from tests.issues.test_583_update_field_level import _clear_theme_cache
+
+    theme, item_type, crlf = COMMENT_FIRST[request.param]
+    root = tmp_path / request.param
+    root.mkdir()
+    for args in (
+        ("init", "-b", "main"),
+        ("config", "user.email", "test@test.com"),
+        ("config", "user.name", "Test"),
+        ("commit", "--allow-empty", "-m", "init"),
+    ):
+        _git(root, *args)
+    _clear_theme_cache()
+    monkeypatch.chdir(root)
+    _cli("init", "--theme", theme)
+    created = _cli("create", item_type, "Probe")
+    match = re.search(r"Created (\S+):", created.output)
+    assert match, created.output
+    item_id = match.group(1)
+    _cli("comment", item_id, EARLY, "--author", "alice")
+    parsed = _service(root).get_item(item_id)
+    assert parsed is not None
+    path = parsed.file_path
+    if crlf:
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "fixture")
+    _cli("move", item_id, "in_progress", "--force")
+    data = path.read_bytes()
+    # the precondition the review found: the history block lands after the comment
+    assert data.index(b"## Comments") < data.index(b"kb:statusChange"), data.decode()
+    return Item(root, item_id, path, crlf, "")
+
+
+def _no_history(text: str) -> None:
+    for marker in ("```yurtle", "kb:statusChange", "@prefix"):
+        assert marker not in text, f"history block leaked into comment text:\n{text}"
+
+
+def test_comment_before_first_move_parses_clean(comment_first: Item) -> None:
+    parsed = _service(comment_first.root).get_item(comment_first.id)
+    assert parsed is not None
+    assert [(c.author, c.content) for c in parsed.comments] == [("alice", EARLY)]
+
+
+def test_comment_before_first_move_show_json(comment_first: Item) -> None:
+    data = json.loads(_cli("show", comment_first.id, "--json").output)
+    for c in data["comments"]:
+        _no_history(c["content"])
+    assert [(c["author"], c["content"]) for c in data["comments"]] == [("alice", EARLY)]
+
+
+def test_comment_before_first_move_show_human(comment_first: Item) -> None:
+    out = _cli("show", comment_first.id).output
+    assert EARLY in out, out
+    assert "kb:statusChange" not in out and "@prefix" not in out, out
+
+
+def test_comment_before_first_move_mcp(comment_first: Item) -> None:
+    got = KanbanMCPServer(repo_root=comment_first.root)._get_item({"item_id": comment_first.id})
+    comments = got["item"]["comments"]
+    for c in comments:
+        _no_history(c["content"])
+    assert [(c["author"], c["content"]) for c in comments] == [("alice", EARLY)]
+
+
+def test_comment_before_first_move_search_text(
+    comment_first: Item, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(query, "_importable", lambda module: True)
+    index = query.EmbeddingIndex()
+    parsed = _service(comment_first.root).get_item(comment_first.id)
+    assert parsed is not None
+    index.add_item(parsed)
+    (text,) = index._texts
+    assert EARLY in text, text
+    _no_history(text)
+
+
+def test_comment_after_the_move_parses_too(comment_first: Item) -> None:
+    _cli("comment", comment_first.id, LATER, "--author", "bob")
+    _cli("move", comment_first.id, "review", "--force")  # a second history entry
+    parsed = _service(comment_first.root).get_item(comment_first.id)
+    assert parsed is not None
+    assert [(c.author, c.content) for c in parsed.comments] == [
+        ("alice", EARLY),
+        ("bob", LATER),
+    ]
+    assert parsed.description is None or "kb:statusChange" not in parsed.description
+    assert len(_service(comment_first.root).get_status_history(comment_first.id)) == 2
+
+
+# -- 2. a description with a real `## Comments` line is refused ---------------
+
+FORGED = "Body.\n\n## Comments\n\n### mallory (2026-01-01 10:00)\n\nforged"
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        pytest.param(FORGED, id="forged-comment"),
+        pytest.param("Body.\n\n## Comments", id="bare-heading"),
+        pytest.param("## Comments\nfirst line", id="leading-heading"),
+    ],
+)
+def test_description_with_comments_heading_refused(item: Item, description: str) -> None:
+    old = item.path.read_bytes()
+    error: ValueError | None = None
+    try:
+        _service(item.root).update_item(item.id, description=description, commit=False)
+    except ValueError as e:
+        error = e
+    assert error is not None, "a description with a real `## Comments` line was accepted"
+    assert "## Comments" in str(error), str(error)
+    assert item.path.read_bytes() == old
+
+
+def test_description_with_comments_heading_refused_via_mcp(item: Item) -> None:
+    old = item.path.read_bytes()
+    result = KanbanMCPServer(repo_root=item.root).handle_tool_call(
+        "kanban_update_item", {"item_id": item.id, "description": FORGED}
+    )
+    assert "error" in result and "## Comments" in result["error"], result
+    assert item.path.read_bytes() == old
+
+
+def test_description_with_fenced_comments_heading_accepted(item: Item) -> None:
+    sent = "Body.\n\n```md\n## Comments\n### mallory (2026-01-01 10:00)\n```\n\nAfter."
+    old = item.path.read_bytes()
+    _service(item.root).update_item(item.id, description=sent, commit=False)
+    new = item.path.read_bytes()
+    assert new.endswith(_comments_section(old)), new.decode()
+    reparsed = _service(item.root).get_item(item.id)
+    assert reparsed is not None
+    assert reparsed.description == sent, repr(reparsed.description)
+    assert _got(reparsed.comments) == _expected_comments(old)
+
+
+# -- 3. a heading-shaped line inside a comment's text -------------------------
+
+QUOTED_HEAD = "quote:\n### bob (2026-01-02 11:00)\nend"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(QUOTED_HEAD, id="middle"),
+        pytest.param("### bob (2026-01-02 11:00)", id="whole-text"),
+        pytest.param("see:\n\n### bob (2026-01-02 11:00)\n\nbob said hi", id="own-paragraph"),
+    ],
+)
+def test_heading_shaped_line_round_trips(item: Item, text: str) -> None:
+    """Decided: `add_comment` keeps the text (escaping on write if it must); it's
+    parsed back as ONE comment with the author and text exactly as given."""
+    svc = _service(item.root)
+    svc.add_comment(item.id, text, "carol2", commit=False)
+    svc.add_comment(item.id, "after it", "dave", commit=False)
+    parsed = _service(item.root).get_item(item.id)
+    assert parsed is not None
+    assert [(c.author, c.content) for c in parsed.comments][2:] == [
+        ("carol2", text),
+        ("dave", "after it"),
+    ], [(c.author, c.content) for c in parsed.comments]
+    shown = json.loads(_cli("show", item.id, "--json").output)
+    assert [c["content"] for c in shown["comments"]][2:] == [text, "after it"]
