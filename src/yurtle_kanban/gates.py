@@ -108,6 +108,10 @@ class GateEvaluator:
 
         return results
 
+    def gate_ids(self, from_status: str, to_status: str) -> list[str]:
+        """Ids of the gates this transition would evaluate, in evaluation order."""
+        return [gate.id for gate in self._match_gates(from_status, to_status)]
+
     def get_blocking_failures(self, results: list[GateResult]) -> list[GateResult]:
         """Filter to only blocking failures."""
         return [r for r in results if not r.passed and r.severity == "blocking"]

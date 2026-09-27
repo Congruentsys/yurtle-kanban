@@ -191,7 +191,7 @@ class TestStringEntry:
 
     def test_move_item_refuses_ready(self, svc) -> None:
         service, _ = svc
-        with pytest.raises(ValueError, match="Invalid transition"):
+        with pytest.raises(ValueError, match="Illegal move"):
             service.move_item(
                 "IDEA-001",
                 WorkItemStatus.READY,

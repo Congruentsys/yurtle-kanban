@@ -50,7 +50,7 @@ from .models import (
     yaml_scalar,
 )
 from .turtle_builder import PREFIXES
-from .workflow import WorkflowConfig, WorkflowParser
+from .workflow import DEFAULT_TRANSITIONS, WorkflowConfig, WorkflowParser
 
 logger = get_logger("yurtle-kanban")  # escapes control characters (#215)
 
@@ -3212,46 +3212,30 @@ class KanbanService:
             return None
 
     def _validate_transition(self, item: WorkItem, new_status: WorkItemStatus) -> tuple[bool, str]:
-        """Validate a status transition using workflow rules if available.
+        """Validate a status transition: legal per `legal_next` (the one source
+        `states` and the offer render, #589), then the per-type workflow's rules.
 
         Returns:
             Tuple of (is_valid, error_message)
         """
-        # Check board-specific transitions first (e.g., HDD theme); a single board
-        # uses its configured theme's, as a multi-board board uses its preset's (#450)
         board_config, theme = self._item_theme(item)
-        board_transitions = self._get_board_transitions(board_config, theme)
-
-        if board_transitions:
-            reverse_mapping = self._get_reverse_status_mapping(
-                board_config, theme,
-            )
-            from_native = reverse_mapping.get(
-                item.status.value, item.status.value,
-            )
-            to_native = reverse_mapping.get(
-                new_status.value, new_status.value,
+        legal = self.legal_next(board_config, theme, item.item_type.value, item.status)
+        if new_status not in legal:
+            reverse = self._get_reverse_status_mapping(board_config, theme)
+            from_native = reverse.get(item.status.value, item.status.value)
+            to_native = reverse.get(new_status.value, new_status.value)
+            targets = ", ".join(reverse.get(s.value, s.value) for s in legal) or "none"
+            return False, (
+                f"Illegal move {item.id}: {from_native} → {to_native}. "
+                f"Legal from {from_native}: {targets}."
             )
 
-            allowed = board_transitions.get(from_native, [])
-            if to_native in allowed:
-                return True, ""
-            else:
-                return False, f"Invalid transition from {from_native} to {to_native}"
-
-        # Try to load workflow for this item type
-        item_type = item.item_type.value
-        workflow = self._workflow_parser.load_workflow(item_type)
-
-        if workflow:
-            # Use workflow validation
-            return self._workflow_parser.validate_transition(item, new_status, workflow)
-        else:
-            # Fall back to default validation
-            if self._is_valid_transition(item.status, new_status):
-                return True, ""
-            else:
-                return False, f"Invalid transition from {item.status.value} to {new_status.value}"
+        # legal moves still answer to a workflow's content rules (assignee, ...)
+        if not self._get_board_transitions(board_config, theme):
+            workflow = self._workflow_parser.load_workflow(item.item_type.value)
+            if workflow:
+                return self._workflow_parser.check_rules(item, new_status, workflow)
+        return True, ""
 
     def _evaluate_gates(
         self,
@@ -3266,14 +3250,8 @@ class KanbanService:
         Supports both v2 multi-board (per-board gates) and v1 single-board
         (top-level gates) configurations.
         """
-        # v2: per-board gates
-        board_config = self._get_board_for_item(item)
-        if board_config and board_config.gates:
-            gate_configs = board_config.gates
-        elif self.config.gates:
-            # v1: top-level gates on KanbanConfig
-            gate_configs = self.config.gates
-        else:
+        gate_configs = self._gate_configs(self._get_board_for_item(item))
+        if not gate_configs:
             return []
 
         from .gates import GateEvaluator
@@ -3281,43 +3259,32 @@ class KanbanService:
         evaluator = GateEvaluator(gate_configs)
         return evaluator.evaluate(item, old_status.value, new_status.value, context)
 
+    def _gate_configs(self, board_config: BoardConfig | None) -> dict[str, list[dict]]:
+        """The gates a move on `board_config` answers to: the board's own (v2), else
+        the top-level (v1) `gates`."""
+        if board_config and board_config.gates:
+            return board_config.gates
+        return self.config.gates or {}
+
+    def gate_ids(
+        self, board_config: BoardConfig | None,
+        from_status: WorkItemStatus, to_status: WorkItemStatus,
+    ) -> list[str]:
+        """Ids of the gates `move` evaluates for this transition (#573)."""
+        gate_configs = self._gate_configs(board_config)
+        if not gate_configs:
+            return []
+
+        from .gates import GateEvaluator
+
+        return GateEvaluator(gate_configs).gate_ids(from_status.value, to_status.value)
+
     def _has_gates_configured(self, item: WorkItem) -> bool:
         """Check if any gates are configured for this item's board."""
         board_config = self._get_board_for_item(item)
         if board_config and board_config.gates:
             return True
         return bool(self.config.gates)
-
-    def _is_valid_transition(self, from_status: WorkItemStatus, to_status: WorkItemStatus) -> bool:
-        """Check if a status transition is valid (default rules)."""
-        # Define valid transitions
-        valid_transitions = {
-            WorkItemStatus.BACKLOG: [WorkItemStatus.READY, WorkItemStatus.BLOCKED],
-            WorkItemStatus.READY: [
-                WorkItemStatus.IN_PROGRESS,
-                WorkItemStatus.BACKLOG,
-                WorkItemStatus.BLOCKED,
-            ],
-            WorkItemStatus.IN_PROGRESS: [
-                WorkItemStatus.REVIEW,
-                WorkItemStatus.DONE,
-                WorkItemStatus.BLOCKED,
-                WorkItemStatus.READY,
-            ],
-            WorkItemStatus.REVIEW: [
-                WorkItemStatus.DONE,
-                WorkItemStatus.IN_PROGRESS,
-                WorkItemStatus.BLOCKED,
-            ],
-            WorkItemStatus.BLOCKED: [
-                WorkItemStatus.READY,
-                WorkItemStatus.IN_PROGRESS,
-                WorkItemStatus.BACKLOG,
-            ],
-            WorkItemStatus.DONE: [],  # Terminal state
-        }
-
-        return to_status in valid_transitions.get(from_status, [])
 
     def get_workflow(self, item_type: str) -> WorkflowConfig | None:
         """Get the workflow for a specific item type."""
@@ -3333,60 +3300,101 @@ class KanbanService:
         return board_config, theme
 
     def get_allowed_transitions(self, item: WorkItem) -> list[str]:
-        """Get list of allowed transitions for an item (canonical status values):
-        the theme's own `transitions` when it has them, as `move` enforces (#457)."""
+        """The statuses `item` may move to (canonical values), from `legal_next`:
+        what `move` accepts, by construction (#457, #589)."""
         board_config, theme = self._item_theme(item)
+        return [
+            s.value
+            for s in self.legal_next(board_config, theme, item.item_type.value, item.status)
+        ]
+
+    def legal_next(
+        self,
+        board_config: BoardConfig | None,
+        theme: dict | None,
+        item_type: str | None,
+        from_status: WorkItemStatus,
+    ) -> list[WorkItemStatus]:
+        """The one lifecycle source (#589): the statuses legal from `from_status`.
+
+        The theme's `transitions` when it has them; else the per-type workflow's
+        state graph when `.kanban/workflows/` has one for `item_type` (a state the
+        workflow doesn't know has no legal next: fail closed); else the default
+        table. Lifecycle only: gates, WIP limits and workflow rules may still
+        refuse a legal move.
+        """
         board_transitions = self._get_board_transitions(board_config, theme)
         if board_transitions:
             reverse = self._get_reverse_status_mapping(board_config, theme)
-            from_native = reverse.get(item.status.value, item.status.value)
-            # by construction: status `t` is offered iff `move` would accept it, i.e.
-            # iff its theme name `reverse.get(t, t)` is in the list; theme order, then
-            # WorkItemStatus order among statuses sharing one listed name (#467, #474)
-            listed = board_transitions.get(from_native, [])
-            allowed = []
-            for native in listed:
+            from_native = reverse.get(from_status.value, from_status.value)
+            # status `t` is legal iff its theme name `reverse.get(t, t)` is listed;
+            # theme order, then WorkItemStatus order among statuses sharing one
+            # listed name (#467, #474)
+            allowed: list[WorkItemStatus] = []
+            for native in board_transitions.get(from_native, []):
                 for status in WorkItemStatus:
-                    value = status.value
-                    if reverse.get(value, value) == native and value not in allowed:
-                        allowed.append(value)
+                    if reverse.get(status.value, status.value) == native and (
+                        status not in allowed
+                    ):
+                        allowed.append(status)
             return allowed
-        workflow = self._workflow_parser.load_workflow(item.item_type.value)
+        workflow = self._workflow_parser.load_workflow(item_type) if item_type else None
         if workflow:
-            return workflow.get_allowed_transitions(item.status.value)
-        else:
-            # Default transitions
-            default = self._get_default_transitions(item.status)
-            return [s.value for s in default]
+            state = workflow.get_state(from_status.value)
+            if state is None:
+                return []
+            targets: list[WorkItemStatus] = []
+            for target in state.allowed_transitions:
+                target_state = workflow.get_state(target)
+                if target_state is None:
+                    continue
+                try:
+                    status = WorkItemStatus.from_string(target_state.id)
+                except ValueError:
+                    continue
+                if status not in targets:
+                    targets.append(status)
+            return targets
+        return list(DEFAULT_TRANSITIONS.get(from_status, []))
 
-    def _get_default_transitions(self, status: WorkItemStatus) -> list[WorkItemStatus]:
-        """Get default allowed transitions for a status."""
-        transitions = {
-            WorkItemStatus.BACKLOG: [WorkItemStatus.READY, WorkItemStatus.BLOCKED],
-            WorkItemStatus.READY: [
-                WorkItemStatus.IN_PROGRESS,
-                WorkItemStatus.BACKLOG,
-                WorkItemStatus.BLOCKED,
-            ],
-            WorkItemStatus.IN_PROGRESS: [
-                WorkItemStatus.REVIEW,
-                WorkItemStatus.DONE,
-                WorkItemStatus.BLOCKED,
-                WorkItemStatus.READY,
-            ],
-            WorkItemStatus.REVIEW: [
-                WorkItemStatus.DONE,
-                WorkItemStatus.IN_PROGRESS,
-                WorkItemStatus.BLOCKED,
-            ],
-            WorkItemStatus.BLOCKED: [
-                WorkItemStatus.READY,
-                WorkItemStatus.IN_PROGRESS,
-                WorkItemStatus.BACKLOG,
-            ],
-            WorkItemStatus.DONE: [],
+    def next_statuses(self, item: WorkItem) -> list[tuple[str, str]]:
+        """(canonical, native) for each status `item` may move to, in order (#573)."""
+        reverse = self._item_reverse_status_mapping(item)
+        return [(s, reverse.get(s, s)) for s in self.get_allowed_transitions(item)]
+
+    def lifecycle(
+        self, board_config: BoardConfig | None, item_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """`legal_next` for every status of a board (None: the single board) as
+        `states` renders it: each state the theme names or the lifecycle reaches,
+        with its native name, canonical name, legal next and their gate ids (#573)."""
+        theme = (
+            self._load_board_theme(board_config) if board_config
+            else self.config.get_theme()
+        )
+        reverse = self._get_reverse_status_mapping(board_config, theme)
+        nexts = {
+            s: self.legal_next(board_config, theme, item_type, s) for s in WorkItemStatus
         }
-        return transitions.get(status, [])
+        shown = {s for s, targets in nexts.items() if targets or s.value in reverse}
+        shown.update(t for targets in nexts.values() for t in targets)
+        return [
+            {
+                "name": reverse.get(s.value, s.value),
+                "canonical": s.value,
+                "terminal": not nexts[s],
+                "next": [
+                    {
+                        "name": reverse.get(t.value, t.value),
+                        "canonical": t.value,
+                        "gates": self.gate_ids(board_config, s, t),
+                    }
+                    for t in nexts[s]
+                ],
+            }
+            for s in WorkItemStatus
+            if s in shown
+        ]
 
     def _update_item_file_with_history(
         self,

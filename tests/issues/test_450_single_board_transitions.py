@@ -140,7 +140,7 @@ def _assert_refused(
     stays: WorkItemStatus,
 ) -> None:
     assert result.exit_code != 0, f"invalid move {frm} -> {to} accepted:\n{out}"
-    assert f"Invalid transition from {frm} to {to}" in out, out
+    assert f"Illegal move {item_id}: {frm} → {to}" in out, out
     assert _status(repo, item_id) == stays, "refused move still moved it"
 
 
@@ -263,6 +263,13 @@ DEFAULT_THEMES = [
 ]
 
 
+# the refusal names statuses as the theme does (#573): nautical's harbor/underway
+NATIVE_BACKLOG_IN_PROGRESS = {
+    "software": ("backlog", "in_progress"),
+    "nautical": ("harbor", "underway"),
+}
+
+
 @pytest.mark.parametrize(("theme", "item_type"), DEFAULT_THEMES)
 def test_default_theme_backlog_to_in_progress_still_refused(
     repo: Path, runner: CliRunner, wide: io.StringIO, theme: str, item_type: str
@@ -272,9 +279,8 @@ def test_default_theme_backlog_to_in_progress_still_refused(
 
     result, out = _move(runner, wide, item_id, "in_progress")
 
-    _assert_refused(
-        repo, result, out, item_id, "backlog", "in_progress", WorkItemStatus.BACKLOG
-    )
+    frm, to = NATIVE_BACKLOG_IN_PROGRESS[theme]
+    _assert_refused(repo, result, out, item_id, frm, to, WorkItemStatus.BACKLOG)
 
 
 @pytest.mark.parametrize(("theme", "item_type"), DEFAULT_THEMES)
@@ -412,6 +418,6 @@ def test_multiboard_nautical_board_keeps_default_workflow(
     """Control: the nautical board beside hdd still uses the default rules."""
     result, out = _move(runner, wide, "EXP-001", "in_progress")
 
-    _assert_refused(
-        multiboard, result, out, "EXP-001", "backlog", "in_progress", WorkItemStatus.BACKLOG
+    _assert_refused(  # nautical names, as the theme does (#573)
+        multiboard, result, out, "EXP-001", "harbor", "underway", WorkItemStatus.BACKLOG
     )

@@ -76,7 +76,7 @@ class TestCanonicalSpellingOfMappedStatus:
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "in_progress")
 
         assert result.exit_code != 0, out
-        assert "Invalid transition" in out, out
+        assert "Illegal move" in out, out
         assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
         assert not _move_ok(repo, "IDEA-001", WorkItemStatus.IN_PROGRESS)
 

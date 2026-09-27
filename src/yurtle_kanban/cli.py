@@ -37,7 +37,7 @@ from .board import (
     render_roadmap,
     render_stats,
 )
-from .config import KanbanConfig, _under
+from .config import BoardConfig, KanbanConfig, _under
 from .epic_commands import epic, voyage
 from .export import (
     export_expedition_index,
@@ -713,10 +713,88 @@ def show(item_id: str, as_json: bool):
                 )
         sys.exit(1)
 
+    next_statuses = service.next_statuses(item)
     if as_json:
-        click.echo(json.dumps(item.to_dict(), indent=2))
+        data = item.to_dict()
+        # JSON stays canonical; the native names ride alongside, same order (#448, #573)
+        data["next_statuses"] = [canonical for canonical, _ in next_statuses]
+        data["next_status_labels"] = [native for _, native in next_statuses]
+        click.echo(json.dumps(data, indent=2))
     else:
-        render_item_detail(item, console, status_label=service.status_label)
+        render_item_detail(
+            item, console, status_label=service.status_label,
+            next_statuses=[_status_display(*pair) for pair in next_statuses],
+        )
+
+
+def _status_display(canonical: str, native: str) -> str:
+    """`native (canonical)` where the theme renames a status, else the name (#573)."""
+    return native if native == canonical else f"{native} ({canonical})"
+
+
+@main.command()
+@click.option("--board", "-b", "board_name", help="Only this board (default: every board)")
+@click.option(
+    "--type", "-t", "item_type",
+    help="Item type: selects its workflow, where .kanban/workflows/ has one for it",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def states(board_name: str | None, item_type: str | None, as_json: bool):
+    """Show each board's lifecycle: every status and the statuses it may move to.
+
+    This is lifecycle legality only: gates, WIP limits and workflow rules can still
+    refuse a legal move (--json lists each transition's gate ids). --type only
+    matters where a workflow exists for that type; a theme's own transitions
+    apply to every type. Without --board, every board in turn.
+
+    Examples:
+        yurtle-kanban states
+        yurtle-kanban states --board research --json
+        yurtle-kanban states --type feature
+    """
+    service = get_service()
+    config = service.config
+
+    boards: list[tuple[str, BoardConfig | None, str]]
+    if config.is_multi_board:
+        boards = [(b.name, b, b.preset) for b in config.boards]
+    else:
+        boards = [("default", None, config.theme)]
+    if board_name is not None:
+        boards = [b for b in boards if b[0] == board_name]
+        if not boards:
+            error = f"Unknown board: {board_name}"
+            if as_json:
+                click.echo(json.dumps({"error": error}))
+            else:
+                console.print(f"[red]{safe(error)}[/red]")
+            sys.exit(1)
+
+    entries = [
+        {
+            "board": name,
+            "theme": theme,
+            "type": item_type,
+            "states": service.lifecycle(board_config, item_type),
+        }
+        for name, board_config, theme in boards
+    ]
+    if as_json:
+        click.echo(json.dumps(entries, indent=2))
+        return
+
+    for entry in entries:
+        heading = f"Board {entry['board']} ({entry['theme']})"
+        if item_type:
+            heading += f", type {item_type}"
+        console.print(f"[bold]{escape(heading)}[/bold]")
+        for state in entry["states"]:
+            nexts = ", ".join(
+                _status_display(n["canonical"], n["name"]) for n in state["next"]
+            ) or "(terminal)"
+            name = _status_display(state["canonical"], state["name"])
+            console.print(f"  {escape(name)} → {escape(nexts)}", highlight=False)
+        console.print()
 
 
 @main.command()

@@ -16,7 +16,7 @@ Decided behaviour:
    that is neither a list nor a string (null, int, bool, mapping) is dropped with
    ONE warning naming the file and ``transitions.<status>``. The theme then behaves
    as one without that key: nothing is allowed from that status, so ``move`` refuses
-   with "Invalid transition from draft to active" (observed today for a missing key).
+   with "Illegal move IDEA-001: draft → active" (observed today for a missing key).
 2. A lone string (``draft: active``) is read as a one-element list, with no warning
    — the #432 precedent (lone-string hook ``item_types``).
 3. ``get_allowed_transitions(item) -> list[str]`` (canonical status values, as its
@@ -275,7 +275,7 @@ class TestMove:
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "active")
 
         assert result.exit_code != 0, out
-        assert "Invalid transition from draft to active" in out, out
+        assert "Illegal move IDEA-001: draft → active" in out, out
         assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
 
     @pytest.mark.parametrize("cfg", CFGS)
@@ -289,7 +289,7 @@ class TestMove:
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "active")
 
         assert result.exit_code != 0, out
-        assert "Invalid transition from draft to active" in out, out
+        assert "Illegal move IDEA-001: draft → active" in out, out
         assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
 
     @pytest.mark.parametrize("cfg", CFGS)
@@ -330,7 +330,7 @@ class TestMove:
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "abandoned")
 
         assert result.exit_code != 0, out
-        assert "Invalid transition from draft to abandoned" in out, out
+        assert "Illegal move IDEA-001: draft → abandoned" in out, out
         assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
 
 
@@ -364,7 +364,7 @@ def _move_ok(repo: Path, item_id: str, status: WorkItemStatus) -> bool:
     try:
         service.move_item(item_id, status, commit=False, skip_wip_check=True, skip_gates=True)
     except ValueError as e:
-        assert "Invalid transition" in str(e), e
+        assert "Illegal move" in str(e), e
         return False
     return True
 

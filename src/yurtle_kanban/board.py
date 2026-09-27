@@ -197,8 +197,10 @@ def render_item_detail(
     item: WorkItem,
     console: Console | None = None,
     status_label: Callable[[WorkItem], str] | None = None,
+    next_statuses: list[str] | None = None,
 ) -> None:
-    """Render detailed view of a single work item."""
+    """Render detailed view of a single work item; `next_statuses` (display names)
+    adds a `Can move to` row (#573)."""
     if console is None:
         console = Console()
 
@@ -220,6 +222,8 @@ def render_item_detail(
     table.add_row("Type", item.item_type.value)
     # the theme's name for it (hdd `draft`) when the caller knows the theme (#448)
     table.add_row("Status", escape(status_label(item) if status_label else item.status.value))
+    if next_statuses is not None:
+        table.add_row("Can move to", escape(", ".join(next_statuses) or "none"))
     table.add_row("Priority", escape(str(item.priority or "medium")))
     table.add_row("Assignee", escape(str(item.assignee or "unassigned")))
 
