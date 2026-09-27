@@ -2413,28 +2413,33 @@ class KanbanService:
         its filename or its frontmatter `id:`, or None (#634). Ids are the same when
         the text before their number, separator included, and the number are:
         `EXP-3` is `EXP-003` (#641), but `EXP3` is not (#661)."""
-        holders = self._holders_at(rev, item_id)
-        return holders[0] if holders else None
-
-    def _holders_at(self, rev: str, item_id: str) -> list[str]:
-        """Every file under the work paths at commit `rev` that holds `item_id`, by
-        filename first, then by frontmatter `id:`, each once, as `_holder_at` judges
-        it; more than one is a duplicated ID there (#754)."""
         names, ids = self._ids_at(rev)
         key = self._id_key(item_id)
         folded = item_id.upper()  # `m-042` holds `M-042` (#732, #764)
-        found_in: list[str] = []
         for name in names:
             stem = Path(name).stem.upper()
             if stem == folded or stem.startswith(folded + "-") or (
                 key is not None and self._stem_holds(stem, key)
             ):
-                found_in.append(name)
-        found_in += [
+                return name
+        return next(iter(self._holders_at(rev, item_id, ids)), None)
+
+    def _holders_at(
+        self, rev: str, item_id: str, ids: list[tuple[str, str]] | None = None
+    ) -> list[str]:
+        """The files at commit `rev` the board would load as `item_id`: those whose
+        frontmatter `id:` is it (case folded, `EXP-3` is `EXP-003`). A filename is
+        not an id: a file without one is `STEM_WITH_UNDERSCORES` to the board, so
+        an outline or draft named after an item is no copy of it. More than one is
+        a duplicated ID there, as `duplicate_ids` counts it (#754)."""
+        if ids is None:
+            ids = self._ids_at(rev)[1]
+        key = self._id_key(item_id)
+        folded = item_id.upper()
+        return list(dict.fromkeys(
             path for path, found in ids
             if found.upper() == folded or (key is not None and self._id_key(found) == key)
-        ]
-        return list(dict.fromkeys(found_in))
+        ))
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
         """The `.md` files under the work paths at commit `rev`, and each `id:` in
@@ -2955,7 +2960,7 @@ class KanbanService:
                 f"({', '.join(holders)}): a parent link to it is ambiguous; fix the "
                 "duplicate ID first; nothing was created"
             )
-        held = holders[0] if holders else None
+        held = self._holder_at(base, parent_id)
         if held is None and self.get_item(parent_id) is None:
             # the CLI says it; no warning as well (#724)
             logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
