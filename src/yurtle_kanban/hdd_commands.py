@@ -39,6 +39,22 @@ def _render(engine: TemplateEngine, theme: str, item_type: str, variables: dict)
         raise click.ClickException(str(e)) from e
 
 
+def _push_ids(
+    engine: TemplateEngine, template: str, variables: dict, item_id: str, prefix: str | None
+) -> dict:
+    """The id arguments for `create_item_and_push`. `prefix` set means `item_id` was
+    auto-allocated from the local scan: the service then allocates it again against
+    each fetched base and renders the template for that id, so a rival's id is
+    never reused (#590). An id the user gave (or a paper-scoped one) stays as is."""
+    if prefix is None:
+        return {"item_id": item_id}
+    return {
+        "item_id": item_id,
+        "id_prefix": prefix,
+        "render": lambda new_id: _render(engine, "hdd", template, {**variables, "id": new_id}),
+    }
+
+
 def _get_engine() -> TemplateEngine:
     """Get the template engine."""
     # Import from cli.py to avoid duplication (lazy import to avoid circular import)
@@ -676,7 +692,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
             title=title,
             priority=priority,
             content=content,
-            item_id=item_id,
+            **_push_ids(engine, "idea", variables, item_id, prefix),
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -748,7 +764,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             title=title,
             priority=priority,
             content=content,
-            item_id=item_id,
+            **_push_ids(engine, "literature", variables, item_id, prefix),
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -950,6 +966,7 @@ def hypothesis_create(
         if head.startswith("H") and head[1:].isdigit():
             paper_num = int(head[1:])
 
+    auto_id = hyp_id is None and paper_num is None
     if hyp_id is None:
         if paper_num is None:
             hyp_id = service.get_next_unparented_hypothesis_id()
@@ -1001,7 +1018,7 @@ def hypothesis_create(
             title=statement,
             priority=priority,
             content=content,
-            item_id=hyp_id,
+            **_push_ids(engine, "hypothesis", variables, hyp_id, "H" if auto_id else None),
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -1076,6 +1093,7 @@ def experiment_create(
     # Allocate an id when none was given, the same way every other type does.
     # Requiring the user to invent EXPR-130 is the same "produce the artifact
     # before the thing it describes" problem `--paper` had on hypotheses.
+    auto_id = expr_id is None
     if expr_id is None:
         expr_id = f"EXPR-{service._get_next_id_number('EXPR'):03d}"
     elif not expr_id.startswith("EXPR-"):
@@ -1134,7 +1152,7 @@ def experiment_create(
             title=title,
             priority=priority,
             content=content,
-            item_id=expr_id,
+            **_push_ids(engine, "experiment", variables, expr_id, "EXPR" if auto_id else None),
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -1337,6 +1355,7 @@ def measure_create(
     engine = _get_engine()
 
     # Auto-allocate or use provided
+    auto_id = measure_id is None
     if measure_id is None:
         prefix = "M"
         next_num = service._get_next_id_number(prefix)
@@ -1365,7 +1384,7 @@ def measure_create(
             title=title,
             priority=priority,
             content=content,
-            item_id=measure_id,
+            **_push_ids(engine, "measure", variables, measure_id, "M" if auto_id else None),
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
