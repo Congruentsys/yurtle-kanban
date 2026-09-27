@@ -130,3 +130,24 @@ def test_missing_parent_is_said_once(world, monkeypatch, caplog) -> None:  # noq
         logging.getLogger("yurtle-kanban").removeHandler(caplog.handler)
     warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert not [w for w in warned if "not found" in w], warned
+
+
+def test_push_off_checkout_reports_origins_parent_state(world, monkeypatch) -> None:  # noqa: F811
+    """#724 round 2: with HEAD off main, `--push` builds the link against
+    origin's copy of the parent; the line must describe THAT copy, not the
+    local one (origin's paper has no turtle block; the local one does)."""
+    import re
+
+    seed_on_origin(world, monkeypatch, HYP)
+    git(world.b, "fetch", "origin")
+    git(world.b, "reset", "--hard", "origin/main")
+    rpath = world.b / PAPER
+    rpath.write_text(re.sub(r"```turtle\n.*?```\n", "", rpath.read_text(), flags=re.S))
+    git(world.b, "commit", "-qam", "origin: drop the paper's turtle block")
+    git(world.b, "push", "-q", "origin", "HEAD:refs/heads/main")
+    git(world.a, "checkout", "-q", "-b", "feat")
+    result = invoke(world, monkeypatch, HYP.argv)
+    out = flat(result)
+    assert result.exit_code == 0, out
+    assert "PAPER-130" in out and "no turtle block" in out, out
+    assert "already" not in out and "Updated PAPER-130" not in out, out
