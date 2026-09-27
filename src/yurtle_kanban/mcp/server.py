@@ -561,6 +561,8 @@ class KanbanMCPServer:
         comment = args["comment"]
         # the same resolver as the CLI's --agent: no "agent" default (#580)
         author = resolve_actor(args.get("author"), cwd=self.repo_root)
+        # the text is checked before the rescan: a refusal scans nothing (#740, #755)
+        self.service._check_text(comment=comment, author=author)
         self.service.scan()  # see duplicates as the files are now (#732, #742)
 
         item = self.service.add_comment(item_id, comment, author)
