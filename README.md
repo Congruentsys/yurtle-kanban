@@ -50,7 +50,7 @@ yurtle-kanban init --theme software
 # Create work items — always with --push, which allocates the ID atomically
 # so two people creating at once cannot land on the same one
 yurtle-kanban create feature "Add dark mode" --push --priority high
-yurtle-kanban create bug "Fix login error" --push --assignee dev-1
+yurtle-kanban create bug "Fix login error" --push --assign dev-1
 
 # View the board
 yurtle-kanban board
@@ -60,9 +60,15 @@ yurtle-kanban list
 yurtle-kanban list --status in_progress
 yurtle-kanban list --assignee dev-1
 
-# Move items
-yurtle-kanban move FEAT-001 in_progress
-yurtle-kanban move FEAT-001 done
+# Move items (kb:by records the actor: --agent, else $YURTLE_AGENT, else git user.name)
+yurtle-kanban move FEAT-001 in_progress --assign dev-1
+yurtle-kanban move FEAT-001 done --agent reviewer-1
+
+# Comment: free text goes through --body-file and a QUOTED heredoc, so the shell
+# expands nothing ($(...), backticks, $VARS are stored verbatim)
+yurtle-kanban comment FEAT-001 --body-file - <<'EOF'
+Shipped; see the PR.
+EOF
 
 # Show item details (with the statuses it can move to)
 yurtle-kanban show FEAT-001
@@ -94,7 +100,7 @@ yurtle-kanban export --format json
 | `init` | Initialize with theme, scaffold directories + templates |
 | `list` | List work items with optional filters |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
-| `move` | Move item to new status (with `--assign`, `--force`, `--closed-by`) |
+| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`) |
 | `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |
 | `states` | Each board's lifecycle: status → legal next statuses (`--board`, `--type`, `--json` with gate ids); gates, WIP and workflow rules can still refuse |
 | `board` | Display kanban board (`board research`, `board --all`, `board --campaign VOY-XXX`) |
@@ -104,10 +110,10 @@ yurtle-kanban export --format json
 | `roadmap` | Prioritized view of all non-done items |
 | `history` | Completed work log with time filters |
 | `metrics` | Flow metrics (cycle time, lead time) |
-| `next` | Suggest next item to work on |
+| `next` | Suggest next item to work on (`--agent`) |
 | `next-id` | **Allocate next ID atomically (prevents duplicates!)** |
 | `blocked` | List blocked items |
-| `comment` | Add comment to item |
+| `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`) |
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
 | `validate` | Check for ID mismatches and duplicates |
@@ -121,6 +127,21 @@ yurtle-kanban export --format json
 | `hdd` | HDD: `backfill` (turtle blocks), `registry` (cross-ref index), `validate` (link checking) |
 | `rank` | Set priority rank and value summary on items |
 
+### Identity and free text
+
+- **Actor** (who did it: a comment's author, `kb:by` on a move) is `--agent`, else
+  `$YURTLE_AGENT`, else git `user.name`, else an error. Sessions on one machine
+  share git `user.name`, so give each session its own `YURTLE_AGENT`.
+- **Assignee** (who holds the item) is never defaulted: only `--assign` sets it.
+  `list --assignee` is a filter only.
+- Identity values are refused when empty, whitespace-only, or holding a control
+  character.
+- Every free-text `--X` has a `--X-file PATH|-` twin (`comment --body/--body-file`,
+  `create --body/--body-file`). `-` reads stdin, which must be piped (a terminal is
+  refused); the text must be UTF-8, CRLF becomes LF, trailing newlines are dropped,
+  and empty text is refused. Use a quoted heredoc (`<<'EOF'`) so the shell expands
+  nothing.
+
 ### Preventing Duplicate IDs (Multi-Agent Safe)
 
 **Recommended:** Use `create --push` for a single atomic operation:
@@ -128,7 +149,7 @@ yurtle-kanban export --format json
 ```bash
 # Atomic: fetch → allocate → create file → commit → push (retries on conflict)
 yurtle-kanban create expedition "Research vectors" --push
-yurtle-kanban create feature "Add dark mode" --push --assignee Mini
+yurtle-kanban create feature "Add dark mode" --push --assign Mini
 ```
 
 This is the safest approach — one command, no race window between ID allocation and file creation.
@@ -497,11 +518,11 @@ This project uses yurtle-kanban for work tracking. Git is the database.
 **Creating work items (IMPORTANT — prevents ID conflicts):**
 ```bash
 # ALWAYS use --push when creating items. This is atomic and multi-agent safe.
-yurtle-kanban create <type> "<title>" --push [--priority <p>] [--assignee <name>]
+yurtle-kanban create <type> "<title>" --push [--priority <p>] [--assign <name>]
 
 # Examples:
 yurtle-kanban create expedition "Research vectors" --push --priority high
-yurtle-kanban create feature "Add dark mode" --push --assignee Mini
+yurtle-kanban create feature "Add dark mode" --push --assign Mini
 ```
 
 The `--push` flag atomically: fetches latest → allocates ID → creates file → commits → pushes.

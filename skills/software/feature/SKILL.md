@@ -25,7 +25,8 @@ If another agent pushed first, it retries with a new ID. No race window.
 
 **Options:**
 - `--priority low|medium|high|critical`
-- `--assignee <name>`
+- `--assign <name>` (sets who holds it; never defaulted)
+- `--body-file - <<'EOF'` (the body, from a quoted heredoc — the shell expands nothing)
 - `--tags tag1,tag2`
 
 If no remote is configured, the command still works — it commits locally without pushing.

@@ -29,6 +29,7 @@ from ._graph_iri import set_self_iri
 from ._logging import get_logger
 from .config import KanbanConfig, _under
 from .hooks import HookContext, HookEngine, HookEvent
+from .inputs import resolve_actor
 
 if TYPE_CHECKING:
     from .config import BoardConfig
@@ -2093,8 +2094,14 @@ class KanbanService:
             with tempfile.TemporaryDirectory() as tmp:
                 env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
                 steps = [self._git_run("read-tree", base, env=env)]
-                for rel, body in blobs.items():
-                    blob = self._git_run("hash-object", "-w", "--stdin", input=body)
+                for n, (rel, body) in enumerate(blobs.items()):
+                    # from a file, not stdin: git never reads stdin (#580);
+                    # --no-filters hashes the bytes exactly as --stdin did
+                    body_path = Path(tmp) / f"blob-{n}"
+                    body_path.write_bytes(body.encode("utf-8"))
+                    blob = self._git_run(
+                        "hash-object", "-w", "--no-filters", "--", str(body_path)
+                    )
                     steps += [blob, self._git_run(
                         "update-index", "--add", "--cacheinfo",
                         f"100644,{blob.stdout.strip()},{rel.as_posix()}", env=env,
@@ -2231,25 +2238,22 @@ class KanbanService:
         self,
         *args: str,
         env: dict[str, str] | None = None,
-        input: str | None = None,
         timeout: float | None = 30,
     ) -> subprocess.CompletedProcess[str]:
         """Run one git command in the repo root, capturing text output. Never
-        interactive (#585): stdin is closed (unless `input` feeds it) and git may not
-        prompt for credentials, so a remote that wants a password fails instead of
-        hanging on the terminal. Commands that run the user's hooks pass
-        `timeout=None`: a hook may legitimately take longer (#584)."""
-        extra: dict[str, Any] = {"input": input} if input is not None else {
-            "stdin": subprocess.DEVNULL
-        }
+        interactive (#585): stdin is closed — always, so git can't eat text the CLI
+        was piped (#580) — and git may not prompt for credentials, so a remote that
+        wants a password fails instead of hanging on the terminal. Commands that run
+        the user's hooks pass `timeout=None`: a hook may legitimately take longer
+        (#584)."""
         return subprocess.run(
             ["git", *args],
             cwd=self.repo_root,
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
             env={**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0"},
-            **extra,
         )
 
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
@@ -2728,6 +2732,7 @@ class KanbanService:
                     capture_output=True,
                     check=True,
                     timeout=30,
+                    stdin=subprocess.DEVNULL,
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 logger.warning(f"Git push failed for parent update: {e}")
@@ -3059,6 +3064,7 @@ class KanbanService:
         closed_by: str | None = None,
         skip_gates: bool = False,
         gate_context: dict[str, Any] | None = None,
+        actor: str | None = None,
     ) -> WorkItem:
         """Move a work item to a new status.
 
@@ -3075,8 +3081,12 @@ class KanbanService:
             skip_gates: Whether to skip transition gate checks
             gate_context: Extra context for gate evaluation (e.g., CLI flags
                 like ``{"self_reviewed": True}``)
+            actor: Who is moving it, recorded as kb:by. Resolved through
+                `resolve_actor` (explicit, then $YURTLE_AGENT, then git user.name);
+                never the assignee, which is not defaulted either (#580).
         """
         self._check_text(assignee=assignee, message=message, closed_by=closed_by)  # (#239)
+        actor = resolve_actor(actor, cwd=self.repo_root)
         item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
@@ -3177,7 +3187,7 @@ class KanbanService:
         forced = not validate_workflow
         self._update_item_file_with_history(
             proposed, old_status, new_status, assignee,
-            forced=forced, closed_by=closed_by,
+            actor=actor, forced=forced, closed_by=closed_by,
             gates_skipped=gates_skipped,
         )
         for name, value in changes.items():
@@ -3482,6 +3492,7 @@ class KanbanService:
         forced: bool = False,
         closed_by: str | None = None,
         gates_skipped: bool = False,
+        actor: str | None = None,
     ) -> None:
         """Update file and append status change to yurtle knowledge block.
 
@@ -3501,6 +3512,7 @@ class KanbanService:
         When closed_by is set, a kb:closedBy triple records the triggering
         artifact (e.g., a PR URL), making closure provenance graph-queryable.
         When gates_skipped=True, a kb:gatesSkipped triple is recorded.
+        kb:by is the actor (who moved it), never the assignee (#580).
         """
         content, eol = self._read_item_text(item.file_path)
 
@@ -3521,7 +3533,7 @@ class KanbanService:
 
         # Create TTL status change entry (use canonical name for RDF consistency)
         timestamp = datetime.now().isoformat(timespec="seconds")
-        agent = assignee or self._get_git_user()
+        agent = resolve_actor(actor, cwd=self.repo_root)
         ttl_entry = f'''    kb:status kb:{new_status.value} ;
     kb:at "{timestamp}"^^xsd:dateTime ;
     kb:by "{_turtle_string(agent)}" ;'''
@@ -4390,6 +4402,7 @@ class KanbanService:
                     capture_output=True,
                     text=True,
                     check=True,
+                    stdin=subprocess.DEVNULL,
                 )
                 run_by = result.stdout.strip() or "unknown"
             except subprocess.CalledProcessError:
