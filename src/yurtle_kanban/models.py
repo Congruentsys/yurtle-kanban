@@ -261,7 +261,6 @@ class WorkItem:
     tags: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
-    blocks: list[str] = field(default_factory=list)
     description: str | None = None
     comments: list[Comment] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -335,7 +334,6 @@ class WorkItem:
             "tags": self.tags,
             "depends_on": self.depends_on,
             "related": self.related,
-            "blocks": self.blocks,
             "description": self.description,
             # the `## Comments` section, never part of the description (#605)
             "comments": [c.to_dict() for c in self.comments],
@@ -346,68 +344,6 @@ class WorkItem:
             "compute_requirement": self.compute_requirement,
             "triple_count": len(self.graph) if self.graph else 0,
         }
-
-    @staticmethod
-    def _esc(value: str) -> str:
-        """Escape a value for a Turtle "..." literal (the shared escaper, #141)."""
-        return turtle_string(value)
-
-    @staticmethod
-    def _safe_uri(value: str) -> str:
-        """Sanitize a value for use inside Turtle angle-bracket URIs.
-
-        Strips characters that could break TTL syntax (<, >, newlines,
-        spaces). Returns the sanitized value for use inside <...>.
-        """
-        import re as _re
-        return _re.sub(r'[<>\s\\"]', "", value)
-
-    def to_yurtle(self) -> str:
-        """Generate Yurtle block content for this work item."""
-        lines = [
-            "@prefix kb: <https://yurtle.dev/kanban/> .",
-            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .",
-            "",
-            f"<> a kb:{self.item_type.value.title()} ;",
-            f'   kb:id "{self._esc(self.id)}" ;',
-            f"   kb:status kb:{self.status.value} ;",
-        ]
-
-        if self.priority:
-            lines.append(f"   kb:priority kb:{self.priority} ;")
-
-        if self.assignee:
-            lines.append(f"   kb:assignee <{self._safe_uri(self.assignee)}> ;")
-
-        if self.created:
-            lines.append(f'   kb:created "{self.created.isoformat()}"^^xsd:date ;')
-
-        if self.tags:
-            tag_str = ", ".join(f'"{self._esc(tag)}"' for tag in self.tags)
-            lines.append(f"   kb:tag {tag_str} ;")
-
-        if self.depends_on:
-            deps_str = ", ".join(f"<{self._safe_uri(dep)}>" for dep in self.depends_on)
-            lines.append(f"   kb:dependsOn {deps_str} ;")
-
-        if self.related:
-            rel_str = ", ".join(f"<{self._safe_uri(rel)}>" for rel in self.related)
-            lines.append(f"   kb:related {rel_str} ;")
-
-        if self.resolution:
-            lines.append(f'   kb:resolution "{self._esc(self.resolution)}" ;')
-
-        if self.superseded_by:
-            refs_str = ", ".join(f"<{self._safe_uri(ref)}>" for ref in self.superseded_by)
-            lines.append(f"   kb:supersededBy {refs_str} ;")
-
-        if self.compute_requirement:
-            lines.append(f'   kb:computeRequirement "{self._esc(self.compute_requirement)}" ;')
-
-        # Remove trailing semicolon from last line and add period
-        lines[-1] = lines[-1].rstrip(" ;") + " ."
-
-        return "\n".join(lines)
 
     def to_markdown(self) -> str:
         """Generate full markdown file content.

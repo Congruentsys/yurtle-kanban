@@ -71,6 +71,14 @@ yurtle-kanban comment FEAT-001 --body-file - <<'EOF'
 Shipped; see the PR.
 EOF
 
+# Edit fields and dependencies (only the changed lines are rewritten; a
+# self-dependency, an unknown or duplicated target, or a new cycle is refused)
+yurtle-kanban update FEAT-002 --add-dep feat-001 --priority high --tag ui
+yurtle-kanban update FEAT-002 --depends-on ""        # clear the dependencies
+yurtle-kanban update FEAT-002 --body-file - <<'EOF'
+The new body; the heading, status history and comments are kept.
+EOF
+
 # Show item details (with the statuses it can move to)
 yurtle-kanban show FEAT-001
 
@@ -102,6 +110,7 @@ yurtle-kanban export --format json
 | `list` | List work items with optional filters |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
 | `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`) |
+| `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
 | `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |
 | `states` | Each board's lifecycle: status → legal next statuses (`--board`, `--type`, `--json` with gate ids); gates, WIP and workflow rules can still refuse |
 | `board` | Display kanban board (`board research`, `board --all`, `board --campaign VOY-XXX`) |
@@ -117,7 +126,7 @@ yurtle-kanban export --format json
 | `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`) |
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
-| `validate` | Check for ID mismatches and duplicates |
+| `validate` | Check for ID mismatches, duplicate IDs across boards, dependency cycles and dangling `depends_on` targets |
 | `voyage/epic` | Campaign management: `create`, `show`, `add` |
 | `idea` | HDD: Create research/feature ideas |
 | `literature` | HDD: Create literature reviews |
@@ -138,7 +147,7 @@ yurtle-kanban export --format json
 - Identity values are refused when empty, whitespace-only, or holding a control
   character.
 - Every free-text `--X` has a `--X-file PATH|-` twin (`comment --body/--body-file`,
-  `create --body/--body-file`). `-` reads stdin, which must be piped (a terminal is
+  `create --body/--body-file`, `update --body/--body-file`). `-` reads stdin, which must be piped (a terminal is
   refused); the text must be UTF-8, CRLF becomes LF, trailing newlines are dropped,
   and empty text is refused. Use a quoted heredoc (`<<'EOF'`) so the shell expands
   nothing.

@@ -361,19 +361,6 @@ class TestRelatedField:
         md = item.to_markdown()
         assert "related: [VOY-001, EXP-002]" in md
 
-    def test_related_in_to_yurtle(self):
-        """to_yurtle should include kb:related."""
-        item = WorkItem(
-            id="EXP-001",
-            title="Test",
-            item_type=WorkItemType.EXPEDITION,
-            status=WorkItemStatus.BACKLOG,
-            file_path="/tmp/test.md",
-            related=["VOY-001"],
-        )
-        yurtle = item.to_yurtle()
-        assert "kb:related" in yurtle
-
     def test_related_parsed_from_frontmatter(self, nautical_runner, nautical_repo):
         """Service should parse related field from frontmatter."""
         exp_dir = nautical_repo / "kanban-work" / "expeditions"

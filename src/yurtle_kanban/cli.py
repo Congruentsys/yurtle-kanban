@@ -1263,6 +1263,99 @@ def next_item(agent: str | None):
     render_item_detail(item, console, status_label=service.status_label)
 
 
+def _id_csv(value: str | None) -> list[str] | None:
+    """A comma-separated ID list option: None when not given, [] for `""`."""
+    return None if value is None else value.split(",")
+
+
+@main.command()
+@click.argument("item_id")
+@click.option("--title", help="New title, one line: the `title:` key and the `# Title` heading")
+@click.option("--priority", help="New priority: critical, high, medium or low")
+@click.option("--tag", "add_tags", multiple=True, help="Add a tag (repeatable)")
+@click.option("--untag", "remove_tags", multiple=True, help="Remove a tag (repeatable)")
+@click.option(
+    "--body",
+    help="New body, replacing the text under the heading (prefer --body-file: no shell expansion)",
+)
+@click.option(
+    "--body-file",
+    help="Read the new body from PATH, or from stdin with '-' (pipe it: a quoted heredoc <<'EOF')",
+)
+@click.option(
+    "--depends-on", help='Replace the dependencies: comma-separated IDs ("" clears them)'
+)
+@click.option("--add-dep", multiple=True, help="Add a dependency (repeatable)")
+@click.option("--rm-dep", multiple=True, help="Remove a dependency (repeatable)")
+@click.option("--related", help='Replace the related items: comma-separated IDs ("" clears them)')
+@click.option(
+    "--allow-unknown", is_flag=True, help="Accept dependency IDs that are on no board"
+)
+@click.option("--no-commit", is_flag=True, help="Write the file, but don't commit it")
+def update(
+    item_id: str,
+    title: str | None,
+    priority: str | None,
+    add_tags: tuple[str, ...],
+    remove_tags: tuple[str, ...],
+    body: str | None,
+    body_file: str | None,
+    depends_on: str | None,
+    add_dep: tuple[str, ...],
+    rm_dep: tuple[str, ...],
+    related: str | None,
+    allow_unknown: bool,
+    no_commit: bool,
+):
+    """Edit a work item's fields and dependencies (not its status: use move).
+
+    Only the lines that change are rewritten; the status history, comments and
+    any other frontmatter keys stay as they are. The commit holds the item file
+    alone and names each change. A dependency that points at the item itself,
+    at an ID on no board (without --allow-unknown) or on two boards, or that
+    closes a cycle is refused, and nothing is written.
+
+    Examples:
+
+        yurtle-kanban update EXP-5 --add-dep EXP-3 --rm-dep EXP-2 --priority high
+
+        yurtle-kanban update EXP-5 --depends-on ""          # clear the dependencies
+
+        yurtle-kanban update EXP-5 --body-file - <<'EOF'
+        ...new body...
+        EOF
+    """
+    # the whole text is read before any subprocess can touch stdin (#580)
+    try:
+        description = read_text_option(body, body_file, "body")
+    except ValueError as e:
+        _refuse(e)
+    service = get_service()
+    try:
+        item, changes = service.update_item_changes(
+            item_id.upper(),
+            title=title,
+            priority=priority,
+            description=description,
+            add_tags=list(add_tags),
+            remove_tags=list(remove_tags),
+            depends_on=_id_csv(depends_on),
+            add_depends_on=list(add_dep),
+            remove_depends_on=list(rm_dep),
+            related=_id_csv(related),
+            allow_unknown=allow_unknown,
+            commit=not no_commit,
+        )
+    except ValueError as e:
+        _refuse(e)
+    if not changes:
+        console.print("no changes")
+        return
+    console.print(
+        f"[green]Updated {escape(item.id)}:[/green] {safe(', '.join(changes))}", soft_wrap=True
+    )
+
+
 @main.command()
 @click.argument("item_id")
 @click.option("--body", help="The comment text (prefer --body-file: no shell expansion)")
@@ -1500,33 +1593,56 @@ def validate(fix: bool, as_json: bool):
 
     Checks:
     - File name matches ID in frontmatter
-    - No duplicate IDs
+    - No duplicate IDs, across every board
+    - No dependency cycles, across every board
+    - Every depends_on target is on a board
     - Required fields present (id, title, status, type)
     """
     service = get_service()
     items = service.get_items()
 
     issues = []
-    seen_ids = {}
-
+    # every file per ID: the items listed, then the ones the scan's merge dropped
+    # (a duplicate across boards keeps one item, #576)
+    files_by_id: dict[str, list[Path]] = {}
     for item in items:
-        # Check for duplicate IDs
-        if item.id in seen_ids:
+        files_by_id.setdefault(item.id, []).append(item.file_path)
+    for dup_id, files in service.duplicate_ids.items():
+        known = files_by_id.setdefault(dup_id, [])
+        known += [f for f in files if f not in known]
+    for dup_id, files in files_by_id.items():
+        for other in files[1:]:
             issues.append(
                 {
                     "type": "duplicate_id",
-                    "id": item.id,
-                    "file": str(item.file_path),
-                    "other_file": str(seen_ids[item.id]),
-                    "message": (
-                        f"Duplicate ID: {item.id} in "
-                        f"{item.file_path} and {seen_ids[item.id]}"
-                    ),
+                    "id": dup_id,
+                    "file": str(other),
+                    "other_file": str(files[0]),
+                    "message": f"Duplicate ID: {dup_id} in {other} and {files[0]}",
                 }
             )
-        else:
-            seen_ids[item.id] = item.file_path
 
+    # the dependency graph over every board (#576)
+    for cycle in service.dependency_cycles():
+        path = " → ".join(cycle)
+        issues.append(
+            {
+                "type": "dependency_cycle",
+                "ids": cycle,
+                "message": f"Dependency cycle: {path}",
+            }
+        )
+    for item_id, target in service.dangling_dependencies():
+        issues.append(
+            {
+                "type": "dangling_dependency",
+                "id": item_id,
+                "target": target,
+                "message": f"{item_id} depends on {target}, which is on no board",
+            }
+        )
+
+    for item in items:
         # Check file name matches ID
         file_stem = item.file_path.stem  # e.g., "EXP-300-Some-Title"
         expected_prefix = item.id  # e.g., "EXP-300"
@@ -1571,6 +1687,16 @@ def validate(fix: bool, as_json: bool):
             console.print(f"[yellow]FILENAME MISMATCH:[/yellow] {safe(issue['id'])}")
             console.print(f"  File: {safe(issue['file'])}")
             console.print(f"  Expected prefix: {safe(issue['expected_prefix'])}")
+        elif issue["type"] == "dependency_cycle":
+            console.print(
+                f"[red]DEPENDENCY CYCLE:[/red] {safe(' → '.join(issue['ids']))}", soft_wrap=True
+            )
+        elif issue["type"] == "dangling_dependency":
+            console.print(
+                f"[yellow]DANGLING DEPENDENCY:[/yellow] {safe(issue['id'])} depends on "
+                f"{safe(issue['target'])}, which is on no board",
+                soft_wrap=True,
+            )
 
         console.print()
 

@@ -100,7 +100,6 @@ The unified graph materializes all frontmatter metadata as RDF triples:
 | `kb:numericId` | xsd:integer | Numeric part of ID for range queries |
 | `kb:dependsOn` | URI | Dependency link to another item |
 | `kb:related` | URI | Related item link |
-| `kb:blocks` | URI | Blocking relationship |
 | `kb:supersededBy` | URI | Supersession link |
 | `kb:description` | Literal | Full description text |
 | `kb:priorityRank` | xsd:integer | Captain's priority rank |
