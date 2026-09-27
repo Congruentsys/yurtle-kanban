@@ -229,7 +229,8 @@ class TestNonCyclicAnchorsControl:
             "depends_on",
             {"a": ["FEAT-9"], "b": ["FEAT-9"]},
         ),
-        "tags-list": ("tags: [&t [x], *t]\n", "tags", [["x"], ["x"]]),
+        # a nested entry in a list field reads as its YAML flow text (#675)
+        "tags-list": ("tags: [&t [x], *t]\n", "tags", ["[x]", "[x]"]),
     }
 
     @pytest.mark.parametrize("case", list(REUSED), ids=list(REUSED))
