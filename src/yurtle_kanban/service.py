@@ -4879,10 +4879,18 @@ class KanbanService:
         for match in re.finditer(r"(?m)^```yurtle$", content[start:]):
             offset = start + match.start()
             if offset >= span_end:
-                return None  # the span stops at (or before) the history: nothing swallowed
+                break  # the span stops at (or before) the history: nothing swallowed
             if self._HISTORY_OPEN_RE.match(content, offset):
                 inner = self._unclosed_fence_line(content[start:offset]) or 1
                 return content[:start].count("\n") + inner
+        # comments with no history yet: an unclosed fence above `## Comments`
+        # swallows them too (#727 review)
+        span = content[start:span_end]
+        opened = self._unclosed_fence_line(span)
+        if opened is not None:
+            below = "\n".join(span.split("\n")[opened:])
+            if any(self._COMMENTS_RE.match(line) for line in below.split("\n")):
+                return content[:start].count("\n") + opened
         return None
 
     def _replace_body(self, content: str, description: str) -> str:
@@ -4897,9 +4905,9 @@ class KanbanService:
             return content
         if (line := self.swallowed_fence_line(content)) is not None:
             raise ValueError(
-                f"The body has a code fence open on line {line} that is never closed: "
-                "close it by hand first. A body edit now would delete the status "
-                "history after it (#727)."
+                f"The body's code fence on line {line} runs over the status history or "
+                "comments after it: close that fence by hand first. A body edit now "
+                "would delete them (#727)."
             )
         h1 = self._h1_span(content)
         start = self._leading_knowledge_end(content)
