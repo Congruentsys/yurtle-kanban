@@ -967,10 +967,10 @@ class KanbanService:
         # Remove yurtle and turtle knowledge blocks
         content = re.sub(r"```(?:yurtle|turtle).*?```", "", content, flags=re.DOTALL)
 
-        # Remove the heading (title): only the first non-blank line, so a `# `
-        # line in a code block is kept (#583)
+        # Remove the heading (title): only a `# ` H1 on the first non-blank line,
+        # so a `# ` line in a code block or a leading `## Background` is kept (#583)
         lines = content.strip().split("\n")
-        if lines and lines[0].startswith("#"):
+        if lines and lines[0].startswith("# "):
             lines = lines[1:]
 
         description = "\n".join(lines).strip()
@@ -3874,10 +3874,34 @@ class KanbanService:
             pos = end + 1
         return -1
 
+    _KNOWLEDGE_OPEN_RE = re.compile(r"```(?:yurtle|turtle)")
+
+    def _leading_knowledge_end(self, content: str) -> int:
+        """Offset just past the last ```yurtle/```turtle block that opens the body
+        (blank lines between blocks allowed), else just past the frontmatter. These
+        are the blocks `_extract_description` discards before it looks for the H1
+        (#583); a block runs to the next ``` the way the parser's regex does."""
+        pos = end_of_blocks = self._body_start(content)
+        while pos < len(content):
+            eol = content.find("\n", pos)
+            end = len(content) if eol < 0 else eol
+            if not content[pos:end].strip():
+                pos = end + 1
+                continue
+            if not self._KNOWLEDGE_OPEN_RE.match(content, pos):
+                break
+            close = content.find("```", pos + 3)
+            if close < 0:
+                break  # unclosed: the parser keeps it, so it's body
+            eol = content.find("\n", close)
+            pos = end_of_blocks = len(content) if eol < 0 else eol + 1
+        return end_of_blocks
+
     def _h1_span(self, content: str) -> tuple[int, int] | None:
-        """The `# Title` line: the first non-blank line after the frontmatter, and
-        only when it is a level-1 heading (#583). Never a `# ` line inside code."""
-        pos = self._body_start(content)
+        """The `# Title` line: the first non-blank line after the frontmatter and any
+        leading knowledge blocks, and only when it is a level-1 heading (#583).
+        Never a `# ` line inside code."""
+        pos = self._leading_knowledge_end(content)
         while pos < len(content):
             eol = content.find("\n", pos)
             end = len(content) if eol < 0 else eol
@@ -3925,7 +3949,7 @@ class KanbanService:
             if comments and trimmed.endswith(comments):
                 description = trimmed[: -len(comments)]
         h1 = self._h1_span(content)
-        start = self._body_start(content)
+        start = self._leading_knowledge_end(content)
         if h1:
             start = h1[1] + 1 if h1[1] < len(content) else len(content)
         end = self._find_line_outside_fences(content, start, self._BODY_END_RE)
