@@ -704,7 +704,17 @@ class KanbanService:
     def _parse_file(self, file_path: Path) -> WorkItem | None:
         """Parse a markdown file for work item data."""
         try:
-            content = file_path.read_text()
+            with file_path.open(newline="") as f:
+                raw = f.read()
+            if "\r" in raw and "\n" not in raw:
+                # old Mac line endings: skipped, as the base id scan skips them (#661)
+                if raw.startswith("---") and not file_path.name.startswith("_TEMPLATE"):
+                    self.parse_warnings.append(
+                        (file_path, "old Mac line endings (CR only): convert to LF")
+                    )
+                return None
+            # universal newlines, as read_text() gives
+            content = raw.replace("\r\n", "\n").replace("\r", "\n")
 
             # Parse frontmatter
             frontmatter = self._parse_frontmatter(content)
@@ -2081,10 +2091,18 @@ class KanbanService:
         return match.group(1) if match else "main"
 
     def _fetch_default(self, branch: str) -> subprocess.CompletedProcess[str]:
-        """Fetch exactly `origin/<branch>` (#585)."""
-        return self._git_run(
+        """Fetch exactly `origin/<branch>` (#585), then record it locally as
+        `origin/HEAD`, as `git clone` does, so the offline `_fetched_default` finds
+        it (#661)."""
+        fetch = self._git_run(
             "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         )
+        if fetch.returncode == 0:
+            ref = f"refs/remotes/origin/{branch}"
+            known = self._git_run("symbolic-ref", "-q", "refs/remotes/origin/HEAD")
+            if known.returncode != 0 or known.stdout.strip() != ref:
+                self._git_run("symbolic-ref", "refs/remotes/origin/HEAD", ref)
+        return fetch
 
     def _race_to_branch(
         self,
@@ -2213,6 +2231,23 @@ class KanbanService:
             return None
         return match.group(1).removesuffix("-"), int(match.group(2))
 
+    @staticmethod
+    def _id_key(item_id: str) -> tuple[str, int] | None:
+        """`item_id` as (the text before its trailing number, separator included,
+        number), for comparing ids: `EXP-3` and `EXP-003` are (`EXP-`, 3), `EXP3`
+        is (`EXP`, 3), so they differ (#661). None when it ends in no number."""
+        match = re.fullmatch(r"(.*?)(\d+)", item_id)
+        return None if match is None else (match.group(1), int(match.group(2)))
+
+    @staticmethod
+    def _stem_holds(stem: str, key: tuple[str, int]) -> bool:
+        """Whether a filename stem starts with the id `key` names (`_id_key`):
+        its text, then its number, then no more of an id (`EXP-003-Title` holds
+        (`EXP-`, 3); `H1.2-Title` does not hold (`H`, 1)) (#661)."""
+        text, num = key
+        match = re.match(r"(\d+)(?![\d.])", stem[len(text):]) if stem.startswith(text) else None
+        return match is not None and int(match.group(1)) == num
+
     @classmethod
     def _stem_id(cls, stem: str, prefix: str) -> int | None:
         """The id number a filename stem starts with in `prefix`'s space
@@ -2224,18 +2259,19 @@ class KanbanService:
     def _holder_at(self, rev: str, item_id: str) -> str | None:
         """The file under the work paths at commit `rev` that holds `item_id`, by
         its filename or its frontmatter `id:`, or None (#634). Ids are the same when
-        their id space and number are: `EXP-3` is `EXP-003` (#641)."""
+        the text before their number, separator included, and the number are:
+        `EXP-3` is `EXP-003` (#641), but `EXP3` is not (#661)."""
         names, ids = self._ids_at(rev)
-        key = self._id_space(item_id)
+        key = self._id_key(item_id)
         for name in names:
             stem = Path(name).stem
             if stem == item_id or stem.startswith(item_id + "-") or (
-                key is not None and self._stem_id(stem, key[0]) == key[1]
+                key is not None and self._stem_holds(stem, key)
             ):
                 return name
         return next(
             (path for path, found in ids
-             if found == item_id or (key is not None and self._id_space(found) == key)),
+             if found == item_id or (key is not None and self._id_key(found) == key)),
             None,
         )
 
