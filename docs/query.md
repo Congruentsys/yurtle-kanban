@@ -106,6 +106,8 @@ The unified graph materializes all frontmatter metadata as RDF triples:
 | `kb:priorityRank` | xsd:integer | Captain's priority rank |
 | `kb:computeRequirement` | Literal | Compute requirement (e.g., "dgx-training") |
 
+Reach comments through their item (`?item kb:comment ?c . ?c kb:text ?t`): a fenced block can write free-floating `kb:author`/`kb:text` nodes of its own, and only the `kb:comment` link is guaranteed to come from the item's comments section.
+
 Items are typed as `kb:Expedition`, `kb:Chore`, `kb:Voyage`, `kb:Feature`, etc.
 
 Item URIs follow the pattern `item:EXP-1090` (namespace `https://yurtle.dev/kanban/item/`).

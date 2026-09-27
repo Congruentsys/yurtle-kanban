@@ -168,12 +168,50 @@ class UnifiedGraph:
             phantom = URIRef(
                 self_iri(item.graph) or Path.cwd().as_uri() + "/"
             )
-            for s, p, o in item.graph:
-                s = item_uri if s == phantom else s
-                o = item_uri if o == phantom else o
-                if p in _FRONTMATTER_OWNED and not isinstance(s, BNode):
+            triples = [
+                (item_uri if s == phantom else s, p, item_uri if o == phantom else o)
+                for s, p, o in item.graph
+            ]
+            dropped = [t for t in triples if t[1] in _FRONTMATTER_OWNED
+                       and not isinstance(t[0], BNode)]
+            orphans = self._orphan_blank_nodes(triples, dropped)
+            skip = set(dropped)
+            for s, p, o in triples:
+                if (s, p, o) in skip or s in orphans:
                     continue
                 self._graph.add((s, p, o))
+
+    @staticmethod
+    def _orphan_blank_nodes(
+        triples: list[tuple[Any, Any, Any]], dropped: list[tuple[Any, Any, Any]]
+    ) -> set[BNode]:
+        """Blank nodes reachable only through dropped triples (a forged
+        `kb:comment`'s author/text, nested nodes, self-loops and cycles included):
+        skipped too, so they don't merge as orphans. A blank node that a kept triple
+        from outside that set points at stays, with everything under it (#726)."""
+        children: dict[Any, list[BNode]] = {}
+        for s, _, o in triples:
+            if isinstance(o, BNode):
+                children.setdefault(s, []).append(o)
+
+        def closure(seeds: list[BNode]) -> set[BNode]:
+            seen: set[BNode] = set()
+            todo = list(seeds)
+            while todo:
+                node = todo.pop()
+                if node not in seen:
+                    seen.add(node)
+                    todo.extend(children.get(node, ()))
+            return seen
+
+        dropped_set = set(dropped)
+        cand = closure([o for _, _, o in dropped if isinstance(o, BNode)])
+        safe = closure([
+            o for t in triples
+            if t not in dropped_set and t[0] not in cand
+            for o in (t[2],) if isinstance(o, BNode)
+        ])
+        return cand - safe
 
     def add_items(self, items: list[WorkItem]) -> None:
         """Add multiple work items."""
