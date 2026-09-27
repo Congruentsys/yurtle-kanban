@@ -4923,8 +4923,8 @@ class KanbanService:
         """The file line of a body code fence that runs over what follows the body,
         else None (#727). `content` is LF text. Two cases count:
 
-        - the canonical status-history opener lies inside `body_span` (only an
-          unclosed fence lets the span run past it);
+        - the canonical status-history opener lies inside `body_span` (normally
+          only an unclosed fence lets the span run past it);
         - the span holds a never-closed fence with a real `## Comments` line after
           it (comments with no history yet).
 
@@ -4952,6 +4952,20 @@ class KanbanService:
                 return content[:start].count("\n") + opened
         return None
 
+    def swallowed_what(self, content: str, line: int) -> str:
+        """What follows a swallowing fence on file line `line` (#743): 'the status
+        history and comments', 'the status history' or 'the comments'. A quoted
+        `## Comments` counts as comments: the two can't be told apart (#736)."""
+        after = "\n".join(content.split("\n")[line:])
+        history = any(
+            self._HISTORY_OPEN_RE.match(after, m.start())
+            for m in re.finditer(r"(?m)^```yurtle$", after)
+        )
+        comments = any(self._COMMENTS_RE.match(ln) for ln in after.split("\n"))
+        if history and comments:
+            return "the status history and comments"
+        return "the status history" if history else "the comments"
+
     def _replace_body(self, content: str, description: str) -> str:
         """Replace the part of the body span (`body_span`) after the H1, or after the
         frontmatter and any leading knowledge blocks when there is no H1 (#583, #576).
@@ -4964,9 +4978,9 @@ class KanbanService:
             return content
         if (line := self.swallowed_fence_line(content)) is not None:
             raise ValueError(
-                f"The body's code fence on line {line} runs over the status history or "
-                "comments after it: close that fence by hand first. A body edit now "
-                "would delete them (#727)."
+                f"The body's code fence on line {line} runs over "
+                f"{self.swallowed_what(content, line)} after it: close that fence by "
+                "hand first. A body edit now would delete them (#727, #743)."
             )
         h1 = self._h1_span(content)
         start = self._leading_knowledge_end(content)

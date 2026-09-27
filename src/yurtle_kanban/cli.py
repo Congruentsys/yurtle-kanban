@@ -1658,8 +1658,9 @@ def validate(fix: bool, as_json: bool):
                     "type": "unclosed_fence",
                     "id": item.id,
                     "line": line,
+                    "swallows": (what := service.swallowed_what(text, line)),
                     "message": f"{item.id}: the body's code fence on line {line} is never "
-                    "closed (it swallows the status history)",
+                    f"closed (it swallows {what})",
                 }
             )
 
@@ -1715,7 +1716,8 @@ def validate(fix: bool, as_json: bool):
         elif issue["type"] == "unclosed_fence":
             console.print(
                 f"[yellow]UNCLOSED FENCE:[/yellow] {safe(issue['id'])}: the body's code "
-                f"fence on line {safe(str(issue['line']))} is never closed",
+                f"fence on line {safe(str(issue['line']))} is never closed (it swallows "
+                f"{safe(issue['swallows'])})",
                 soft_wrap=True,
             )
         elif issue["type"] == "dangling_dependency":
