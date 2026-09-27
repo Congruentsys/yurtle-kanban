@@ -7,6 +7,7 @@ Multi-board is opt-in: detected when config has 'version: 2.0' and 'boards' key.
 
 import copy
 import os
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
@@ -35,11 +36,24 @@ CONFIG_VERSION_SINGLE = "1.0"
 CONFIG_VERSION_MULTI = "2.0"
 
 
+_PROJECT_NAME = re.compile(r"""^\s*name\s*=\s*["']yurtle-kanban["']\s*$""", re.MULTILINE)
+
+
+def _is_own_checkout(root: Path) -> bool:
+    """True when `root` holds yurtle-kanban's own pyproject.toml: a plain-text
+    match, so reading it needs no TOML parser on Python 3.10 (#612)."""
+    try:
+        return bool(_PROJECT_NAME.search((root / "pyproject.toml").read_text()))
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
     """Where themes are looked up, first match wins: the repo's .kanban/themes/,
     the cwd's, the source tree when running from a checkout, then the pip-installed
     share directory. A checkout's own themes/ beats the share copy, which an
-    editable install makes once and never refreshes (#592)."""
+    editable install makes once and never refreshes (#592). "A checkout" means a
+    themes/ with yurtle-kanban's own pyproject.toml beside it (#602, #612)."""
     import sys
 
     dirs = []
@@ -60,7 +74,7 @@ def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
     seen: set[Path] = set()
     for d in sources:
         real = d.resolve()
-        if real not in seen and d.is_dir() and (d.parent / "pyproject.toml").is_file():
+        if real not in seen and d.is_dir() and _is_own_checkout(d.parent):
             seen.add(real)
             dirs.append(d)
     dirs.append(Path(sys.prefix) / "share" / "yurtle-kanban" / "themes")
