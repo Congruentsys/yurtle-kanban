@@ -2511,22 +2511,19 @@ class KanbanService:
         """Get ID prefix for item type: in multi-board mode from the theme of the
         board a new item lands on (#665), or when that theme doesn't define the type,
         the first board (config order) whose theme does (#688); else the configured
-        theme."""
+        theme. An empty definition (`task: {}` or `task:`) doesn't define the type,
+        in either mode, as `_landing_board` reads it (#700)."""
         if self.config.is_multi_board:
             landing = self._landing_board(item_type)
             boards = [landing] if landing is not None else []
             boards += [b for b in self.config.boards if b is not landing]
-            for board in boards:
-                type_def = self._board_type_def(board, item_type)
-                if type_def:
-                    return type_def.get("id_prefix", item_type.value[:4].upper())
-            theme = None
+            defs = (self._board_type_def(board, item_type) for board in boards)
         else:
-            theme = self.config.get_theme()
-        if theme and "item_types" in theme:
-            for type_id, type_def in theme["item_types"].items():
-                if type_id == item_type.value:
-                    return type_def.get("id_prefix", item_type.value[:4].upper())
+            theme = self.config.get_theme() or {}
+            defs = iter([(theme.get("item_types") or {}).get(item_type.value) or {}])
+        type_def = next((d for d in defs if d), None)
+        if type_def:
+            return type_def.get("id_prefix", item_type.value[:4].upper())
         # Default prefixes (software + nautical + HDD themes)
         prefixes = {
             # Software theme
