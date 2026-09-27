@@ -13,8 +13,8 @@ fall through with one warning, but:
 
 Decided behaviour ([steer] bucket 2, refined: a theme counts as missing only when
 it is EMPTY after the non-mapping sections — ``theme``, ``item_types``,
-``columns``, ``transitions``, ``id_formats``, ``status_mappings`` — are dropped;
-#611 removed the dead ``status_aliases`` from that list):
+``columns``, ``transitions``, ``status_mappings`` — are dropped; #611 removed
+the dead ``status_aliases`` and ``id_formats`` from that list):
 
 1. A repo-local ``software.yaml`` that is ``{}`` or an empty file falls through to
    the built-in with one warning naming the file; for the empty file it says
