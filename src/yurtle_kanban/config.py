@@ -95,8 +95,7 @@ def _available_themes(repo_root: Path | None = None) -> list[str]:
 
 # theme sections every consumer walks as a mapping (`.items()`, `.get()`) (#351)
 _THEME_SECTIONS = (
-    "theme", "item_types", "columns", "transitions", "id_formats", "status_mappings",
-    "status_aliases",
+    "theme", "item_types", "columns", "transitions", "status_mappings",
 )
 
 

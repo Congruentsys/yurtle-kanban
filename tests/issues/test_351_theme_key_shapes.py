@@ -14,10 +14,10 @@ YAML list/scalar count as missing; a theme that IS a mapping but has, say,
 Decided behaviour (bucket 2, #338 precedent):
 
 1. At load, ``_load_builtin_theme`` drops any of the section keys ``columns``,
-   ``item_types``, ``status_mappings``, ``transitions``, ``id_formats``,
-   ``status_aliases``, ``theme`` whose value is not a mapping (list, str, int,
-   bool), with ONE warning naming the file and the key; the rest of the theme
-   loads.
+   ``item_types``, ``status_mappings``, ``transitions``, ``theme`` (#611 removed
+   the dead ``status_aliases`` and ``id_formats``) whose value is not a mapping
+   (list, str, int, bool), with ONE warning naming the file and the key; the rest
+   of the theme loads.
 2. Consumers then behave as for a theme without that section (no traceback).
 3. Controls: a well-formed custom theme loads unchanged, a theme missing a section
    behaves as today.
@@ -53,8 +53,6 @@ SECTION_KEYS = [
     "item_types",
     "status_mappings",
     "transitions",
-    "id_formats",
-    "status_aliases",
     "theme",
 ]
 BAD_SHAPES: dict[str, Any] = {
@@ -76,8 +74,6 @@ GOOD_THEME: dict[str, Any] = {
     },
     "status_mappings": {"todo": "backlog", "doing": "in_progress", "shipped": "done"},
     "transitions": {"todo": ["doing"], "doing": ["shipped", "todo"], "shipped": []},
-    "id_formats": {"widget": "WID-{n:03d}"},
-    "status_aliases": {"wip": "doing"},
 }
 
 SINGLE_CFG = f"kanban:\n  theme: {THEME}\n  paths:\n    root: work/\n"
