@@ -199,6 +199,28 @@ def _drop_folded_status_keys(data: dict[str, Any], where: str) -> None:
             )
 
 
+def _drop_canonical_trap_keys(data: dict[str, Any], where: str) -> None:
+    """Drop a `status_mappings` key that is the canonical name (or an alias) of a
+    DIFFERENT status than its target (`done: review`): canonical names win for
+    `move`, scan and transitions (#587, #683), so the key could never mean its
+    target, yet `move` would write it. One warning each, naming `where` (#701)."""
+    entries = data.get("status_mappings")
+    if not isinstance(entries, dict):
+        return
+    for key, target in list(entries.items()):
+        try:
+            says = WorkItemStatus.from_string(str(key))
+            means = WorkItemStatus.from_string(str(target))
+        except ValueError:
+            continue
+        if says != means:
+            entries.pop(key)
+            logger.warning(
+                f"{where}: `status_mappings.{key}` names the {says.value} status, so "
+                f"it can't mean {means.value}; ignored"
+            )
+
+
 def _status_names(theme: dict[str, Any] | None) -> dict[str, WorkItemStatus]:
     """Every status name a theme's items answer to → its status, keyed folded: the
     six canonical names, then the theme's own `status_mappings` names (#587). `move`
@@ -253,6 +275,7 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
         data["transitions"] = _clean_transitions(data["transitions"], f"theme file {theme_path}")
     _clean_str_mapping(data, "status_mappings", f"theme file {theme_path}")  # (#613)
     _drop_folded_status_keys(data, f"theme file {theme_path}")  # (#615)
+    _drop_canonical_trap_keys(data, f"theme file {theme_path}")  # (#701)
     _warn_unresolvable_transition_names(data, f"theme file {theme_path}")  # (#683)
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
