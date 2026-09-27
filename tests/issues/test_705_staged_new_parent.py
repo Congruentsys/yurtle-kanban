@@ -116,15 +116,17 @@ def test_missing_parent_is_said_once(world, monkeypatch, caplog) -> None:  # noq
 
     logging.getLogger("yurtle-kanban").addHandler(caplog.handler)
     caplog.set_level(logging.WARNING)
-    seed_on_origin(world, monkeypatch, HYP)
-    drop_remote(world)
-    elsewhere = "notes/PAPER-130-A-paper.md"
-    (world.a / "notes").mkdir(exist_ok=True)
-    git(world.a, "mv", PAPER, elsewhere)
-    git(world.a, "commit", "-q", "-m", "move the paper off the board")
-    result = invoke(world, monkeypatch, HYP.argv)
-    out = flat(result)
-    assert out.lower().count("not found") == 1, out
-    logging.getLogger("yurtle-kanban").removeHandler(caplog.handler)
+    try:
+        seed_on_origin(world, monkeypatch, HYP)
+        drop_remote(world)
+        elsewhere = "notes/PAPER-130-A-paper.md"
+        (world.a / "notes").mkdir(exist_ok=True)
+        git(world.a, "mv", PAPER, elsewhere)
+        git(world.a, "commit", "-q", "-m", "move the paper off the board")
+        result = invoke(world, monkeypatch, HYP.argv)
+        out = flat(result)
+        assert out.lower().count("not found") == 1, out
+    finally:
+        logging.getLogger("yurtle-kanban").removeHandler(caplog.handler)
     warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert not [w for w in warned if "not found" in w], warned

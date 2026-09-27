@@ -2821,6 +2821,22 @@ class KanbanService:
             return "untracked"
         return "changed"
 
+    def parent_link_state(self, parent_id: str, child_type: str, child_id: str) -> str:
+        """Why no inverse reference would be written for `child_id` on `parent_id`:
+        'missing' (on no board), 'no-relation' (the child type has none),
+        'no-block' (the parent has no turtle block), 'linked' (already there), or
+        'addable' (#724)."""
+        parent = self._current_item(parent_id)
+        if parent is None or not parent.file_path.exists():
+            return "missing"
+        if child_type not in self._INVERSE_RELATIONS:
+            return "no-relation"
+        content = parent.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        if not self._TURTLE_BLOCK_RE.search(content):
+            return "no-block"
+        text = self._linked_parent_text(content, parent_id, child_type, child_id)
+        return "linked" if text is None else "addable"
+
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str
     ) -> str | None:
@@ -2834,7 +2850,8 @@ class KanbanService:
 
         match = self._TURTLE_BLOCK_RE.search(content)
         if not match:
-            logger.warning(f"No turtle block in {parent_id} — skipping inverse reference")
+            # the CLI says it (parent_link_state), no warning as well (#724)
+            logger.debug(f"No turtle block in {parent_id} — skipping inverse reference")
             return None
 
         # Build rdflib URIs for the predicate and child object

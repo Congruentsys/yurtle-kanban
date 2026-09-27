@@ -84,7 +84,7 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
         if service.update_parent_turtle_block(parent_id, child_type, child_id):
             _print_parent_linked(parent_id)
         else:
-            _print_parent_missing(service, parent_id)
+            _print_parent_missing(service, parent_id, child_type, child_id)
     except Exception as e:
         console.print(
             f"  [yellow]Warning: could not update {safe(parent_id)}: "
@@ -92,16 +92,21 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
         )
 
 
-def _print_parent_missing(service, parent_id: str) -> None:
-    """Say why no link was written: the parent is on no board (moved out of every
-    board path, say) (#718), or it already has the link (#724)."""
-    if service.get_item(parent_id) is None:
+def _print_parent_missing(service, parent_id: str, child_type: str, child_id: str) -> None:
+    """Say why no link was written, from what the parent file shows (#718, #724)."""
+    state = service.parent_link_state(parent_id, child_type, child_id)
+    if state == "missing":
         console.print(
             f"  [yellow]{safe(parent_id)} is not on any board: "
             "no inverse reference written (not found)[/yellow]"
         )
-    else:  # on a board, but nothing to add: already linked, or no turtle block (#724)
-        console.print(f"  [dim]{safe(parent_id)} unchanged: it already has the link[/dim]")
+    elif state == "no-block":
+        console.print(
+            f"  [yellow]{safe(parent_id)} has no turtle block: "
+            "no inverse reference written[/yellow]"
+        )
+    elif state == "linked":
+        console.print(f"  [dim]{safe(parent_id)} already links to {safe(child_id)}[/dim]")
 
 
 def _print_parent_linked(parent_id: str, result: dict | None = None) -> None:
@@ -796,7 +801,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             if result.get("parent_linked"):
                 _print_parent_linked(str(source_idea), result)
             elif source_idea:
-                _print_parent_missing(service, str(source_idea))
+                _print_parent_missing(service, str(source_idea), "literature", str(result["id"]))
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1055,7 +1060,9 @@ def hypothesis_create(
             if result.get("parent_linked"):
                 _print_parent_linked(f"PAPER-{paper_num}", result)
             elif paper_num is not None:
-                _print_parent_missing(service, f"PAPER-{paper_num}")
+                _print_parent_missing(
+                    service, f"PAPER-{paper_num}", "hypothesis", str(result["id"])
+                )
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1190,7 +1197,7 @@ def experiment_create(
             if result.get("parent_linked"):
                 _print_parent_linked(str(hyp_id), result)
             elif hyp_id:
-                _print_parent_missing(service, str(hyp_id))
+                _print_parent_missing(service, str(hyp_id), "experiment", str(result["id"]))
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
