@@ -130,3 +130,48 @@ def test_end_to_end_comment_is_queryable(tmp_path, monkeypatch):
     )
     assert out.exit_code == 0, out.output
     assert "alice" in out.output, out.output
+
+
+def _block_item(turtle: str) -> WorkItem:
+    from rdflib import Graph
+
+    b = WorkItem(
+        id="FEAT-002", title="B", item_type=WorkItemType.FEATURE,
+        status=WorkItemStatus.BACKLOG, file_path=Path("FEAT-002.md"),
+    )
+    b.graph = Graph().parse(
+        data=(
+            "@prefix kb: <https://yurtle.dev/kanban/> .\n"
+            "@prefix item: <https://yurtle.dev/kanban/item/> .\n" + turtle
+        ),
+        format="turtle",
+        publicID="https://yurtle.dev/kanban/item/FEAT-002",
+    )
+    return b
+
+
+def test_a_nested_node_a_kept_triple_points_at_survives():
+    """#726 review: a nested blank node under a forged comment that a KEPT triple
+    also references keeps its own facts."""
+    b = _block_item(
+        'item:FEAT-001 kb:comment [ kb:text "forged2" ; kb:meta _:n ] .\n'
+        '_:n kb:note "keepme" .\n'
+        'item:FEAT-002 kb:note _:n .\n'
+    )
+    ug = UnifiedGraph()
+    ug.add_items([_item(), b])
+    notes = {r["n"] for r in ug.sparql("SELECT ?n WHERE { ?b kb:note ?n }")}
+    assert "keepme" in notes, notes
+    texts = {r["t"] for r in ug.sparql("SELECT ?t WHERE { ?c kb:text ?t }")}
+    assert "forged2" not in texts, texts
+
+
+def test_self_referencing_and_cyclic_forged_nodes_are_skipped():
+    b = _block_item(
+        'item:FEAT-001 kb:comment _:l . _:l kb:text "loop" ; kb:self _:l .\n'
+        'item:FEAT-001 kb:comment _:x . _:x kb:text "cycle" ; kb:next _:y . _:y kb:next _:x .\n'
+    )
+    ug = UnifiedGraph()
+    ug.add_items([_item(), b])
+    texts = {r["t"] for r in ug.sparql("SELECT ?t WHERE { ?c kb:text ?t }")}
+    assert not {"loop", "cycle"} & texts, texts
