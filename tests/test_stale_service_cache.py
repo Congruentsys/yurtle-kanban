@@ -241,6 +241,6 @@ def test_service_write_after_git_checkout_judges_the_file(repo):
     _git(repo, "checkout", "HEAD~1", "--", rel)  # the initial commit: backlog
     assert "status: backlog" in _item_file(repo).read_text()
 
-    with pytest.raises(ValueError, match="(?i)invalid transition"):
+    with pytest.raises(ValueError, match="(?i)illegal move"):
         svc.move_item(ITEM, WorkItemStatus.from_string("in_progress"))
     assert "status: backlog" in _item_file(repo).read_text()
