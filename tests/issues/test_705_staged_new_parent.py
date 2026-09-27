@@ -51,3 +51,29 @@ def test_intent_to_add_parent_is_not_committed(world, monkeypatch) -> None:  # n
     out = flat(result)
     assert result.exit_code != 0, out
     assert "not committed" in out, out
+
+
+def test_staged_rename_to_a_quoted_path_is_uncommitted_edits(world, monkeypatch) -> None:  # noqa: F811
+    """#718: git C-quotes non-ASCII paths in --name-status; -z keeps them raw."""
+    seed_on_origin(world, monkeypatch, HYP)
+    drop_remote(world)
+    moved = PAPER.replace(".md", "-café.md")
+    git(world.a, "mv", PAPER, moved)
+    result = invoke(world, monkeypatch, HYP.argv)
+    out = flat(result)
+    assert result.exit_code != 0, out
+    assert "uncommitted edits" in out, out
+
+
+def test_parent_moved_off_the_board_says_it_was_skipped(world, monkeypatch) -> None:  # noqa: F811
+    """#718: a parent moved out of every board path is not found; the create says
+    so instead of silently leaving it unlinked."""
+    seed_on_origin(world, monkeypatch, HYP)
+    drop_remote(world)
+    elsewhere = "notes/PAPER-130-A-paper.md"
+    (world.a / "notes").mkdir(exist_ok=True)
+    git(world.a, "mv", PAPER, elsewhere)
+    git(world.a, "commit", "-q", "-m", "move the paper off the board")
+    result = invoke(world, monkeypatch, HYP.argv)
+    out = flat(result)
+    assert "PAPER-130" in out and "not found" in out.lower(), out
