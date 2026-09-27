@@ -3409,13 +3409,21 @@ class KanbanService:
                 return layout
         return before
 
-    def _add_or_update_frontmatter_field(self, content: str, field: str, value: str) -> str:
+    def _add_or_update_frontmatter_field(
+        self, content: str, field: str, value: str, items: list[str] | None = None,
+    ) -> str:
         """Add or update a field in the frontmatter.
 
         If the field exists, update it. If not, insert it before the closing ---.
         An existing value is replaced whole: its first line plus any continuation
         lines (indented lines, or `- item` lines, which YAML allows at column 0
         under a key), so a block list or folded value leaves nothing behind (#105).
+        The key may be quoted (`'title':`, `"priority":`); it is matched and kept
+        as written, so an edit never appends a duplicate key (#596).
+
+        `items`, for a list field: when the existing value is a block list, the
+        list is rewritten as a block list with the same `- ` indentation instead
+        of as `value` (the flow form); a flow list or a new key gets `value` (#596).
         """
         match = self._FRONTMATTER_RE.match(content)
         if not match:
@@ -3426,15 +3434,25 @@ class KanbanService:
         # when a continuation line follows it (a paragraph break inside a `|`
         # block scalar, a comment inside a block list, #128); blank lines and
         # comments before the next key or the closing `---` are kept.
+        key = re.escape(field)
         pattern = (
-            rf"^{re.escape(field)}:.*"
-            r"(?:(?:\n[ \t]*|\n#.*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*$"
+            rf"^(?P<key>{key}|'{key}'|\"{key}\")[ \t]*:(?P<head>.*)"
+            r"(?P<rest>(?:(?:\n[ \t]*|\n#.*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*)$"
         )
+
+        def replace(m: re.Match[str]) -> str:
+            if items:
+                # a block list (`key:` then `- item` lines) stays a block list
+                head = m.group("head").split(" #", 1)[0].strip()
+                dash = re.search(r"^([ \t]*-[ \t]+)\S", m.group("rest"), re.MULTILINE)
+                if not head and dash:
+                    lines = "".join(f"\n{dash.group(1)}{yaml_scalar(v)}" for v in items)
+                    return f"{m.group('key')}:{lines}"
+            return f"{m.group('key')}: {value}"
+
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
-            frontmatter = re.sub(
-                pattern, lambda _: f"{field}: {value}", frontmatter, flags=re.MULTILINE,
-            )
+            frontmatter = re.sub(pattern, replace, frontmatter, flags=re.MULTILINE)
         else:
             # Field doesn't exist — append after the last key, keeping the blank
             # lines before the closing `---` where they are (#188). Only whole blank
@@ -3814,7 +3832,9 @@ class KanbanService:
                 changes.append("description")
 
         if tags is not None and tags != item.tags:
-            content = self._add_or_update_frontmatter_field(content, "tags", yaml_flow_list(tags))
+            content = self._add_or_update_frontmatter_field(
+                content, "tags", yaml_flow_list(tags), items=tags
+            )
             item.tags = tags
             changes.append("tags")
 
