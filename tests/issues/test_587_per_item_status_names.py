@@ -353,3 +353,128 @@ def test_case_and_whitespace_refused(
 ) -> None:
     item_id = _single(buf, theme)
     _assert_refused(repo, buf, item_id, name, theme)
+
+
+# ---------------------------------------------------------------------------
+# 5. Round 2 (review of PR #600): a custom theme whose `status_mappings` keys
+#    contain `-`, a space and capitals. The input is folded (lower-case,
+#    `-`/space -> `_`), so the keys must be folded the same way, and every name
+#    the refusal lists must be one `move` accepts.
+# ---------------------------------------------------------------------------
+
+CUSTOM_MAPPINGS: dict[str, str] = {
+    "on-hold": "blocked",
+    "In Review": "review",
+    "doing": "in_progress",
+}
+
+# typed name -> (native name written to the file, canonical status)
+CUSTOM_ACCEPT: dict[str, tuple[str, str]] = {
+    "on-hold": ("on-hold", "blocked"),
+    "On_Hold": ("on-hold", "blocked"),
+    "In Review": ("In Review", "review"),
+    "in_review": ("In Review", "review"),
+    "doing": ("doing", "in_progress"),
+}
+
+
+def _fold(name: str) -> str:
+    return name.lower().replace("-", "_").replace(" ", "_")
+
+
+def _write_custom_theme(repo: Path) -> None:
+    """`.kanban/themes/custom.yaml`: the software theme plus CUSTOM_MAPPINGS."""
+    theme = yaml.safe_load((THEMES_DIR / "software.yaml").read_text())
+    theme["theme"]["name"] = "custom"
+    theme["status_mappings"] = dict(CUSTOM_MAPPINGS)
+    themes = repo / ".kanban" / "themes"
+    themes.mkdir(parents=True, exist_ok=True)
+    (themes / "custom.yaml").write_text(yaml.safe_dump(theme, sort_keys=False))
+    _clear_theme_cache()
+
+
+def _custom_item(repo: Path, buf: io.StringIO, layout: str) -> str:
+    """A `feature` on a custom-theme board: the only board (single), or a `work`
+    board beside the nautical default (multi)."""
+    _write_custom_theme(repo)
+    if layout == "single":
+        _ok(buf, ["init", "--theme", "custom"])
+    else:
+        _ok(buf, ["init", "--theme", "nautical"])
+        _ok(buf, ["board-add", "work", "--preset", "custom", "--path", "work/"])
+        _clear_theme_cache()
+    return _create(buf, "software")
+
+
+def _file_status(repo: Path, item_id: str) -> str:
+    front = _item_file(repo, item_id).read_text().split("---", 2)[1]
+    return str(yaml.safe_load(front)["status"])
+
+
+def _listed_names(text: str) -> list[str]:
+    """The names a refusal lists: the comma-separated list after the colon on the
+    line that names the canonical statuses."""
+    line = next(
+        (ln for ln in text.splitlines() if "backlog" in ln and "in_progress" in ln), None
+    )
+    assert line is not None, f"refusal lists no status names:\n{text}"
+    return [n.strip() for n in line.rsplit(":", 1)[-1].split(",") if n.strip()]
+
+
+LAYOUTS = ("single", "multi")
+CUSTOM_CASES = [(lay, n) for lay in LAYOUTS for n in CUSTOM_ACCEPT]
+
+
+@pytest.mark.parametrize(
+    ("layout", "name"), CUSTOM_CASES, ids=[f"{lay}-{n!r}" for lay, n in CUSTOM_CASES]
+)
+def test_custom_theme_separator_names_accepted(
+    repo: Path, buf: io.StringIO, layout: str, name: str
+) -> None:
+    item_id = _custom_item(repo, buf, layout)
+    native, canonical = CUSTOM_ACCEPT[name]
+    result, text = _move(buf, item_id, name)
+    assert result.exit_code == 0, f"`move {item_id} {name!r}` refused:\n{text}"
+    assert _file_status(repo, item_id) == native  # the theme's own name is written
+    assert _status(buf, item_id) == canonical
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_custom_theme_refusal_lists_only_names_move_accepts(
+    repo: Path, buf: io.StringIO, layout: str
+) -> None:
+    item_id = _custom_item(repo, buf, layout)
+    path = _item_file(repo, item_id)
+    before = path.read_bytes()
+    result, text = _move(buf, item_id, "no-such-status")
+    assert result.exit_code != 0, text
+    assert path.read_bytes() == before
+
+    listed = _listed_names(text)
+    # every custom native name and every canonical name is offered, in some spelling
+    offered = {_fold(n) for n in listed}
+    missing = sorted(
+        n for n in [*CUSTOM_MAPPINGS, *CANONICAL] if _fold(n) not in offered
+    )
+    assert not missing, f"refusal doesn't offer {missing}: {listed}"
+    # and each offered name, fed back to `move`, is accepted
+    refused = []
+    for name in listed:
+        res, out = _move(buf, item_id, name)
+        if res.exit_code != 0:
+            refused.append(name)
+    assert not refused, f"refusal lists {refused}, which `move` then refuses; listed {listed}"
+
+
+def test_multiboard_custom_names_refused_for_nautical_item(
+    repo: Path, buf: io.StringIO
+) -> None:
+    """The custom board's names stay on the custom board."""
+    _custom_item(repo, buf, "multi")
+    exp_id = _create(buf, "nautical")
+    for name in ("doing", "on-hold", "In Review"):
+        path = _item_file(repo, exp_id)
+        before = path.read_bytes()
+        result, text = _move(buf, exp_id, name)
+        assert result.exit_code != 0, f"`move {exp_id} {name!r}` accepted:\n{text}"
+        assert path.read_bytes() == before
