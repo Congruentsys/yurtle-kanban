@@ -226,10 +226,7 @@ def test_name_tables_match_theme_files() -> None:
     hdd = yaml.safe_load((THEMES_DIR / "hdd.yaml").read_text())
     assert hdd["status_mappings"] == NATIVE["hdd"]
     spec = yaml.safe_load((THEMES_DIR / "spec.yaml").read_text())
-    names = spec.get("status_mappings") or {
-        v: k for k, v in (spec.get("status_aliases") or {}).items()
-    }
-    assert names == NATIVE["spec"]
+    assert spec["status_mappings"] == NATIVE["spec"]
     for theme in ("software", "nautical"):
         data = yaml.safe_load((THEMES_DIR / f"{theme}.yaml").read_text())
         assert not data.get("status_mappings"), theme
