@@ -457,3 +457,130 @@ def test_description_with_fenced_comments_keeps_the_real_comments(
     for gone in (b"Intro.", b"not real", b"Tail para."):
         assert gone not in new, f"{gone!r} left behind:\n{new.decode()}"
     assert b"New desc." in new
+
+
+# ---------------------------------------------------------------------------
+# round 3 (round-2 review of PR #591)
+# ---------------------------------------------------------------------------
+
+KNOWLEDGE = {
+    "turtle": '```turtle\n@prefix ex: <http://example.org/> .\n<> ex:note "kept" .\n```\n',
+    "yurtle": '```yurtle\n@prefix kb: <https://yurtle.dev/kanban/> .\n<> kb:note "kept" .\n```\n',
+}
+
+
+def _leading_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lang: str, gap: str, crlf: bool
+) -> tuple[Item, bytes]:
+    """An item whose body starts with a knowledge block and has its `# Seed` H1 below."""
+    it = _custom(tmp_path, monkeypatch, "\n" + KNOWLEDGE[lang] + gap + "\n# Seed\n\nOld body.\n")
+    if crlf:
+        it.path.write_bytes(it.path.read_bytes().replace(b"\n", b"\r\n"))
+        _git(it.root, "commit", "-am", "crlf")
+    block = KNOWLEDGE[lang].encode()
+    return it, block.replace(b"\n", b"\r\n") if crlf else block
+
+
+LEADING = [
+    pytest.param("turtle", "", False, id="turtle"),
+    pytest.param("yurtle", "", False, id="yurtle"),
+    pytest.param("turtle", "\n\n", False, id="turtle-blank-lines"),
+    pytest.param("yurtle", "\n\n", True, id="yurtle-blank-lines-crlf"),
+]
+
+
+@pytest.mark.parametrize(("lang", "gap", "crlf"), LEADING)
+def test_leading_knowledge_block_title_and_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lang: str, gap: str, crlf: bool
+) -> None:
+    """The H1 below a leading ```turtle/```yurtle block is the title: a title +
+    description update renames it in place and replaces the body under it."""
+    it, block = _leading_block(tmp_path, monkeypatch, lang, gap, crlf)
+    assert _service(it.root).get_item(it.id).description == "Old body."  # type: ignore[union-attr]
+    old = it.path.read_bytes()
+    _service(it.root).update_item(it.id, title="Renamed", description="New body.", commit=False)
+    new = it.path.read_bytes()
+    assert new.count(block) == 1, f"knowledge block not byte-identical:\n{new.decode()}"
+    assert b"# Seed" not in new, f"H1 not renamed:\n{new.decode()}"
+    assert re.search(rb"^# Renamed\r?$", new, re.M), f"no `# Renamed` H1:\n{new.decode()}"
+    assert new.index(block) < new.index(b"# Renamed"), f"H1 moved above block:\n{new.decode()}"
+    assert b"Old body." not in new, f"old body kept:\n{new.decode()}"
+    assert new.index(b"# Renamed") < new.index(b"New body."), new.decode()
+    # everything up to the end of the block: only the frontmatter title line changed
+    head_old = old[: old.index(block) + len(block)]
+    head_new = new[: new.index(block) + len(block)]
+    changed = [
+        b for a, b in zip(head_old.split(b"\n"), head_new.split(b"\n"), strict=True) if a != b
+    ]
+    assert len(changed) == 1, changed
+    assert yaml.safe_load(changed[0].rstrip(b"\r"))["title"] == "Renamed", changed
+    if crlf:
+        assert new.count(b"\n") == new.count(b"\r\n"), f"bare LF written:\n{new!r}"
+    reparsed = _service(it.root).get_item(it.id)
+    assert reparsed is not None
+    assert reparsed.description == "New body.", repr(reparsed.description)
+    assert reparsed.title == "Renamed"
+
+
+@pytest.mark.parametrize(("lang", "gap", "crlf"), LEADING)
+def test_leading_knowledge_block_title_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lang: str, gap: str, crlf: bool
+) -> None:
+    it, _block = _leading_block(tmp_path, monkeypatch, lang, gap, crlf)
+    old = it.path.read_bytes()
+    _service(it.root).update_item(it.id, title="Renamed", commit=False)
+    new = it.path.read_bytes()
+    assert old.count(b"# Seed") == 1
+    # new == old with the H1 (below the block) renamed, plus only the title line
+    _assert_only_lines(old.replace(b"# Seed", b"# Renamed"), new, "title", "Renamed")
+
+
+NO_H1_SECTIONS = "\n## Background\n\nSome context.\n\n## Plan\n\nDo it.\n"
+
+
+def test_h1less_leading_h2_is_part_of_the_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a leading `# ` line is the title: a leading `## Background` is body."""
+    it = _custom(tmp_path, monkeypatch, NO_H1_SECTIONS)
+    parsed = _service(it.root).get_item(it.id)
+    assert parsed is not None
+    assert parsed.description == "## Background\n\nSome context.\n\n## Plan\n\nDo it.", repr(
+        parsed.description
+    )
+
+
+def test_h1less_parsed_description_sent_back_is_a_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    it = _custom(tmp_path, monkeypatch, NO_H1_SECTIONS)
+    old = it.path.read_bytes()
+    svc = _service(it.root)
+    parsed = svc.get_item(it.id)
+    assert parsed is not None and parsed.description
+    svc.update_item(it.id, description=parsed.description, commit=False)
+    assert it.path.read_bytes() == old
+
+
+@pytest.mark.parametrize(
+    "sent",
+    [
+        pytest.param("## Background\n\nNew context.", id="heading-kept"),
+        pytest.param("Just new text.", id="heading-dropped"),
+    ],
+)
+def test_h1less_edited_description_keeps_heading_only_if_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sent: str
+) -> None:
+    it = _custom(tmp_path, monkeypatch, NO_H1_SECTIONS)
+    old = it.path.read_bytes()
+    _service(it.root).update_item(it.id, description=sent, commit=False)
+    new = it.path.read_bytes()
+    fm_close = old.index(b"\n---\n", 4) + len(b"\n---\n")
+    assert new[:fm_close] == old[:fm_close], f"frontmatter changed:\n{new.decode()}"
+    assert new.count(b"## Background") == sent.count("## Background"), new.decode()
+    for gone in (b"Some context.", b"## Plan", b"Do it."):
+        assert gone not in new, f"{gone!r} left behind:\n{new.decode()}"
+    reparsed = _service(it.root).get_item(it.id)
+    assert reparsed is not None
+    assert reparsed.description == sent, repr(reparsed.description)
