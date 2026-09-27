@@ -36,16 +36,24 @@ CONFIG_VERSION_SINGLE = "1.0"
 CONFIG_VERSION_MULTI = "2.0"
 
 
-_PROJECT_NAME = re.compile(r"""^\s*name\s*=\s*["']yurtle-kanban["']\s*$""", re.MULTILINE)
+_PROJECT_NAME = re.compile(r"""^\s*name\s*=\s*["']yurtle-kanban["']\s*(#.*)?$""", re.MULTILINE)
+_TABLE_HEADER = re.compile(r"^\s*\[", re.MULTILINE)
 
 
 def _is_own_checkout(root: Path) -> bool:
-    """True when `root` holds yurtle-kanban's own pyproject.toml: a plain-text
-    match, so reading it needs no TOML parser on Python 3.10 (#612)."""
+    """True when `root` holds yurtle-kanban's own pyproject.toml: its `[project]`
+    table names yurtle-kanban (#612, #622). Plain text, so no TOML parser is
+    needed on Python 3.10."""
     try:
-        return bool(_PROJECT_NAME.search((root / "pyproject.toml").read_text()))
+        text = (root / "pyproject.toml").read_text()
     except (OSError, UnicodeDecodeError):
         return False
+    start = re.search(r"^\s*\[project\]\s*(#.*)?$", text, re.MULTILINE)
+    if start is None:
+        return False
+    rest = text[start.end():]
+    end = _TABLE_HEADER.search(rest)
+    return bool(_PROJECT_NAME.search(rest[: end.start()] if end else rest))
 
 
 def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
