@@ -168,3 +168,76 @@ def test_show_json_lists_are_str(repo: Path, style: str) -> None:
     data = json.loads(result.output)
     for field in LIST_FIELDS:
         assert data[field] == EXPECTED, (field, data[field])
+
+
+# ---------------------------------------------------------------------------
+# round 2 (PR #672 review): date entries and a non-list scalar value
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        pytest.param(lambda f: f"{f}:\n  - 2026-01-01 # d\n  - a\n", id="block"),
+        pytest.param(lambda f: f"{f}: [2026-01-01, a]\n", id="flow"),
+    ],
+)
+@pytest.mark.parametrize("field", LIST_FIELDS)
+def test_list_field_date_entry_read_as_str(repo: Path, field: str, layout: object) -> None:
+    item = _get(repo, layout(field))  # type: ignore[operator]
+    values = getattr(item, field)
+    assert values == ["2026-01-01", "a"], values
+    assert all(type(v) is str for v in values), [type(v).__name__ for v in values]
+
+
+DATED = "tags:\n  # c\n  - 2026-01-01 # d\n  - a # s\n"
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param(DATED, id="block"),
+        pytest.param("tags:\n  - 2026-01-01 # d\n  - a # s\n", id="block-no-comment-line"),
+    ],
+)
+def test_update_item_round_trips_date_tag(repo: Path, block: str) -> None:
+    path = _write(repo, HEAD + block + TAIL)
+    old = path.read_text(encoding="utf-8")
+    svc = _service(repo)
+    item = svc.get_item(ITEM_ID)
+    assert item is not None
+    svc.update_item(ITEM_ID, tags=item.tags + ["x"], commit=False)
+    new = path.read_text(encoding="utf-8")
+    assert new == old.replace(block, block + "  - x\n"), new
+    again = _service(repo).get_item(ITEM_ID)
+    assert again is not None and again.tags == ["2026-01-01", "a", "x"], again and again.tags
+
+
+def test_update_item_round_trips_flow_date_tag(repo: Path) -> None:
+    _write(repo, HEAD + "tags: [2026-01-01, a]\n" + TAIL)
+    svc = _service(repo)
+    item = svc.get_item(ITEM_ID)
+    assert item is not None
+    svc.update_item(ITEM_ID, tags=item.tags + ["x"], commit=False)
+    again = _service(repo).get_item(ITEM_ID)
+    assert again is not None and again.tags == ["2026-01-01", "a", "x"], again and again.tags
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("2026", "2026"), ("true", "true")])
+@pytest.mark.parametrize("field", LIST_FIELDS)
+def test_list_field_scalar_value_read_as_list(
+    repo: Path, field: str, raw: str, expected: str
+) -> None:
+    item = _get(repo, f"{field}: {raw}\n")
+    assert getattr(item, field) == [expected], getattr(item, field)
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("2026", "2026"), ("true", "true")])
+def test_update_item_round_trips_scalar_tags(repo: Path, raw: str, expected: str) -> None:
+    _write(repo, HEAD + f"tags: {raw}\n" + TAIL)
+    svc = _service(repo)
+    item = svc.get_item(ITEM_ID)
+    assert item is not None
+    svc.update_item(ITEM_ID, tags=item.tags + ["x"], commit=False)
+    again = _service(repo).get_item(ITEM_ID)
+    assert again is not None and again.tags == [expected, "x"], again and again.tags
