@@ -2125,7 +2125,7 @@ class KanbanService:
         branch = "main"
         try:
             branch, known = self._resolve_default()
-            return self._race_to_branch(branch, build, landed, max_retries, what, known)
+            return self._race_to_branch(branch, build, landed, max_retries, what, known=known)
         except _CasRefusedError as e:
             return failed(str(e))
         except subprocess.TimeoutExpired as e:
@@ -2189,7 +2189,8 @@ class KanbanService:
         landed: Callable[[str, bool], dict[str, Any]],
         max_retries: int,
         what: str,
-        known: bool = True,
+        *,
+        known: bool,
     ) -> dict[str, Any]:
         """The fetch / build / push loop of `_cas_on_default_branch`; `known` says
         whether `branch` may be recorded as origin/HEAD (#698)."""
