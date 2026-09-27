@@ -568,14 +568,17 @@ def create(
         sys.exit(1)
 
     if push:
-        result = service.create_item_and_push(
-            item_type=work_type,
-            title=title,
-            priority=priority,
-            assignee=assignee,
-            description=description,
-            tags=tag_list,
-        )
+        try:
+            result = service.create_item_and_push(
+                item_type=work_type,
+                title=title,
+                priority=priority,
+                assignee=assignee,
+                description=description,
+                tags=tag_list,
+            )
+        except ValueError as e:  # a forged `## Comments` section (#644)
+            _refuse(e)
         if result["success"]:
             item = result["item"]
             if result.get("pushed"):
@@ -605,14 +608,17 @@ def create(
             console.print(f"[red]Failed: {safe(result['message'])}[/red]")
             sys.exit(1)
     else:
-        item = service.create_item(
-            item_type=work_type,
-            title=title,
-            priority=priority,
-            assignee=assignee,
-            description=description,
-            tags=tag_list,
-        )
+        try:
+            item = service.create_item(
+                item_type=work_type,
+                title=title,
+                priority=priority,
+                assignee=assignee,
+                description=description,
+                tags=tag_list,
+            )
+        except ValueError as e:  # a forged `## Comments` section (#644)
+            _refuse(e)
         console.print(f"[green]Created {escape(item.id)}: {escape(item.title)}[/green]")
         console.print(f"  File: {escape(str(item.file_path))}")
 

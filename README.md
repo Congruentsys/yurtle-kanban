@@ -65,7 +65,8 @@ yurtle-kanban move FEAT-001 in_progress --assign dev-1
 yurtle-kanban move FEAT-001 done --agent reviewer-1
 
 # Comment: free text goes through --body-file and a QUOTED heredoc, so the shell
-# expands nothing ($(...), backticks, $VARS are stored verbatim)
+# expands nothing ($(...), backticks, $VARS are stored verbatim); a ```yurtle or
+# ```turtle fence in a comment is stripped from its text, as in a description
 yurtle-kanban comment FEAT-001 --body-file - <<'EOF'
 Shipped; see the PR.
 EOF
