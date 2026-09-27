@@ -2387,9 +2387,9 @@ class KanbanService:
     @classmethod
     def _stem_id(cls, stem: str, prefix: str) -> int | None:
         """The id number a filename stem starts with in `prefix`'s space
-        (`EXP-608-Some-Title` -> 608), or None."""
-        head = prefix + cls._id_sep(prefix)
-        match = re.match(r"(\d+)", stem[len(head):]) if stem.startswith(head) else None
+        (`EXP-608-Some-Title` -> 608), or None; case folded, `exp-608-…` too (#752)."""
+        head = (prefix + cls._id_sep(prefix)).upper()
+        match = re.match(r"(\d+)", stem[len(head):]) if stem.upper().startswith(head) else None
         return int(match.group(1)) if match else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
@@ -2504,7 +2504,7 @@ class KanbanService:
         for name in names:
             max_num = max(max_num, self._stem_id(Path(name).stem, prefix) or 0)
         for _, found in ids:
-            if found.startswith(head):
+            if found.upper().startswith(head.upper()):  # `exp-12` too (#752)
                 match = re.search(r"(\d+)$", found)
                 if match:
                     max_num = max(max_num, int(match.group(1)))
@@ -2621,7 +2621,7 @@ class KanbanService:
         max_num = 0
         for alloc in allocations:
             found = cls._id_space(str(alloc.get("id", "")))
-            if found is not None and found[0] == prefix:
+            if found is not None and found[0].upper() == prefix.upper():  # (#752)
                 max_num = max(max_num, found[1])
         return max_num
 
@@ -2686,7 +2686,7 @@ class KanbanService:
         # like IDEA-R-003 where split("-")[1] would give "R" not "003"
         head = prefix + self._id_sep(prefix)  # `H130.` has no dash (#634)
         for existing_id in self._items.keys():
-            if existing_id.startswith(head):
+            if existing_id.upper().startswith(head.upper()):  # `exp-12` too (#752)
                 match = re.search(r"(\d+)$", existing_id)
                 if match:
                     max_num = max(max_num, int(match.group(1)))
