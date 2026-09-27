@@ -168,12 +168,40 @@ class UnifiedGraph:
             phantom = URIRef(
                 self_iri(item.graph) or Path.cwd().as_uri() + "/"
             )
-            for s, p, o in item.graph:
-                s = item_uri if s == phantom else s
-                o = item_uri if o == phantom else o
-                if p in _FRONTMATTER_OWNED and not isinstance(s, BNode):
+            triples = [
+                (item_uri if s == phantom else s, p, item_uri if o == phantom else o)
+                for s, p, o in item.graph
+            ]
+            dropped = [t for t in triples if t[1] in _FRONTMATTER_OWNED
+                       and not isinstance(t[0], BNode)]
+            orphans = self._orphan_blank_nodes(triples, dropped)
+            skip = set(dropped)
+            for s, p, o in triples:
+                if (s, p, o) in skip or s in orphans:
                     continue
                 self._graph.add((s, p, o))
+
+    @staticmethod
+    def _orphan_blank_nodes(
+        triples: list[tuple[Any, Any, Any]], dropped: list[tuple[Any, Any, Any]]
+    ) -> set[BNode]:
+        """Blank nodes reachable only through dropped triples (a forged
+        `kb:comment`'s author/text): skipped too, so they don't merge as orphans
+        (#726). A blank node any kept triple points at stays."""
+        dropped_set = set(dropped)
+        kept_refs = {t[2] for t in triples if t not in dropped_set and isinstance(t[2], BNode)}
+        todo = [o for _, _, o in dropped if isinstance(o, BNode) and o not in kept_refs]
+        orphans: set[BNode] = set()
+        while todo:
+            node = todo.pop()
+            if node in orphans:
+                continue
+            orphans.add(node)
+            todo.extend(
+                o for s, _, o in triples
+                if s == node and isinstance(o, BNode) and o not in orphans
+            )
+        return orphans
 
     def add_items(self, items: list[WorkItem]) -> None:
         """Add multiple work items."""
