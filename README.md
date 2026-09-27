@@ -64,8 +64,12 @@ yurtle-kanban list --assignee dev-1
 yurtle-kanban move FEAT-001 in_progress
 yurtle-kanban move FEAT-001 done
 
-# Show item details
+# Show item details (with the statuses it can move to)
 yurtle-kanban show FEAT-001
+
+# Each board's lifecycle: every status and its legal next statuses
+yurtle-kanban states
+yurtle-kanban states --board research --json
 
 # Prioritized roadmap (excludes done items)
 yurtle-kanban roadmap
@@ -91,7 +95,8 @@ yurtle-kanban export --format json
 | `list` | List work items with optional filters |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
 | `move` | Move item to new status (with `--assign`, `--force`, `--closed-by`) |
-| `show` | Show item details |
+| `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |
+| `states` | Each board's lifecycle: status → legal next statuses (`--board`, `--type`, `--json` with gate ids); gates, WIP and workflow rules can still refuse |
 | `board` | Display kanban board (`board research`, `board --all`, `board --campaign VOY-XXX`) |
 | `boards` | List configured boards |
 | `board-add` | Add a new board (`--preset hdd` for research) |

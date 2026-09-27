@@ -193,7 +193,7 @@ class TestNonStringEntryAfterLoad:
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "abandoned")
 
         assert result.exit_code != 0, out
-        assert "Invalid transition from draft to abandoned" in out, out
+        assert "Illegal move IDEA-001: draft → abandoned" in out, out
         assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
 
     @pytest.mark.parametrize("cfg", CFGS)
@@ -273,7 +273,7 @@ class TestHyphenSpelling:
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "in_progress")
 
         assert result.exit_code != 0, out
-        assert "Invalid transition from draft to in_progress" in out, out
+        assert "Illegal move IDEA-001: draft → in_progress" in out, out
         assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
         assert not _move_ok(repo, "IDEA-001", WorkItemStatus.IN_PROGRESS)
 

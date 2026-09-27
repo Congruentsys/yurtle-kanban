@@ -1072,7 +1072,7 @@ status: backlog
         service = hdd_state_setup["service"]
 
         # draft→complete is not allowed in HDD (must go draft→active→complete)
-        with pytest.raises(ValueError, match="Invalid transition"):
+        with pytest.raises(ValueError, match="Illegal move"):
             service.move_item(
                 "H130.1", WorkItemStatus.DONE, commit=False, validate_workflow=True
             )

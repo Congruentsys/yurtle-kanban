@@ -179,7 +179,7 @@ class TestAssigneeWorkflowRule:
         workflow_repo["item"].write_text(_feature("FEAT-001", status="backlog"))
         result = _move("FEAT-001", "in_progress", "--assign", "Mini")
         assert result.exit_code == 1, result.output
-        assert "Cannot transition" in result.output
+        assert "Illegal move" in result.output
 
 
 # ── 4. a refused move writes nothing ───────────────────────────────────
@@ -217,7 +217,7 @@ class TestRefusedMoveWritesNothing:
         workflow_repo["item"].write_text(_feature("FEAT-001", status="backlog"))
         before = workflow_repo["item"].read_bytes()
         svc = _service(workflow_repo)
-        with pytest.raises(ValueError, match="Cannot transition"):
+        with pytest.raises(ValueError, match="Illegal move"):
             svc.move_item("FEAT-001", WorkItemStatus.IN_PROGRESS, commit=False, assignee="Mini")
         item = svc.get_item("FEAT-001")
         assert item is not None

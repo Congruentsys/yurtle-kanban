@@ -39,6 +39,34 @@ from .models import WorkItem, WorkItemStatus
 
 logger = get_logger("yurtle-kanban.workflow")  # escapes control characters (#215)
 
+# The default lifecycle: the one table `move`, `states` and the default workflow
+# read when neither the theme's `transitions` nor a per-type workflow applies (#589)
+DEFAULT_TRANSITIONS: dict[WorkItemStatus, list[WorkItemStatus]] = {
+    WorkItemStatus.BACKLOG: [WorkItemStatus.READY, WorkItemStatus.BLOCKED],
+    WorkItemStatus.READY: [
+        WorkItemStatus.IN_PROGRESS,
+        WorkItemStatus.BACKLOG,
+        WorkItemStatus.BLOCKED,
+    ],
+    WorkItemStatus.IN_PROGRESS: [
+        WorkItemStatus.REVIEW,
+        WorkItemStatus.DONE,
+        WorkItemStatus.BLOCKED,
+        WorkItemStatus.READY,
+    ],
+    WorkItemStatus.REVIEW: [
+        WorkItemStatus.DONE,
+        WorkItemStatus.IN_PROGRESS,
+        WorkItemStatus.BLOCKED,
+    ],
+    WorkItemStatus.DONE: [],  # terminal
+    WorkItemStatus.BLOCKED: [
+        WorkItemStatus.READY,
+        WorkItemStatus.IN_PROGRESS,
+        WorkItemStatus.BACKLOG,
+    ],
+}
+
 
 # Namespaces for workflow configuration
 if Namespace:
@@ -342,22 +370,16 @@ class WorkflowParser:
         return uri.strip("<>")
 
     def _get_default_states(self) -> list[StateConfig]:
-        """Get default workflow states."""
+        """The default workflow's states: the one default table, as states (#589)."""
         return [
             StateConfig(
-                id="backlog", name="Backlog", is_initial=True, allowed_transitions=["ready"]
-            ),
-            StateConfig(
-                id="ready", name="Ready", allowed_transitions=["in_progress", "blocked", "backlog"]
-            ),
-            StateConfig(
-                id="in_progress",
-                name="In Progress",
-                allowed_transitions=["review", "blocked", "ready"],
-            ),
-            StateConfig(id="blocked", name="Blocked", allowed_transitions=["ready", "in_progress"]),
-            StateConfig(id="review", name="Review", allowed_transitions=["done", "in_progress"]),
-            StateConfig(id="done", name="Done", is_terminal=True, allowed_transitions=[]),
+                id=status.value,
+                name=status.value.replace("_", " ").title(),
+                is_initial=status == WorkItemStatus.BACKLOG,
+                is_terminal=not targets,
+                allowed_transitions=[t.value for t in targets],
+            )
+            for status, targets in DEFAULT_TRANSITIONS.items()
         ]
 
     def validate_transition(
@@ -393,9 +415,8 @@ class WorkflowParser:
         target_state = workflow.get_state(target_status)
 
         if current_state is None:
-            # Unknown current state - allow transition
-            logger.warning(f"Unknown current state: {current_status}")
-            return True, ""
+            # an unknown current state has no legal next: fail closed (#589)
+            return False, f"Unknown current state: {current_status}"
 
         if target_state is None:
             return False, f"Unknown target state: {target_status}"
@@ -407,7 +428,16 @@ class WorkflowParser:
                 f"Allowed: {', '.join(current_state.allowed_transitions) or 'none'}"
             )
 
-        # Check transition rules
+        return self.check_rules(item, new_status, workflow)
+
+    def check_rules(
+        self, item: WorkItem, new_status: WorkItemStatus, workflow: WorkflowConfig
+    ) -> tuple[bool, str]:
+        """The workflow's rules for entering `new_status` (content checks such as
+        "has an assignee"), apart from whether the move is legal at all (#589)."""
+        target_state = workflow.get_state(new_status.value)
+        if target_state is None:
+            return True, ""
         for rule in workflow.rules:
             if rule.applies_to == target_state.id:
                 try:
