@@ -157,6 +157,13 @@ def test_cli_next_id_json_refuses_malformed_prefix(repo: Repo, prefix: str) -> N
 def test_mcp_next_id_refuses_malformed_prefix(repo: Repo, mcp_log, prefix: str) -> None:
     state = _State(repo)
     out = _mcp(repo).handle_tool_call("kanban_next_id", {"prefix": prefix})
+    if prefix == "":
+        # MCP refuses a blank required argument before any handler runs (#768):
+        # its own wording, and no log record at all
+        assert out == {"error": "prefix is required"}, out
+        assert not _records(mcp_log), [r.getMessage() for r in _records(mcp_log)]
+        state.assert_untouched("kanban_next_id('')")
+        return
     assert "error" in out and not out.get("success"), out
     _names_prefix_grammar(out["error"])
     _assert_one_warning(mcp_log)  # a refusal: one WARNING, no traceback
