@@ -45,6 +45,7 @@ class KanbanMCPServer:
         self._service: KanbanService | None = None
         self._names: frozenset[str] | None = None
         self._required: dict[str, tuple[str, ...]] | None = None
+        self._strings: dict[str, tuple[str, ...]] | None = None
 
     @property
     def service(self) -> KanbanService:
@@ -352,6 +353,18 @@ class KanbanMCPServer:
             }
         return self._required.get(name, ())
 
+    def _string_args(self, name: str) -> tuple[str, ...]:
+        """The arguments tool `name`'s schema types `string`, read once (#801)."""
+        if self._strings is None:
+            self._strings = {
+                tool["name"]: tuple(
+                    key for key, spec in tool.get("inputSchema", {}).get("properties", {}).items()
+                    if spec.get("type") == "string"
+                )
+                for tool in self.get_tools()
+            }
+        return self._strings.get(name, ())
+
     def handle_tool_call(self, name: Any, arguments: Any) -> dict[str, Any]:
         """Handle a tool call and return the result."""
         # an unknown (or non-string) tool first, then the arguments' shape (#728):
@@ -363,19 +376,19 @@ class KanbanMCPServer:
             arguments = {}
         elif not isinstance(arguments, dict):
             return {"error": "arguments must be an object"}
-        # an explicit null for an optional boolean means "omitted" (#728)
-        arguments = {
-            k: v for k, v in arguments.items()
-            if not (k in ("allow_unknown", "sync_remote") and v is None)
-        }
+        # an explicit null for an optional argument means "omitted" (#728, #801)
+        required = self._required_args(name)
+        arguments = {k: v for k, v in arguments.items() if v is not None or k in required}
         # a missing (or null) required argument is named, not a KeyError (#735);
         # so is a blank one, `""` or whitespace (#768)
-        for key in self._required_args(name):
+        for key in required:
             value = arguments.get(key)
             if value is None or (isinstance(value, str) and not value.strip()):
                 return {"error": f"{key} is required"}
-        for key in ("item_id", "prefix"):
-            if key in arguments and not isinstance(arguments[key], str):
+        # a string argument of another JSON type is refused, not a crash (#801);
+        # `priority` keeps its one message everywhere (#190)
+        for key in self._string_args(name):
+            if key != "priority" and key in arguments and not isinstance(arguments[key], str):
                 return {"error": f"{key} must be a string"}
         try:
             if name == "kanban_list_items":
