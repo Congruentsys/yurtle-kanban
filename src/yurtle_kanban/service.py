@@ -1832,7 +1832,7 @@ class KanbanService:
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
         self._check_no_comments_heading(description)
-        self._check_no_comments_heading(content, "The rendered content")  # templated (#666)
+        self._check_no_comments_heading(content, self._RENDERED)  # templated (#666)
         # Generate or use provided ID
         if item_id is None:
             prefix = self._get_type_prefix(item_type)
@@ -1952,7 +1952,7 @@ class KanbanService:
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
         self._check_no_comments_heading(description)
-        self._check_no_comments_heading(content, "The rendered content")  # templated (#666)
+        self._check_no_comments_heading(content, self._RENDERED)  # templated (#666)
         # a duplicated parent: which copy gets the link is ambiguous; refused before
         # anything is written, on every path (#754)
         if parent is not None and (held := self.get_item(parent)) is not None:
@@ -4499,6 +4499,8 @@ class KanbanService:
                 fence = None
         return opened if fence is not None else None
 
+    _RENDERED = "The rendered content"  # a templated create's whole text (#666, #787)
+
     def _check_no_comments_heading(self, text: str | None, what: str = "A description") -> None:
         """Refuse text with a `## Comments` line outside fenced code: it would become
         the item's comments section (#605), on update or create (#644). `what` names
@@ -4509,8 +4511,10 @@ class KanbanService:
         Refuse one with an unclosed fence too: it would swallow the status-history
         block, and the next body edit would delete the history (#720)."""
         if text is not None and (line := self._unclosed_fence_line(text)):
+            # a rendered item's line counts the template's lines too: say so (#787)
+            of = " of the rendered item file" if what == self._RENDERED else ""
             raise InputRefused(
-                f"{what} can't leave a code fence open (the fence on line {line} "
+                f"{what} can't leave a code fence open (the fence on line {line}{of} "
                 "is never closed): close it, or it would swallow the status history."
             )
         if text is not None and self._find_line_outside_fences(
@@ -4525,7 +4529,7 @@ class KanbanService:
         """The checks a templated create's content gets, run again on each re-render
         (per fetched base, #590): writable text (#641), no forged comments (#666)."""
         self._check_text(content=content)
-        self._check_no_comments_heading(content, "The rendered content")
+        self._check_no_comments_heading(content, self._RENDERED)
 
     def add_comment(
         self,
