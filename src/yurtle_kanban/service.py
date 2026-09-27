@@ -2516,11 +2516,19 @@ class KanbanService:
         return json.dumps(allocations[-100:], indent=2)
 
     def _get_type_prefix(self, item_type: WorkItemType) -> str:
-        """Get ID prefix for item type: from the theme of the board a new item lands
-        on in multi-board mode (#665), else the configured theme."""
+        """Get ID prefix for item type: in multi-board mode from the theme of the
+        board a new item lands on (#665), or when that theme doesn't define the type,
+        the first board (config order) whose theme does (#688); else the configured
+        theme."""
         if self.config.is_multi_board:
-            board = self._landing_board(item_type)
-            theme = board.get_theme(self.repo_root) if board is not None else None
+            landing = self._landing_board(item_type)
+            boards = [landing] if landing is not None else []
+            boards += [b for b in self.config.boards if b is not landing]
+            for board in boards:
+                type_def = self._board_type_def(board, item_type)
+                if type_def:
+                    return type_def.get("id_prefix", item_type.value[:4].upper())
+            theme = None
         else:
             theme = self.config.get_theme()
         if theme and "item_types" in theme:
