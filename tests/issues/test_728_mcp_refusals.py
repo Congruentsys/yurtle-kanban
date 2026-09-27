@@ -57,3 +57,14 @@ def test_non_object_arguments_are_refused_clearly(repo: Repo, args) -> None:
 def test_unknown_tool_is_reported_before_arg_types(repo: Repo) -> None:
     out = _mcp(repo).handle_tool_call("kanban_bogus", {"item_id": 5})
     assert "Unknown tool" in out.get("error", ""), out
+
+
+@pytest.mark.parametrize("name", [["x"], {"a": 1}, 5])
+def test_non_string_tool_name_is_an_unknown_tool(repo: Repo, name) -> None:
+    out = _mcp(repo).handle_tool_call(name, {})
+    assert "Unknown tool" in out.get("error", ""), out
+
+
+def test_unknown_tool_is_reported_before_argument_shape(repo: Repo) -> None:
+    out = _mcp(repo).handle_tool_call("kanban_bogus", [1])
+    assert "Unknown tool" in out.get("error", ""), out
