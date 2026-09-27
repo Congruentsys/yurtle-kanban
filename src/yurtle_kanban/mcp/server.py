@@ -328,8 +328,15 @@ class KanbanMCPServer:
             },
         ]
 
-    def handle_tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def handle_tool_call(self, name: str, arguments: Any) -> dict[str, Any]:
         """Handle a tool call and return the result."""
+        # `"arguments": null` is no arguments; anything else must be an object (#728)
+        if arguments is None:
+            arguments = {}
+        elif not isinstance(arguments, dict):
+            return {"error": "arguments must be an object"}
+        if name not in {tool["name"] for tool in self.get_tools()}:
+            return {"error": f"Unknown tool: {name}"}
         # an explicit null for an optional boolean means "omitted" (#728)
         arguments = {
             k: v for k, v in arguments.items()
