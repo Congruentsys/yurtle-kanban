@@ -227,19 +227,25 @@ class TestLoaderDropsBadEntry:
         ]
         assert len(hits) == 1, _warnings(warnings_log)
 
-    # a non-list transitions entry is now dropped (#457); covered by test_457
-    @pytest.mark.parametrize("section", ["status_mappings"])
-    def test_control_status_mappings_entry_kept(
+    # a non-list transitions entry is now dropped (#457); covered by test_457.
+    # A non-string status_mappings entry is now dropped too (#613), so the keep-control
+    # that lived here is inverted; create/move are covered by test_613.
+    def test_status_mappings_non_str_entry_dropped(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        section: str,
         warnings_log: pytest.LogCaptureFixture,
     ) -> None:
-        data = {"theme": {"name": "acme"}, section: {"todo": 5}}
+        data = {"theme": {"name": "acme"}, "status_mappings": {"todo": 5, "doing": "in_progress"}}
         repo = _repo(tmp_path / "repo", None, _dump(data))
-        assert _load(repo, monkeypatch) == data
-        assert not _warnings(warnings_log), _warnings(warnings_log)
+        expected = {"theme": {"name": "acme"}, "status_mappings": {"doing": "in_progress"}}
+        assert _load(repo, monkeypatch) == expected
+        hits = [
+            m
+            for m in _warnings(warnings_log)
+            if THEME_FILE in m and _names_entry(m, "status_mappings.todo")
+        ]
+        assert len(hits) == 1, _warnings(warnings_log)
 
     def test_control_good_theme_loads_unchanged(
         self,
