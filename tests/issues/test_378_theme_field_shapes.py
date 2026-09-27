@@ -27,9 +27,10 @@ Decided behaviour (extends #363 one level down, into the fields):
 3. A column whose key is not a str is dropped with one warning.
 4. ``board`` / ``list`` / ``create task hi`` don't raise, and print what they print
    for the same theme with that field (or column) absent.
-5. Controls: valid values kept; ``columns.<id>.name: [1]`` and ``status_aliases``
-   entries don't crash today and are left alone; the built-in themes load with no
-   warnings; a theme left empty still falls through to the built-in (#365).
+5. Controls: valid values kept; ``columns.<id>.name: [1]`` and odd ``status_mappings``
+   entries (#611: was the dead ``status_aliases``) don't crash `board` today and are
+   left alone; the built-in themes load with no warnings; a theme left empty still
+   falls through to the built-in (#365).
 """
 
 from __future__ import annotations
@@ -412,7 +413,7 @@ class TestLoaderControls:
         assert _load(repo, monkeypatch) == theme
         assert not _warnings(warnings_log), _warnings(warnings_log)
 
-    def test_status_aliases_entries_kept(
+    def test_status_mappings_entries_kept(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -420,7 +421,7 @@ class TestLoaderControls:
     ) -> None:
         theme = {
             "theme": {"name": "acme"},
-            "status_aliases": {"backlog": 5, "ready": [1], "done": None, 7: "x"},
+            "status_mappings": {"backlog": 5, "ready": [1], "done": None, 7: "x"},
         }
         repo = _repo(tmp_path / "repo", None, _dump(theme))
         assert _load(repo, monkeypatch) == theme
@@ -522,11 +523,11 @@ class TestBoard:
         _no_crash(result)
         assert result.exit_code == 0, result.output
 
-    def test_control_board_bad_status_aliases_no_crash_today(
+    def test_control_board_bad_status_mappings_no_crash_today(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         theme = _column_key_theme(ABSENT)
-        theme["status_aliases"] = {"backlog": 5, "ready": [1], "done": None}
+        theme["status_mappings"] = {"backlog": 5, "ready": [1], "done": None}
         repo = _repo(tmp_path / "repo", SINGLE_CFG, _dump(theme))
         _seed(repo)
         result = _invoke(repo, monkeypatch, ["board"])

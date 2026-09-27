@@ -14,6 +14,9 @@ the shape hdd uses). Then on a single spec board:
 4. A file with a native spec status reads as the right canonical status.
 5. Guard: every top-level key of every built-in theme is one the code reads, so a
    theme can't silently carry an ignored section again (no `status_aliases`).
+   #611: the guard's key set is `config._THEME_SECTIONS` itself, not a hand-kept
+   copy; `_THEME_SECTIONS` drops the dead `status_aliases`, and hdd drops its unread
+   `id_formats` (hdd ids come from the item types' prefixes).
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from tests.issues.test_439_list_theme_status import (  # noqa: F401  (fixtures)
     runner,
     wide,
 )
+from yurtle_kanban.config import _THEME_SECTIONS
 
 MOVE = ["--force", "--skip-gates", "--no-commit"]
 
@@ -62,8 +66,8 @@ COLUMN_TITLE = {
     "blocked": "Blocked",
 }
 
-# the top-level theme sections the code reads (service.py / config.py / epic_commands.py)
-CONSUMED_KEYS = {"theme", "item_types", "columns", "transitions", "id_formats", "status_mappings"}
+# the top-level theme sections the code knows: the loader's own list (#611)
+CONSUMED_KEYS = frozenset(_THEME_SECTIONS)
 
 
 def _spec_theme() -> dict:
@@ -215,3 +219,22 @@ def test_every_builtin_theme_key_is_consumed(name: str) -> None:
     data = yaml.safe_load((THEMES_DIR / f"{name}.yaml").read_text())
     unread = set(data) - CONSUMED_KEYS
     assert not unread, f"{name}.yaml has top-level keys nothing reads: {sorted(unread)}"
+
+
+# ---------------------------------------------------------------------------
+# #611: one list, no dead sections
+# ---------------------------------------------------------------------------
+
+
+def test_theme_sections_non_vacuous() -> None:
+    assert {"theme", "item_types", "columns", "status_mappings"} <= CONSUMED_KEYS
+
+
+def test_theme_sections_drop_status_aliases() -> None:
+    assert "status_aliases" not in _THEME_SECTIONS
+
+
+@pytest.mark.parametrize("name", BUILTIN_THEMES)
+def test_no_builtin_theme_declares_id_formats(name: str) -> None:
+    data = yaml.safe_load((THEMES_DIR / f"{name}.yaml").read_text())
+    assert "id_formats" not in data, f"{name}.yaml declares `id_formats`, which nothing reads"
