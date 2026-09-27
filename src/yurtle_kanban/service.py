@@ -39,6 +39,7 @@ from .models import (
     Board,
     Column,
     Comment,
+    InvalidText,
     WorkItem,
     WorkItemStatus,
     WorkItemType,
@@ -1742,8 +1743,6 @@ class KanbanService:
         tags: list[str] | None = None,
         content: str | None = None,
         item_id: str | None = None,
-        render: Callable[[str], str] | None = None,
-        id_prefix: str | None = None,
     ) -> WorkItem:
         """Create a new work item.
 
@@ -1751,9 +1750,6 @@ class KanbanService:
             content: Pre-rendered file content (e.g., from TemplateEngine).
                      When provided, writes this instead of item.to_markdown().
             item_id: Explicit ID to use instead of auto-allocating.
-            render, id_prefix: as for `create_item_and_push`; used only when
-                     `item_id` is None (the id is allocated in `id_prefix` and
-                     `render` makes the content for it).
                      Useful for HDD types with non-standard ID formats
                      (e.g., H130.1, EXPR-130, PAPER-130).
         """
@@ -1763,12 +1759,8 @@ class KanbanService:
         )
         # Generate or use provided ID
         if item_id is None:
-            prefix = id_prefix or self._get_type_prefix(item_type)
-            next_num = self._get_next_id_number(prefix)
-            item_id = f"{prefix}-{next_num:03d}"
-            if render is not None:
-                content = render(item_id)
-                self._check_text(content=content)
+            prefix = self._get_type_prefix(item_type)
+            item_id = self._format_id(prefix, self._get_next_id_number(prefix))
 
         # Determine file path
         if path is None:
@@ -1924,6 +1916,7 @@ class KanbanService:
         current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
         if render is not None and current_id != item_id_local:
             content = render(current_id)
+            self._check_text(content=content)
         item, text = self._new_item(
             item_type, title, current_id, priority, assignee, description, tags, content
         )
@@ -1939,7 +1932,7 @@ class KanbanService:
                 allocations = json_mod.loads(lock_file.read_text())
             except Exception:
                 allocations = []
-        lock_file.write_text(self._with_allocation(allocations, prefix, current_id))
+        lock_file.write_text(self._with_allocation(allocations, current_id))
 
         try:
             self._commit_paths([file_path, lock_file], f"Create {current_id}: {title}")
@@ -1978,8 +1971,9 @@ class KanbanService:
         push has landed, and HEAD is on the default branch, is the checkout
         fast-forwarded to it. Unless `item_id` is explicit, the id is allocated
         against each fetched base (#590), and `render` (when given) renders the
-        item's text for that id; an explicit `item_id` that a fetched base already
-        holds is refused, naming the file that holds it (#634)."""
+        item's text for that id, checked like any other text (#641); an explicit
+        `item_id` that a fetched base already holds, by the same number in the same
+        id space, is refused, naming the file that holds it (#634, #641)."""
         prefix = id_prefix or self._get_type_prefix(item_type)
         made: dict[str, Any] = {}
 
@@ -1991,6 +1985,11 @@ class KanbanService:
                 )
             current_id = item_id or self._next_id_at(base, prefix)
             text_in = render(current_id) if render is not None else content
+            if render is not None:
+                try:
+                    self._check_text(content=text_in)
+                except InvalidText as e:
+                    raise _CasRefusedError(f"{e}; nothing was created") from None
             item, text = self._new_item(
                 item_type, title, current_id, priority, assignee, description, tags, text_in
             )
@@ -2001,7 +2000,7 @@ class KanbanService:
                 )
             made.update(item=item, id=current_id)
             return (
-                {item_rel: text, **self._allocation_blob(base, prefix, current_id)},
+                {item_rel: text, **self._allocation_blob(base, current_id)},
                 f"Create {current_id}: {title}",
             )
 
@@ -2189,7 +2188,7 @@ class KanbanService:
     def _next_id_at(self, base: str, prefix: str) -> str:
         """The next id in `prefix`'s space: past the scanned board and past what
         commit `base` holds (#590, #634)."""
-        num = max(self._get_next_id_number(prefix), self._next_id_number_at(base, prefix))
+        num = max(self._scanned_next_id_number(prefix), self._next_id_number_at(base, prefix))
         return self._format_id(prefix, num)
 
     @staticmethod
@@ -2203,19 +2202,46 @@ class KanbanService:
         """Id number `num` in `prefix`'s space: `H130.2`, or `EXP-007` (#634)."""
         return f"{prefix}-{num:03d}" if cls._id_sep(prefix) else f"{prefix}{num}"
 
+    @staticmethod
+    def _id_space(item_id: str) -> tuple[str, int] | None:
+        """`item_id` as (id space, number): the id minus its trailing number, less
+        a dash (`EXP-003` -> (`EXP`, 3), `IDEA-R-004` -> (`IDEA-R`, 4), `H130.2` ->
+        (`H130.`, 2)), or None when it ends in no number (#641)."""
+        match = re.fullmatch(r"(.*?)(\d+)", item_id)
+        if match is None:
+            return None
+        return match.group(1).removesuffix("-"), int(match.group(2))
+
+    @classmethod
+    def _stem_id(cls, stem: str, prefix: str) -> int | None:
+        """The id number a filename stem starts with in `prefix`'s space
+        (`EXP-608-Some-Title` -> 608), or None."""
+        head = prefix + cls._id_sep(prefix)
+        match = re.match(r"(\d+)", stem[len(head):]) if stem.startswith(head) else None
+        return int(match.group(1)) if match else None
+
     def _holder_at(self, rev: str, item_id: str) -> str | None:
         """The file under the work paths at commit `rev` that holds `item_id`, by
-        its filename or its frontmatter `id:`, or None (#634)."""
+        its filename or its frontmatter `id:`, or None (#634). Ids are the same when
+        their id space and number are: `EXP-3` is `EXP-003` (#641)."""
         names, ids = self._ids_at(rev)
+        key = self._id_space(item_id)
         for name in names:
             stem = Path(name).stem
-            if stem == item_id or stem.startswith(item_id + "-"):
+            if stem == item_id or stem.startswith(item_id + "-") or (
+                key is not None and self._stem_id(stem, key[0]) == key[1]
+            ):
                 return name
-        return next((path for path, found in ids if found == item_id), None)
+        return next(
+            (path for path, found in ids
+             if found == item_id or (key is not None and self._id_space(found) == key)),
+            None,
+        )
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
-        """The `.md` files under the work paths at commit `rev`, and each
-        frontmatter `id:` there as (path, id) (#590, #634)."""
+        """The `.md` files under the work paths at commit `rev`, and each `id:` in
+        the leading frontmatter block of one as (path, id) (#590, #634); an `id:`
+        line in the body or a code block is not an id (#641)."""
         top = self._git_toplevel()
         rels = [
             rel.as_posix()
@@ -2231,16 +2257,29 @@ class KanbanService:
             f":(top,glob){'' if rel in ('', '.') else rel.rstrip('/') + '/'}**/*.md"
             for rel in rels
         ]
-        grep = self._git_run("grep", "-z", "-I", "-E", "^id:[[:space:]]", rev, "--", *specs)
+        # the `---` lines too, numbered: a file's frontmatter is line 1's `---` up
+        # to the next line starting with `---`, as the parser reads it
+        grep = self._git_run(
+            "grep", "-z", "-n", "-I", "-E", "^(---|id:[[:space:]])", rev, "--", *specs
+        )
         ids = []
+        state: dict[str, bool] = {}  # path -> still inside its frontmatter
         for line in grep.stdout.splitlines():
-            where, _, text = line.partition("\0")
-            found = re.match(r"id:\s*[\"']?([^\"'\s]+)", text)
-            if found:
-                ids.append((where.removeprefix(f"{rev}:"), found.group(1)))
+            where, _, rest = line.partition("\0")
+            number, _, text = rest.partition("\0")
+            path = where.removeprefix(f"{rev}:")
+            if path not in state:
+                state[path] = number == "1" and text.startswith("---")
+                continue
+            if not state[path]:
+                continue
+            if text.startswith("---"):
+                state[path] = False
+            elif found := re.match(r"id:\s*[\"']?([^\"'\s]+)", text):
+                ids.append((path, found.group(1)))
         return names, ids
 
-    def _allocation_blob(self, base: str, prefix: str, current_id: str) -> dict[Path, str]:
+    def _allocation_blob(self, base: str, current_id: str) -> dict[Path, str]:
         """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
         `current_id`, keyed by its repo-relative path."""
         import json
@@ -2255,7 +2294,7 @@ class KanbanService:
             allocations = json.loads(shown.stdout) if shown.returncode == 0 else []
         except Exception:
             allocations = []
-        return {lock_rel: self._with_allocation(allocations, prefix, current_id)}
+        return {lock_rel: self._with_allocation(allocations, current_id)}
 
     def _git_run(
         self,
@@ -2290,11 +2329,7 @@ class KanbanService:
         names, ids = self._ids_at(rev)
         max_num = 0
         for name in names:
-            stem = Path(name).stem
-            if stem.startswith(head):
-                match = re.match(r"(\d+)", stem[len(head):])
-                if match:
-                    max_num = max(max_num, int(match.group(1)))
+            max_num = max(max_num, self._stem_id(Path(name).stem, prefix) or 0)
         for _, found in ids:
             if found.startswith(head):
                 match = re.search(r"(\d+)$", found)
@@ -2341,20 +2376,19 @@ class KanbanService:
             return item, self._apply_priority(content, priority)
         return item, item.to_markdown()
 
-    def _with_allocation(
-        self, allocations: list[dict[str, Any]], prefix: str, current_id: str
-    ) -> str:
-        """`allocations` plus a record for `current_id` (last 100), as JSON text."""
+    def _with_allocation(self, allocations: list[dict[str, Any]], current_id: str) -> str:
+        """`allocations` plus a record for `current_id` (last 100), as JSON text.
+        The record's `prefix` is the id space it was allocated in: the id minus its
+        number (`EXP`, `IDEA-R`, `H130.`), for explicit and auto ids alike (#641)."""
         import json
 
-        # Extract trailing number for allocation record
-        num_match = re.search(r"(\d+)$", current_id)
+        space, number = self._id_space(current_id) or (current_id, 0)
         allocations = [
             *allocations,
             {
                 "id": current_id,
-                "prefix": prefix,
-                "number": int(num_match.group(1)) if num_match else 0,
+                "prefix": space,
+                "number": number,
                 "allocated_at": datetime.now().isoformat(),
                 "allocated_by": self._get_git_user(),
             },
@@ -2395,32 +2429,39 @@ class KanbanService:
 
     @classmethod
     def _max_allocated(cls, allocations: list[dict[str, Any]], prefix: str) -> int:
-        """Highest number `allocations` records in the `prefix-` id space."""
+        """Highest number `allocations` records in `prefix`'s id space, judged by
+        each record's id alone (#641): `H130.7` counts in `H130.`, never in the
+        dashed `H` space, whatever its `prefix` field says."""
         max_num = 0
         for alloc in allocations:
-            if alloc.get("prefix") != prefix:
-                continue
-            # ⚠ The `prefix` field alone is NOT the id space. A
-            # paper-scoped hypothesis H130.1 is stamped
-            # `prefix: "H", number: 1`, so matching on the prefix
-            # counted it toward the DASHED H-NNN space: in a repo with a
-            # 3-hypothesis paper, the first unparented hypothesis came
-            # out H-004. `_get_next_id_number` sources 2 and 3 have always filtered on
-            # `prefix + "-"`; this one did not, so the three sources
-            # disagreed about what counts.
-            #
-            # A legacy record with no stored id keeps counting — this
-            # can then only ever SKIP an id, never mint a duplicate.
-            alloc_id = alloc.get("id")
-            if alloc_id is not None and not str(alloc_id).startswith(
-                prefix + cls._id_sep(prefix)
-            ):
-                continue
-            max_num = max(max_num, alloc.get("number", 0))
+            found = cls._id_space(str(alloc.get("id", "")))
+            if found is not None and found[0] == prefix:
+                max_num = max(max_num, found[1])
         return max_num
 
+    def _fetched_default(self) -> str | None:
+        """The already-fetched `refs/remotes/origin/<default>`, when this clone has
+        one; read locally, never from the network (#641)."""
+        known = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+        head = known.stdout.strip() if known.returncode == 0 else ""
+        ref = f"refs/remotes/{head}" if head.startswith("origin/") else "refs/remotes/origin/main"
+        found = self._git_run("rev-parse", "--verify", "--quiet", ref)
+        return ref if found.returncode == 0 else None
+
     def _get_next_id_number(self, prefix: str) -> int:
-        """Get next available ID number for a prefix.
+        """Next id number for `prefix`: past the scanned board and past the
+        already-fetched origin/<default> (when there is one), so a local create or
+        `next-id --no-sync` never re-issues an id already on origin (#641). No
+        network is used."""
+        num = self._scanned_next_id_number(prefix)
+        try:
+            ref = self._fetched_default()
+        except (subprocess.TimeoutExpired, OSError):
+            ref = None
+        return num if ref is None else max(num, self._next_id_number_at(ref, prefix))
+
+    def _scanned_next_id_number(self, prefix: str) -> int:
+        """Next id number for `prefix` as this checkout sees it.
 
         Scans all three sources of truth:
         1. _ID_ALLOCATIONS.json (allocated but possibly not yet on disk)
@@ -2459,13 +2500,7 @@ class KanbanService:
             full_path = _under(self.repo_root, scan_path)
             if full_path.exists():
                 for md_file in full_path.rglob("*.md"):
-                    filename = md_file.stem  # e.g., "EXP-608-Some-Title"
-                    if filename.startswith(head):
-                        # Extract the number immediately after the prefix
-                        suffix = filename[len(head):]  # e.g., "608-Some-Title"
-                        match = re.match(r"(\d+)", suffix)
-                        if match:
-                            max_num = max(max_num, int(match.group(1)))
+                    max_num = max(max_num, self._stem_id(md_file.stem, prefix) or 0)
 
         return max_num + 1
 
@@ -2476,19 +2511,12 @@ class KanbanService:
         through the same three-source scan as everything else — so an unparented
         hypothesis is not a special case, it is a normal item.
 
-        The two id spaces do not collide: paper-scoped ids are `H{paper}.{n}`
-        with a DOT and no dash, and all three sources in `_get_next_id_number`
-        now filter on `prefix + "-"`, so `H130.1` is invisible to this allocator
-        and `H-001` is invisible to `get_next_hypothesis_number` (which scans
-        for the `H{paper}.` prefix directly and never reads this one).
-
-        ⚠ That is true BY REPAIR, not by construction — do not restate it as
-        self-evident. Source 1 matched on the `prefix` FIELD alone, and every
-        `--push`-created `H130.1` is stamped `prefix: "H"`, so before the fix
-        the first unparented hypothesis in a repo with a 3-hypothesis paper
-        came out `H-004`. The non-collision is a property this code has to
-        keep, which is why `--paper` is now constrained to a non-negative int:
-        `--paper=-1` yields `H-1.1`, which lands squarely in the dashed space.
+        The two id spaces do not collide: paper-scoped ids are `H{paper}.{n}`,
+        allocated by the same `_get_next_id_number` in the `H{paper}.` space, and
+        every source filters on the id space (`H-` here, `H130.` there; allocation
+        records by their id alone, #641). The non-collision still depends on
+        `--paper` being a non-negative int: `--paper=-1` would yield `H-1.1`, which
+        lands squarely in the dashed space.
         """
         return f"H-{self._get_next_id_number('H'):03d}"
 
@@ -2505,28 +2533,6 @@ class KanbanService:
         same thing — a hypothesis deliberately not attached to a paper.
         """
         return item_id.startswith("H-")
-
-    def get_next_hypothesis_number(self, paper_num: str) -> int:
-        """Get next hypothesis number for a paper.
-
-        Scans existing items for H{paper_num}.N patterns and returns max N + 1.
-        E.g., if H130.1 and H130.2 exist, returns 3.
-        """
-        if not self._items:
-            self.scan()
-
-        max_n = 0
-        prefix = f"H{paper_num}."
-
-        for existing_id in self._items.keys():
-            if existing_id.startswith(prefix):
-                suffix = existing_id[len(prefix):]
-                try:
-                    max_n = max(max_n, int(suffix))
-                except ValueError:
-                    pass
-
-        return max_n + 1
 
     # ------------------------------------------------------------------
     # Parent turtle block auto-update (EXP-1026)
@@ -3007,7 +3013,7 @@ class KanbanService:
             def build(base: str) -> tuple[dict[Path, str], str]:
                 made["id"] = self._next_id_at(base, prefix)
                 return (
-                    self._allocation_blob(base, prefix, made["id"]),
+                    self._allocation_blob(base, made["id"]),
                     f"Allocate ID: {made['id']}",
                 )
 
@@ -3027,22 +3033,18 @@ class KanbanService:
                         "message": result["message"]}
             return result
 
-        # Otherwise locally: the fetched default branch (when there is one) only
-        # raises the floor
+        # Otherwise locally: the fetched default branch (refetched first when
+        # syncing) only raises the floor; `--no-sync` reads what is already
+        # fetched, with no network (#641)
+        if sync_remote and self._has_remote():
+            try:
+                self._fetch_default(self._default_branch())
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.warning(f"Git fetch failed: {e}")
         self._items.clear()
         self.scan()
         next_num = self._get_next_id_number(prefix)
-        if sync_remote and self._has_remote():
-            try:
-                branch = self._default_branch()
-                if self._fetch_default(branch).returncode == 0:
-                    next_num = max(
-                        next_num,
-                        self._next_id_number_at(f"refs/remotes/origin/{branch}", prefix),
-                    )
-            except (subprocess.TimeoutExpired, OSError) as e:
-                logger.warning(f"Git fetch failed: {e}")
-        item_id = f"{prefix}-{next_num:03d}"
+        item_id = self._format_id(prefix, next_num)
 
         if commit_allocation:
             lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
@@ -3053,7 +3055,7 @@ class KanbanService:
                     allocations = json.loads(lock_file.read_text())
                 except (json.JSONDecodeError, Exception):
                     allocations = []
-            lock_file.write_text(self._with_allocation(allocations, prefix, item_id))
+            lock_file.write_text(self._with_allocation(allocations, item_id))
             try:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
             except GitCommitError as e:

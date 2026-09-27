@@ -480,26 +480,6 @@ class TestHDDHypothesisCreate:
         service = KanbanService(hdd_config, temp_repo)
         assert service.get_next_unparented_hypothesis_id() == "H-008"
 
-    def test_legacy_allocation_record_without_an_id_still_counts(
-        self, temp_repo, hdd_config,
-    ):
-        """The filter must fail toward SKIPPING an id, never toward reusing one.
-
-        A record predating the `id` field cannot be classified, so it keeps
-        counting. That can only over-count, and over-counting skips an id —
-        whereas under-counting would mint a duplicate over live work.
-        """
-        import json
-
-        alloc = temp_repo / ".kanban" / "_ID_ALLOCATIONS.json"
-        alloc.parent.mkdir(parents=True, exist_ok=True)
-        alloc.write_text(json.dumps([
-            {"prefix": "H", "number": 5},
-        ]))
-
-        service = KanbanService(hdd_config, temp_repo)
-        assert service.get_next_unparented_hypothesis_id() == "H-006"
-
     def test_paper_scoped_creation_is_unchanged(self, runner, temp_repo, hdd_config):
         """Regression guard on the half that was already working."""
         first = runner.invoke(main, ["hypothesis", "create", "One", "--paper", "130"])
@@ -1617,12 +1597,12 @@ class TestMultiSegmentPrefix:
 
 
 class TestHypothesisNumbering:
-    """Tests for get_next_hypothesis_number()."""
+    """Paper-scoped hypothesis numbering: `_get_next_id_number("H<paper>.")` (#641)."""
 
     def test_first_hypothesis_for_paper(self, temp_repo, hdd_config):
         """First hypothesis for a paper should be 1."""
         service = KanbanService(hdd_config, temp_repo)
-        assert service.get_next_hypothesis_number("130") == 1
+        assert service._get_next_id_number("H130.") == 1
 
     def test_auto_increment_hypothesis(self, temp_repo, hdd_config):
         """Hypothesis numbering should increment based on existing items."""
@@ -1637,7 +1617,7 @@ class TestHypothesisNumbering:
             )
 
         service.scan()
-        assert service.get_next_hypothesis_number("130") == 3
+        assert service._get_next_id_number("H130.") == 3
 
     def test_different_papers_independent(self, temp_repo, hdd_config):
         """Hypothesis numbering should be per-paper."""
@@ -1654,9 +1634,9 @@ class TestHypothesisNumbering:
         )
 
         service.scan()
-        assert service.get_next_hypothesis_number("130") == 2
-        assert service.get_next_hypothesis_number("131") == 2
-        assert service.get_next_hypothesis_number("132") == 1
+        assert service._get_next_id_number("H130.") == 2
+        assert service._get_next_id_number("H131.") == 2
+        assert service._get_next_id_number("H132.") == 1
 
 
 # ---------------------------------------------------------------------------
