@@ -43,3 +43,20 @@ def test_fresh_write_keeps_leading_comment_lines(repo: Path) -> None:
     block = _tags_block(path.read_text())
     assert block[0] == "  # why these tags", block
     assert _service(repo).get_item(ITEM_ID).tags == ["{k: v, j: w}", "plain", "x"]
+
+
+def test_dash_spacing_is_kept(repo: Path) -> None:
+    """A list written `-   a` keeps its spacing on new items (#695 review)."""
+    path = _write(repo, BASE + "tags:\n  -   a\n  -   b\n")
+    svc = _service(repo)
+    svc.update_item(ITEM_ID, tags=svc.get_item(ITEM_ID).tags + ["x"])
+    assert "  -   x\n" in path.read_text(), path.read_text()
+
+
+def test_dash_inside_a_block_scalar_is_not_the_list_dash(repo: Path) -> None:
+    """The dash comes from the value's first item line only (#695 review)."""
+    path = _write(repo, BASE + "tags:\n  note: |\n    -\n    text\n")
+    svc = _service(repo)
+    svc.update_item(ITEM_ID, tags=["a", "x"])
+    assert "    - a" not in path.read_text(), path.read_text()
+    assert _service(repo).get_item(ITEM_ID).tags == ["a", "x"]
