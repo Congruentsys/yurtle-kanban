@@ -440,8 +440,11 @@ class KanbanService:
     ) -> dict[str, str]:
         """Get reverse mapping from canonical status to board-native name.
 
+        Inverts the theme's ``status_mappings``; where a theme maps two names to one
+        status, the last one listed wins (the name `move` writes).
         For HDD: ``{backlog: draft, in_progress: active, ...}``
-        For nautical or no board: returns empty dict.
+        For nautical: ``{backlog: harbor, ready: provisioning, ...}``
+        With no theme or no ``status_mappings``: an empty dict.
         """
         if theme is None:
             theme = self._load_board_theme(board_config)
@@ -473,6 +476,19 @@ class KanbanService:
             # keys folded like the input, so `on-hold`/`In Review` match (#587)
             names.setdefault(_fold_status_name(str(native)), status)
         return names
+
+    def listed_status_names(self, item: WorkItem) -> list[str]:
+        """The statuses to list when `move` refuses a name for `item`: each canonical
+        status once, in workflow order, spelt as the item's theme names it (canonical
+        where the theme doesn't rename it). Canonical names and aliases still resolve;
+        they just aren't listed (#643)."""
+        native: dict[WorkItemStatus, str] = {}
+        for canonical, name in self._item_reverse_status_mapping(item).items():
+            try:
+                native[WorkItemStatus.from_string(str(canonical))] = str(name)
+            except ValueError:
+                continue
+        return [native.get(s, s.value) for s in WorkItemStatus]
 
     def resolve_status_name(self, item: WorkItem, name: str) -> WorkItemStatus | None:
         """`name` as a status of `item`'s theme (case-insensitive, `-`/space → `_`),

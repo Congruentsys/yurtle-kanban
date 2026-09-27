@@ -410,7 +410,7 @@ class KanbanMCPServer:
         # the item's own theme's names only, as `move` resolves them (#587, #604)
         new_status = self.service.resolve_status_name(target, str(args["new_status"]))
         if new_status is None:
-            valid = ", ".join(sorted(self.service.legal_status_names(target)))
+            valid = ", ".join(self.service.listed_status_names(target))
             return {"error": f"Unknown status: {args['new_status']}. Valid statuses: {valid}"}
 
         item = self.service.move_item(item_id, new_status)

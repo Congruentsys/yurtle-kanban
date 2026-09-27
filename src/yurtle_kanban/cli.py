@@ -637,7 +637,7 @@ def move(
     status = service.resolve_status_name(target, new_status)
     if status is None:
         console.print(f"[red]Unknown status: {safe(new_status)}[/red]")
-        valid = sorted(service.legal_status_names(target))
+        valid = service.listed_status_names(target)
         console.print(f"Valid statuses: {escape(', '.join(valid))}")
         sys.exit(1)
 

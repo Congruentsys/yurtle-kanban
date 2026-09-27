@@ -96,6 +96,15 @@ def _legal(theme: str) -> dict[str, str]:
     return {**CANONICAL, **NATIVE[theme]}
 
 
+def _native_list(theme: str) -> list[str]:
+    """What a refusal lists for an item of `theme` (#643): each canonical status once,
+    in canonical order, as the theme file's `status_mappings` names it (last wins),
+    else its canonical name."""
+    data = yaml.safe_load((THEMES_DIR / f"{theme}.yaml").read_text())
+    native = {str(c): str(n) for n, c in (data.get("status_mappings") or {}).items()}
+    return [native.get(c, c) for c in CANONICAL]
+
+
 def _foreign(theme: str) -> list[str]:
     """Other themes' native names that are neither native nor canonical in `theme`."""
     legal = _legal(theme)
@@ -208,10 +217,11 @@ def _assert_refused(
         f"`move {item_id} {name!r}` ({theme} item) was accepted:\n{text}"
     )
     assert path.read_bytes() == before, "a refused move changed the item file"
-    # the message lists the item theme's legal names...
+    # the message lists each of the item theme's statuses, in its native spelling
+    # (#643: once each, canonical order; canonical names/aliases accepted, not listed)...
     words = set(re.findall(r"[a-z_]+", text.lower()))
-    missing = sorted(set(_legal(theme)) - words)
-    assert not missing, f"refusal doesn't list {theme}'s legal names {missing}:\n{text}"
+    missing = sorted(set(_native_list(theme)) - words)
+    assert not missing, f"refusal doesn't list {theme}'s statuses {missing}:\n{text}"
     # ...and not other themes' (the old global union)
     leaked = sorted((DISTINCTIVE - set(_legal(theme)) - {name.strip().lower()}) & words)
     assert not leaked, f"refusal lists other themes' names {leaked}:\n{text}"
@@ -417,9 +427,10 @@ def _file_status(repo: Path, item_id: str) -> str:
 
 def _listed_names(text: str) -> list[str]:
     """The names a refusal lists: the comma-separated list after the colon on the
-    line that names the canonical statuses."""
+    line that names the statuses (custom keeps `backlog` and renames in_progress
+    `doing`; #643)."""
     line = next(
-        (ln for ln in text.splitlines() if "backlog" in ln and "in_progress" in ln), None
+        (ln for ln in text.splitlines() if "backlog" in ln and "doing" in ln), None
     )
     assert line is not None, f"refusal lists no status names:\n{text}"
     return [n.strip() for n in line.rsplit(":", 1)[-1].split(",") if n.strip()]
@@ -455,12 +466,11 @@ def test_custom_theme_refusal_lists_only_names_move_accepts(
     assert path.read_bytes() == before
 
     listed = _listed_names(text)
-    # every custom native name and every canonical name is offered, in some spelling
-    offered = {_fold(n) for n in listed}
-    missing = sorted(
-        n for n in [*CUSTOM_MAPPINGS, *CANONICAL] if _fold(n) not in offered
-    )
-    assert not missing, f"refusal doesn't offer {missing}: {listed}"
+    # each status once, in canonical order, in the custom theme's spelling (#643):
+    # every custom native name, and the canonical name where the theme has none
+    native = {c: n for n, c in CUSTOM_MAPPINGS.items()}
+    expected = [native.get(c, c) for c in CANONICAL]
+    assert listed == expected, f"refusal lists {listed}, want {expected}"
     # and each offered name, fed back to `move`, is accepted
     refused = []
     for name in listed:
