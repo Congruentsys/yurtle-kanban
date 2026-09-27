@@ -638,19 +638,18 @@ def move(
     """
     service = get_service()
 
-    try:
-        status = WorkItemStatus.from_string(new_status)
-    except ValueError:
-        # Try resolving as a theme alias (e.g., "active" → "in_progress" for HDD)
-        column_map = service._get_column_status_map()
-        resolved = column_map.get(new_status.lower().replace("-", "_").replace(" ", "_"))
-        if resolved:
-            status = resolved
-        else:
-            console.print(f"[red]Unknown status: {safe(new_status)}[/red]")
-            valid = sorted({s.value for s in WorkItemStatus} | set(column_map.keys()))
-            console.print(f"Valid statuses: {escape(', '.join(valid))}")
-            sys.exit(1)
+    target = service.get_item(item_id.upper())
+    if target is None:
+        console.print(f"[red]Error: Item not found: {safe(item_id.upper())}[/red]")
+        sys.exit(1)
+    # a name resolves through the item's own theme only (hdd `active`), never
+    # another theme's; --force doesn't change that (#587)
+    status = service.resolve_status_name(target, new_status)
+    if status is None:
+        console.print(f"[red]Unknown status: {safe(new_status)}[/red]")
+        valid = sorted(service.legal_status_names(target))
+        console.print(f"Valid statuses: {escape(', '.join(valid))}")
+        sys.exit(1)
 
     # Build gate context from CLI flags
     gate_context: dict[str, object] = {}
