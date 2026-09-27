@@ -47,6 +47,19 @@ def _get_engine() -> TemplateEngine:
     return TemplateEngine(_get_templates_dir())
 
 
+def _print_created_file(result: dict) -> None:
+    """`File:` for a created item — or, when `--push` landed it on the remote's
+    default branch but not in this checkout, where it is and to pull (#585)."""
+    if result.get("local", True):
+        console.print(f"  File: {safe(result['item'].file_path)}")
+    else:
+        branch = result.get("branch") or "main"
+        console.print(
+            f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
+            f"pull {safe(branch)} to see it[/yellow]"
+        )
+
+
 def _update_parent(
     service,
     parent_id: str,
@@ -618,7 +631,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
                 f"[green]Created{pushed} {safe(str(result['id']))}: "
                 f"{safe(title)}[/green]"
             )
-            console.print(f"  File: {safe(result['item'].file_path)}")
+            _print_created_file(result)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -690,7 +703,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
                 f"[green]Created{pushed} {safe(str(result['id']))}: "
                 f"{safe(title)}[/green]"
             )
-            console.print(f"  File: {safe(result['item'].file_path)}")
+            _print_created_file(result)
             if source_idea:
                 _update_parent(service, source_idea, "literature", result["id"], push=True)
         else:
@@ -776,7 +789,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
                 f"[green]Created{pushed} {safe(str(result['id']))}: "
                 f"{safe(title)}[/green]"
             )
-            console.print(f"  File: {safe(result['item'].file_path)}")
+            _print_created_file(result)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -943,7 +956,7 @@ def hypothesis_create(
                 f"[green]Created{pushed} {safe(str(result['id']))}: "
                 f"{safe(statement)}[/green]"
             )
-            console.print(f"  File: {safe(result['item'].file_path)}")
+            _print_created_file(result)
             # No paper -> no parent to back-reference. Guarding here rather than
             # inside _update_parent keeps the 'PAPER-None' string from ever existing.
             if paper_num is not None:
@@ -1076,7 +1089,7 @@ def experiment_create(
                 f"[green]Created{pushed} {safe(str(result['id']))}: "
                 f"{safe(title)}[/green]"
             )
-            console.print(f"  File: {safe(result['item'].file_path)}")
+            _print_created_file(result)
             # No hypothesis -> no parent to back-reference.
             if hyp_id:
                 _update_parent(service, hyp_id, "experiment", result["id"], push=True)
@@ -1317,7 +1330,7 @@ def measure_create(
                 f"[green]Created{pushed} {safe(str(result['id']))}: "
                 f"{safe(title)}[/green]"
             )
-            console.print(f"  File: {safe(result['item'].file_path)}")
+            _print_created_file(result)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
