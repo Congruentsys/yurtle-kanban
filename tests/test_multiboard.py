@@ -876,18 +876,20 @@ status: backlog
         return {"tmp_path": tmp_path, "config": config, "service": service}
 
     def test_column_status_map_includes_hdd_aliases(self, move_test_setup):
-        """_get_column_status_map should include HDD aliases from theme status_mappings."""
+        """The hdd board's column map includes its theme's status_mappings; the
+        nautical board's doesn't (#633)."""
         from yurtle_kanban.models import WorkItemStatus
 
         service = move_test_setup["service"]
-        col_map = service._get_column_status_map()
+        col_map = service._get_column_status_map(service.config.get_board("research"))
 
         # HDD theme status_mappings: active→in_progress, complete→done, abandoned→blocked
         assert col_map.get("active") == WorkItemStatus.IN_PROGRESS
         assert col_map.get("complete") == WorkItemStatus.DONE
         assert col_map.get("abandoned") == WorkItemStatus.BLOCKED
-        # draft→backlog was already in the hardcoded mappings
         assert col_map.get("draft") == WorkItemStatus.BACKLOG
+        dev_map = service._get_column_status_map(service.config.get_board("development"))
+        assert "active" not in dev_map
 
     def test_move_research_item_uses_research_board_wip(self, move_test_setup):
         """Moving a research item should check WIP on the research board, not dev."""
