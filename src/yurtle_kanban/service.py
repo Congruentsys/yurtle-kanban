@@ -45,6 +45,7 @@ from .models import (
     turtle_string,
     turtle_unescape,
     unknown_priority_message,
+    yaml_flow_list,
     yaml_quote,
     yaml_scalar,
 )
@@ -966,17 +967,13 @@ class KanbanService:
         # Remove yurtle and turtle knowledge blocks
         content = re.sub(r"```(?:yurtle|turtle).*?```", "", content, flags=re.DOTALL)
 
-        # Remove heading (title)
+        # Remove the heading (title): only a `# ` H1 on the first non-blank line,
+        # so a `# ` line in a code block or a leading `## Background` is kept (#583)
         lines = content.strip().split("\n")
-        description_lines = []
-        skip_heading = True
-        for line in lines:
-            if skip_heading and line.startswith("#"):
-                skip_heading = False
-                continue
-            description_lines.append(line)
+        if lines and lines[0].startswith("# "):
+            lines = lines[1:]
 
-        description = "\n".join(description_lines).strip()
+        description = "\n".join(lines).strip()
         return description if description else None
 
     def _map_theme_type(self, type_str: str) -> WorkItemType | None:
@@ -3261,16 +3258,6 @@ class KanbanService:
         }
         return transitions.get(status, [])
 
-    def _update_item_file(self, item: WorkItem) -> None:
-        """Update the work item file with current state, keeping its line endings (#151)."""
-        eol: LineEndings | str = "\n"
-        text = item.to_markdown()
-        if item.file_path.exists():
-            old, eol = self._read_item_text(item.file_path)
-            if old.endswith("\n") and not text.endswith("\n"):
-                text += "\n"  # keep the file's final newline
-        self._write_item_text(item.file_path, text, eol)
-
     def _update_item_file_with_history(
         self,
         item: WorkItem,
@@ -3582,8 +3569,9 @@ class KanbanService:
         """Update item file to include new comment."""
         content, eol = self._read_item_text(item.file_path)
 
-        # Add comment section if not exists
-        if "## Comments" not in content:
+        # Add comment section if not exists (a `## Comments` line in a code
+        # block doesn't count, #583)
+        if self._find_line_outside_fences(content, 0, self._COMMENTS_RE) < 0:
             content += "\n\n## Comments\n"
 
         # Add comment
@@ -3801,36 +3789,48 @@ class KanbanService:
 
         self._check_text(title=title, description=description, assignee=assignee, tags=tags)
 
-        # Track what changed for commit message
+        # Field-level edits only, like rank_item (#583): every line the update
+        # doesn't touch - unknown keys, the native status, the history block,
+        # comments - stays byte-for-byte, and so do the file's line endings.
+        content, eol = self._read_item_text(item.file_path)
+        original = content
         changes = []
 
         if title is not None and title != item.title:
+            content = self._add_or_update_frontmatter_field(content, "title", yaml_quote(title))
+            content = self._replace_h1(content, title)
             item.title = title
             changes.append("title")
 
         if priority is not None and priority != item.priority:
+            content = self._add_or_update_frontmatter_field(content, "priority", priority)
             item.priority = priority
             changes.append("priority")
 
         if assignee is not None and assignee != item.assignee:
+            content = self._add_or_update_frontmatter_field(
+                content, "assignee", yaml_scalar(assignee) if assignee else "null"
+            )
             item.assignee = assignee
             changes.append("assignee")
 
-        if description is not None and description != item.description:
-            item.description = description
-            changes.append("description")
+        if description is not None:
+            updated = self._replace_body(content, description)
+            if updated != content:
+                content = updated
+                item.description = description
+                changes.append("description")
 
         if tags is not None and tags != item.tags:
+            content = self._add_or_update_frontmatter_field(content, "tags", yaml_flow_list(tags))
             item.tags = tags
             changes.append("tags")
 
-        if not changes:
-            return item  # Nothing to update
+        if not changes or content == original:
+            return item  # Nothing to update: no write, no commit
 
         item.updated = datetime.now()
-
-        # Update file
-        self._update_item_file(item)
+        self._write_item_text(item.file_path, content, eol)
 
         # Git commit if requested
         if commit:
@@ -3841,6 +3841,130 @@ class KanbanService:
             )
 
         return item
+
+    def _body_start(self, content: str) -> int:
+        """Offset just past the frontmatter's closing `---` line (0 without frontmatter)."""
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
+            return 0
+        eol = content.find("\n", match.end())
+        return len(content) if eol < 0 else eol + 1
+
+    _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+
+    @classmethod
+    def _find_line_outside_fences(cls, content: str, start: int, pattern: re.Pattern[str]) -> int:
+        """Offset of the first line at or after `start` that matches `pattern` and is
+        not inside a fenced code block, or -1 (#583). A matching fence opener counts."""
+        fence: str | None = None  # the open fence's marker, e.g. "```"
+        pos = start
+        while pos < len(content):
+            eol = content.find("\n", pos)
+            end = len(content) if eol < 0 else eol
+            line = content[pos:end]
+            if fence is None and pattern.match(line):
+                return pos
+            marker = cls._FENCE_RE.match(line)
+            if marker:
+                if fence is None:
+                    fence = marker.group(1)
+                elif marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) \
+                        and not line[len(marker.group(1)):].strip():
+                    fence = None  # a closing fence carries no info string
+            pos = end + 1
+        return -1
+
+    _KNOWLEDGE_OPEN_RE = re.compile(r"```(?:yurtle|turtle)")
+
+    def _leading_knowledge_end(self, content: str) -> int:
+        """Offset just past the last ```yurtle/```turtle block that opens the body
+        (blank lines between blocks allowed), else just past the frontmatter. These
+        are the blocks `_extract_description` discards before it looks for the H1
+        (#583); a block runs to the next ``` the way the parser's regex does."""
+        pos = end_of_blocks = self._body_start(content)
+        while pos < len(content):
+            eol = content.find("\n", pos)
+            end = len(content) if eol < 0 else eol
+            if not content[pos:end].strip():
+                pos = end + 1
+                continue
+            if not self._KNOWLEDGE_OPEN_RE.match(content, pos):
+                break
+            close = content.find("```", pos + 3)
+            if close < 0:
+                break  # unclosed: the parser keeps it, so it's body
+            eol = content.find("\n", close)
+            pos = end_of_blocks = len(content) if eol < 0 else eol + 1
+        return end_of_blocks
+
+    def _h1_span(self, content: str) -> tuple[int, int] | None:
+        """The `# Title` line: the first non-blank line after the frontmatter and any
+        leading knowledge blocks, and only when it is a level-1 heading (#583).
+        Never a `# ` line inside code."""
+        pos = self._leading_knowledge_end(content)
+        while pos < len(content):
+            eol = content.find("\n", pos)
+            end = len(content) if eol < 0 else eol
+            if content[pos:end].strip():
+                return (pos, end) if content.startswith("# ", pos) else None
+            pos = end + 1
+        return None
+
+    def _replace_h1(self, content: str, title: str) -> str:
+        """Rewrite only the `# Title` line after the frontmatter (#583); without one,
+        nothing after the frontmatter changes."""
+        span = self._h1_span(content)
+        if span is None:
+            return content
+        # one line: a newline in the title would end the heading
+        heading = "# " + " ".join(title.splitlines())
+        return content[: span[0]] + heading + content[span[1] :]
+
+    # The description ends at the first knowledge block or the comments section
+    # (outside fenced code, #583)
+    _BODY_END_RE = re.compile(r"(?:```(?:yurtle|turtle)\b|## Comments[ \t]*$)")
+    _COMMENTS_RE = re.compile(r"## Comments[ \t]*$")
+
+    def _replace_body(self, content: str, description: str) -> str:
+        """Replace only the body span: after the H1 (or the frontmatter when there is
+        no H1) up to the first ```yurtle fence or `## Comments` outside fenced code
+        (#583).
+
+        Returns `content` unchanged when the span, or the description the parser
+        reads from the file, already equals `description`, so a read-modify-write
+        that sends the parsed description back is a no-op.
+        """
+        if description.strip() == (self._extract_description(content) or ""):
+            return content
+        # The parsed description ends with the comments section (`show` and MCP
+        # `get_item` display comments through it), but the span stops before it:
+        # an edited description sent back with that section still attached must
+        # not write the comments into the body a second time.
+        cut = self._find_line_outside_fences(content, 0, self._COMMENTS_RE)
+        if cut >= 0:
+            comments = re.sub(
+                r"```(?:yurtle|turtle).*?```", "", content[cut:], flags=re.DOTALL
+            ).strip()
+            trimmed = description.rstrip()
+            if comments and trimmed.endswith(comments):
+                description = trimmed[: -len(comments)]
+        h1 = self._h1_span(content)
+        start = self._leading_knowledge_end(content)
+        if h1:
+            start = h1[1] + 1 if h1[1] < len(content) else len(content)
+        end = self._find_line_outside_fences(content, start, self._BODY_END_RE)
+        tail = end >= 0
+        if not tail:
+            end = len(content)
+        if content[start:end].strip() == description.strip():
+            return content
+        text = description.strip("\n")
+        span = f"\n{text}\n" if text else ""
+        if tail:
+            span += "\n"  # a blank line before the fence / comments
+        if start == len(content) and content and not content.endswith("\n"):
+            span = "\n" + span  # an H1 without a final newline
+        return content[:start] + span + content[end:]
 
     def rank_item(
         self,
