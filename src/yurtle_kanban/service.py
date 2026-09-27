@@ -3459,6 +3459,70 @@ class KanbanService:
                 return layout
         return before
 
+    @staticmethod
+    def _trailing_comment(head: str) -> str:
+        """The trailing `  # comment` of a key line's value, with the whitespace
+        before it, or "" (#619). A `#` inside a quoted value or not preceded by
+        whitespace isn't a comment: the text before a candidate must parse as a
+        complete value. Only a head that has whitespace + `#` is parsed (#249)."""
+        if not re.search(r"[ \t]#", head):
+            return ""
+        for candidate in re.finditer(r"[ \t]+#", head):
+            try:
+                yaml.load(f"k: {head[: candidate.start()]}", Loader=KanbanService._YAML_LOADER)
+            except yaml.YAMLError:
+                continue
+            return head[candidate.start() :]
+        return ""
+
+    @classmethod
+    def _block_list_lines(cls, rest: str, dash: str, items: list[str]) -> str:
+        """Render `items` as block-list lines (each with a leading newline) under a
+        key whose old value lines are `rest` (#596, #619).
+
+        Comment (and blank) lines in the old list are kept as written, anchored to
+        the item that follows them: they go right before that item wherever it
+        lands, and are dropped with it when it's removed. A kept item keeps its
+        old line. Without comment lines, or when an item spans several lines,
+        every item is written fresh.
+        """
+        old_lines = rest.split("\n")[1:]  # `rest` starts with the newline
+        fresh = "".join(f"\n{dash}{yaml_scalar(v)}" for v in items)
+        if not any(ln.lstrip().startswith("#") for ln in old_lines):
+            return fresh
+        entries: list[tuple[object, str, list[str]]] = []  # (value, line, comments)
+        pending: list[str] = []
+        for line in old_lines:
+            item = re.match(r"[ \t]*-(?:[ \t]+(.*))?$", line)
+            if not line.strip() or line.lstrip().startswith("#"):
+                pending.append(line)
+            elif item:
+                text = cls._strip_line_comment(item.group(1) or "")
+                try:
+                    parsed = yaml.load(f"k: {text}", Loader=cls._YAML_LOADER)["k"]
+                except (yaml.YAMLError, TypeError):
+                    return fresh
+                entries.append((parsed, line, pending))
+                pending = []
+            else:
+                return fresh  # a multi-line item: no safe anchoring
+        out: list[str] = []
+        for value in items:
+            hit = next((e for e in entries if e[0] == value), None)
+            if hit is None:
+                out.append(f"{dash}{yaml_scalar(value)}")
+                continue
+            entries.remove(hit)
+            out.extend(hit[2])
+            out.append(hit[1])
+        return "".join(f"\n{line}" for line in out)
+
+    @classmethod
+    def _strip_line_comment(cls, text: str) -> str:
+        """`text` without its trailing `  # comment` (#619)."""
+        comment = cls._trailing_comment(text)
+        return text[: len(text) - len(comment)] if comment else text
+
     def _add_or_update_frontmatter_field(
         self, content: str, field: str, value: str, items: list[str] | None = None,
     ) -> str:
@@ -3491,14 +3555,16 @@ class KanbanService:
         )
 
         def replace(m: re.Match[str]) -> str:
+            # a trailing comment on the key line is kept, with its spacing (#619)
+            comment = self._trailing_comment(m.group("head"))
             if items:
                 # a block list (`key:` then `- item` lines) stays a block list
-                head = m.group("head").split(" #", 1)[0].strip()
+                head = m.group("head")[: len(m.group("head")) - len(comment)].strip()
                 dash = re.search(r"^([ \t]*-[ \t]+)\S", m.group("rest"), re.MULTILINE)
                 if not head and dash:
-                    lines = "".join(f"\n{dash.group(1)}{yaml_scalar(v)}" for v in items)
-                    return f"{m.group('key')}:{lines}"
-            return f"{m.group('key')}: {value}"
+                    lines = self._block_list_lines(m.group("rest"), dash.group(1), items)
+                    return f"{m.group('key')}:{comment}{lines}"
+            return f"{m.group('key')}: {value}{comment}"
 
         if re.search(pattern, frontmatter, flags=re.MULTILINE):
             # Field exists — update it
