@@ -59,9 +59,9 @@ def _world(tmp_path: Path) -> Path:
 def test_guessed_default_is_not_recorded_as_origin_head(tmp_path):
     local = _world(tmp_path)
     svc = KanbanService(KanbanConfig.load(local / ".kanban" / "config.yaml"), local)
-    branch = svc._default_branch()
-    assert branch == "main"  # the guess
-    assert svc._fetch_default(branch).returncode == 0
+    branch, known = svc._resolve_default()  # #698: the guess is explicit
+    assert (branch, known) == ("main", False)  # the guess
+    assert svc._fetch_default(branch, record=known).returncode == 0
     head = subprocess.run(
         ["git", "symbolic-ref", "-q", "refs/remotes/origin/HEAD"],
         cwd=local, capture_output=True, text=True,
@@ -73,7 +73,8 @@ def test_known_default_is_still_recorded(tmp_path):
     local = _world(tmp_path)
     _git(tmp_path / "remote.git", "symbolic-ref", "HEAD", "refs/heads/main")
     svc = KanbanService(KanbanConfig.load(local / ".kanban" / "config.yaml"), local)
-    assert svc._fetch_default(svc._default_branch()).returncode == 0
+    branch, known = svc._resolve_default()
+    assert svc._fetch_default(branch, record=known).returncode == 0
     assert _git(local, "symbolic-ref", "refs/remotes/origin/HEAD").strip() == (
         "refs/remotes/origin/main"
     )

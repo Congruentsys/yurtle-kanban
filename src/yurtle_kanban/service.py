@@ -2124,8 +2124,8 @@ class KanbanService:
         failed = self._push_failed
         branch = "main"
         try:
-            branch = self._default_branch()
-            return self._race_to_branch(branch, build, landed, max_retries, what)
+            branch, known = self._resolve_default()
+            return self._race_to_branch(branch, build, landed, max_retries, what, known)
         except _CasRefusedError as e:
             return failed(str(e))
         except subprocess.TimeoutExpired as e:
@@ -2152,27 +2152,30 @@ class KanbanService:
         }
 
     def _default_branch(self) -> str:
-        """The remote's default branch: `origin/HEAD` when set locally, else what the
-        remote itself says (`ls-remote --symref`), else `main` (#585)."""
-        self._guessed_default = False
+        """The remote's default branch (see `_resolve_default`)."""
+        return self._resolve_default()[0]
+
+    def _resolve_default(self) -> tuple[str, bool]:
+        """(the remote's default branch, whether it is known): `origin/HEAD` when set
+        locally, else what the remote itself says (`ls-remote --symref`); else a
+        guess of `main`, which is never recorded as origin/HEAD (#585, #685, #698)."""
         known = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
         if known.returncode == 0 and known.stdout.strip().startswith("origin/"):
-            return known.stdout.strip().removeprefix("origin/")
+            return known.stdout.strip().removeprefix("origin/"), True
         asked = self._git_run("ls-remote", "--symref", "origin", "HEAD")
         match = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", asked.stdout, re.M)
-        if match:
-            return match.group(1)
-        self._guessed_default = True  # never recorded as origin/HEAD (#685)
-        return "main"
+        return (match.group(1), True) if match else ("main", False)
 
-    def _fetch_default(self, branch: str) -> subprocess.CompletedProcess[str]:
-        """Fetch exactly `origin/<branch>` (#585), then record it locally as
-        `origin/HEAD`, as `git clone` does, so the offline `_fetched_default` finds
-        it (#661)."""
+    def _fetch_default(
+        self, branch: str, *, record: bool
+    ) -> subprocess.CompletedProcess[str]:
+        """Fetch exactly `origin/<branch>` (#585); when `record` (the branch is known,
+        not guessed), also record it locally as `origin/HEAD`, as `git clone` does,
+        so the offline `_fetched_default` finds it (#661, #698)."""
         fetch = self._git_run(
             "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         )
-        if fetch.returncode == 0 and not getattr(self, "_guessed_default", False):
+        if fetch.returncode == 0 and record:
             ref = f"refs/remotes/origin/{branch}"
             known = self._git_run("symbolic-ref", "-q", "refs/remotes/origin/HEAD")
             if known.returncode != 0 or known.stdout.strip() != ref:
@@ -2186,15 +2189,17 @@ class KanbanService:
         landed: Callable[[str, bool], dict[str, Any]],
         max_retries: int,
         what: str,
+        known: bool = True,
     ) -> dict[str, Any]:
-        """The fetch / build / push loop of `_cas_on_default_branch`."""
+        """The fetch / build / push loop of `_cas_on_default_branch`; `known` says
+        whether `branch` may be recorded as origin/HEAD (#698)."""
         import tempfile
 
         failed = self._push_failed
         attempts = max(1, max_retries)
         last_err = ""
         for attempt in range(attempts):
-            fetch = self._fetch_default(branch)
+            fetch = self._fetch_default(branch, record=known)
             if fetch.returncode != 0:
                 return failed(
                     f"Could not fetch origin/{branch} from the remote: "
@@ -2272,7 +2277,7 @@ class KanbanService:
 
         # Best effort: leave origin/<default> showing the commits that beat us
         with suppress(subprocess.TimeoutExpired, OSError):
-            self._fetch_default(branch)
+            self._fetch_default(branch, record=known)
         return failed(
             f"Failed to create the {what}: the push to origin/{branch} was rejected "
             f"{attempts} time(s) (lost the race to another writer each attempt); "
@@ -3237,8 +3242,8 @@ class KanbanService:
         fetched = None
         if sync_remote and self._has_remote():
             try:
-                branch = self._default_branch()
-                if self._fetch_default(branch).returncode == 0:
+                branch, known = self._resolve_default()
+                if self._fetch_default(branch, record=known).returncode == 0:
                     fetched = f"refs/remotes/origin/{branch}"
             except (subprocess.TimeoutExpired, OSError) as e:
                 logger.warning(f"Git fetch failed: {e}")
