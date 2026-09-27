@@ -2797,7 +2797,8 @@ class KanbanService:
         'linked'), from the one parse that tried (#750)."""
         edit, state = self._parent_link_edit(parent_id, child_type, child_id)
         if edit is None:
-            return state or "linked"
+            assert state is not None  # a None edit always says why (#766)
+            return state
         self._apply_parent_link(*edit)
         return "added"
 
@@ -2872,12 +2873,12 @@ class KanbanService:
         'missing' (on no board), 'no-relation' (the child type has none),
         'no-block' (the parent has no turtle block), 'unparseable' (the block
         can't be parsed or has no URI subject, #737), 'linked' (already there),
-        or 'addable' (#724)."""
+        or 'addable' (#724). The relation first, as `_parent_link_edit` (#766)."""
+        if child_type not in self._INVERSE_RELATIONS:
+            return "no-relation"
         parent = self._current_item(parent_id)
         if parent is None or not parent.file_path.exists():
             return "missing"
-        if child_type not in self._INVERSE_RELATIONS:
-            return "no-relation"
         content = parent.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
         _, state = self._linked_parent_text(content, parent_id, child_type, child_id)
         return state or "addable"
