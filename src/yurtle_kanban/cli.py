@@ -730,6 +730,39 @@ def move(
 
 @main.command()
 @click.argument("item_id")
+@click.option("--agent", help="Who is claiming it; default $YURTLE_AGENT (never git user.name)")
+@click.option(
+    "--take-over",
+    is_flag=True,
+    help="Take it from its holder (recorded as kb:takenOverFrom); gates still apply",
+)
+def claim(item_id: str, agent: str | None, take_over: bool):
+    """Claim a work item: move it to in progress, held by you, race-free (#574).
+
+    One compare-and-swap commit on origin's default branch (a kanban-only commit):
+    of two agents claiming one item, exactly one wins; the other is told who.
+    Exit codes: 0 claimed (or already yours), 1 refused, 3 lost to another agent,
+    4 remote unreachable, 5 remote busy, 6 push refused by the remote.
+
+    Examples:
+        YURTLE_AGENT=Claude-M5 yurtle-kanban claim EXP-123
+        yurtle-kanban claim EXP-123 --agent Claude-M5
+        yurtle-kanban claim EXP-123 --take-over --agent Claude-M5
+    """
+    service = get_service()
+    try:
+        # every session on a machine shares git user.name: no fallback (#574)
+        actor = resolve_actor(agent, allow_git_fallback=False, cwd=service.repo_root)
+        outcome = service.claim_item(item_id.upper(), actor=actor, take_over=take_over)
+    except InputRefused as e:
+        _refuse(e)
+    color = "green" if outcome.exit_code == 0 else "red"
+    console.print(f"[{color}]{safe(outcome.message)}[/{color}]", soft_wrap=True)
+    sys.exit(int(outcome.exit_code))
+
+
+@main.command()
+@click.argument("item_id")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def show(item_id: str, as_json: bool):
     """Show details of a work item."""

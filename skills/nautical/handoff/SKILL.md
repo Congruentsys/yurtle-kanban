@@ -83,8 +83,8 @@ status: pending
 
 ## How to Continue
 
-1. Checkout branch: `git checkout expedition/exp-XXX-...`
-2. [Next step]
+1. Take the item over: `yurtle-kanban claim EXP-XXX --take-over --agent <receiver>`
+2. Checkout branch: `git checkout expedition/exp-XXX-...`
 3. [Next step]
 ```
 
@@ -125,7 +125,9 @@ yurtle-kanban move EXP-XXX blocked
 
 Show summary:
 - Handoff note location
-- What the receiving agent should do
+- What the receiving agent should do, starting with taking the item over:
+  `yurtle-kanban claim EXP-XXX --take-over --agent <receiver>` (recorded as
+  `kb:takenOverFrom`; the receiver runs it, as themselves)
 - Remind to run `/sync` on next session
 
 ## Agent Reference

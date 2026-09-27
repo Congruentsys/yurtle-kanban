@@ -21,6 +21,8 @@ All implementation work goes through feature branches and pull requests:
 4. Push and create PR: `gh pr create`
 5. Get review from another developer/agent before merging
 
+Exception (Captain, 2026-09-27): kanban-only commits made by `claim`, `bounce`, `control` and `update --push` — touching only `.kanban/` and work-item files — are pushed directly to the default branch.
+
 After merge, clean up:
 ```bash
 git branch -d feat-short-description

@@ -37,14 +37,21 @@ Show the top 5 ready items with their priorities.
 Once an item is selected (either from $ARGUMENTS or user choice):
 
 ```bash
-# Move to in_progress
-yurtle-kanban move FEAT-XXX in_progress
+# Claim it: one race-free commit on origin's default branch, so of two
+# agents claiming one item exactly one wins. Use YOUR agent name, never a
+# shared one (sessions on one machine share git user.name).
+YURTLE_AGENT=<your-agent-name> yurtle-kanban claim FEAT-XXX
 
-# Create feature branch from main
-git checkout main
-git pull origin main
-git checkout -b feature/feat-XXX-short-description
+# Create the feature branch from the remote default branch (main here)
+git fetch origin
+git checkout -b feature/feat-XXX-short-description origin/main
 ```
+
+`claim` exits 0 when the item is yours (claimed now, or already yours). Exit 1
+means refused (held by someone else, not ready, a gate or WIP limit) and exit 3
+means another agent claimed it first: pick another item. Exit 4, 5 or 6 means
+the remote could not be reached, was busy, or refused the push: nothing was
+claimed, so retry or report it.
 
 **IMPORTANT**: Feature branches use the `feature/feat-XXX-name` prefix.
 

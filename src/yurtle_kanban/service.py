@@ -19,7 +19,7 @@ import subprocess
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -31,7 +31,7 @@ from ._graph_iri import set_self_iri
 from ._logging import get_logger
 from .config import KanbanConfig, _fold_status_name, _status_names, _under
 from .hooks import HookContext, HookEngine, HookEvent
-from .inputs import resolve_actor
+from .inputs import check_identity, resolve_actor, same_actor
 from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
 
 if TYPE_CHECKING:
@@ -64,6 +64,29 @@ class GitCommitError(InputRefused):
     """Git refused a kanban commit (#584), e.g. a pre-commit hook said no. The
     message carries git's (or the hook's) own output. A refusal, never a bug
     (#786): every CLI command's error path and MCP report it without a traceback."""
+
+
+@dataclass
+class _Reader:
+    """A `sync.Read`: `read` over the tree at commit `rev` (None: the working tree)."""
+
+    rev: str | None
+    read: Callable[[str], str | None]
+
+    def __call__(self, rel: str) -> str | None:
+        return self.read(rel)
+
+
+@dataclass
+class _Claimed:
+    """What a claim changed, for the hooks it fires once it has landed (#574)."""
+
+    item_id: str
+    item_type: str
+    title: str
+    old_status: str
+    new_status: str
+    assignee: str
 
 
 class _CasRefusedError(Exception):
@@ -759,6 +782,16 @@ class KanbanService:
         try:
             with file_path.open(newline="") as f:
                 raw = f.read()
+        except Exception as e:
+            self._parse_failed(file_path, e)
+            return None
+        return self._parse_text(file_path, raw)
+
+    def _parse_text(self, file_path: Path, raw: str) -> WorkItem | None:
+        """Parse an item's text, as read with `newline=""`. `file_path` names it, for
+        its board and theme; it need not exist, so an item at a fetched commit
+        parses too (#574)."""
+        try:
             if "\r" in raw and "\n" not in raw:
                 # old Mac line endings: skipped, as the base id scan skips them (#661)
                 if raw.startswith("---") and not file_path.name.startswith("_TEMPLATE"):
@@ -924,27 +957,36 @@ class KanbanService:
             )
 
         except Exception as e:
-            # A file that can't be read or crashes after its frontmatter parsed is
-            # reported like any unparseable item, not dropped silently (#158)
-            logger.debug(f"Failed to parse {file_path}: {e}")
-            # only files that look like items, as for #139's warnings: they start
-            # with `---` and aren't templates (a non-UTF-8 plain note stays silent)
+            self._parse_failed(file_path, e, raw)
+            return None
+
+    def _parse_failed(
+        self, file_path: Path, e: Exception, raw: str | None = None
+    ) -> None:
+        """A file that can't be read, or crashes after its frontmatter parsed, is
+        reported like any unparseable item, not dropped silently (#158). `raw` is
+        its text when it was read."""
+        logger.debug(f"Failed to parse {file_path}: {e}")
+        # only files that look like items, as for #139's warnings: they start
+        # with `---` and aren't templates (a non-UTF-8 plain note stays silent)
+        if raw is not None:
+            looks_like_item = raw.startswith("---")
+        else:
             try:
                 looks_like_item = file_path.read_bytes().startswith(b"---")
             except OSError:
                 looks_like_item = False
-            if looks_like_item and not file_path.name.startswith("_TEMPLATE"):
-                # a RecursionError is YAML nested past what the parser can walk: say
-                # that, not Python's internals (#280). Frontmatter too deep to parse is
-                # caught earlier (#297); one arriving here comes from a later step,
-                # which in practice is still a too-deep value being walked (#309)
-                reason = (
-                    "frontmatter nested too deeply to parse"
-                    if isinstance(e, RecursionError)
-                    else f"{type(e).__name__}: {e}"
-                )
-                self.parse_warnings.append((file_path, reason))
-            return None
+        if looks_like_item and not file_path.name.startswith("_TEMPLATE"):
+            # a RecursionError is YAML nested past what the parser can walk: say
+            # that, not Python's internals (#280). Frontmatter too deep to parse is
+            # caught earlier (#297); one arriving here comes from a later step,
+            # which in practice is still a too-deep value being walked (#309)
+            reason = (
+                "frontmatter nested too deeply to parse"
+                if isinstance(e, RecursionError)
+                else f"{type(e).__name__}: {e}"
+            )
+            self.parse_warnings.append((file_path, reason))
 
     def _split_frontmatter(self, content: str) -> tuple[str, str] | None:
         """Split content into (frontmatter text, everything after the closing `---`).
@@ -1297,17 +1339,29 @@ class KanbanService:
 
         # Single-board mode (cached)
         if self._board is None:
-            items = self.scan()
-            columns = self._get_columns_from_theme()
-            column_status_map = self._get_column_status_map(None)
-            self._board = Board(
+            self._board = self._board_of(None, self.scan())
+        return self._board
+
+    def _board_of(self, board_config: BoardConfig | None, items: list[WorkItem]) -> Board:
+        """The board `board_config` (None: the single board) showing `items`: its
+        columns, WIP limits and column mapping (#574: also a fetched tree's)."""
+        if board_config is None:
+            return Board(
                 id="main",
                 name=self.config.theme.title() + " Board",
-                columns=columns,
+                columns=self._get_columns_from_theme(),
                 items=items,
-                column_status_map=column_status_map,
+                column_status_map=self._get_column_status_map(None),
             )
-        return self._board
+        # Get columns from board's preset, then apply WIP overrides
+        columns = self._get_columns_from_preset(board_config.preset)
+        return Board(
+            id=board_config.name,
+            name=f"{board_config.name.title()} Board",
+            columns=self._apply_wip_overrides(columns, board_config),
+            items=items,
+            column_status_map=self._get_column_status_map(board_config),
+        )
 
     def _get_board_multi(self, board_name: str | None = None) -> Board:
         """Get a specific board in multi-board mode.
@@ -1318,22 +1372,7 @@ class KanbanService:
         Returns:
             Board object for the specified board
         """
-        board_config = None
-
-        if board_name:
-            board_config = self.config.get_board(board_name)
-            if not board_config:
-                # Warn user and fall back to default
-                logger.warning(f"Board '{board_name}' not found, falling back to default")
-                board_config = self.config.get_default_board()
-        else:
-            # the board you're standing in: deliberately the process cwd, so running
-            # a command inside a board's folder picks that board (#348)
-            cwd = Path.cwd()
-            board_config = self.config.get_board_for_path(cwd, self.repo_root)
-            if not board_config:
-                board_config = self.config.get_default_board()
-
+        board_config = self._named_board(board_name)
         if not board_config:
             # No board found, return empty board
             return Board(
@@ -1344,21 +1383,23 @@ class KanbanService:
             )
 
         # Scan items for this board only
-        items = self._scan_board(board_config)
+        return self._board_of(board_config, self._scan_board(board_config))
 
-        # Get columns from board's preset, then apply WIP overrides
-        columns = self._get_columns_from_preset(board_config.preset)
-        columns = self._apply_wip_overrides(columns, board_config)
-
-        column_status_map = self._get_column_status_map(board_config)
-
-        return Board(
-            id=board_config.name,
-            name=f"{board_config.name.title()} Board",
-            columns=columns,
-            items=items,
-            column_status_map=column_status_map,
-        )
+    def _named_board(self, board_name: str | None) -> BoardConfig | None:
+        """The board `board_name` names, else the default; with no name, the board
+        you're standing in, else the default (multi-board)."""
+        if board_name:
+            board_config = self.config.get_board(board_name)
+            if not board_config:
+                # Warn user and fall back to default
+                logger.warning(f"Board '{board_name}' not found, falling back to default")
+                board_config = self.config.get_default_board()
+            return board_config
+        # the board you're standing in: deliberately the process cwd, so running
+        # a command inside a board's folder picks that board (#348)
+        cwd = Path.cwd()
+        board_config = self.config.get_board_for_path(cwd, self.repo_root)
+        return board_config or self.config.get_default_board()
 
     def _scan_board(self, board_config: BoardConfig) -> list[WorkItem]:
         """Scan a specific board for work items.
@@ -2494,7 +2535,7 @@ class KanbanService:
             text, eols[rel] = LineEndings.read(shown.stdout.decode("utf-8"))
             return text
 
-        return read
+        return _Reader(base, read)
 
     @staticmethod
     def _not_changed(result: NoOp | Refuse, rejected: bool, attempts: int) -> Outcome:
@@ -2541,7 +2582,7 @@ class KanbanService:
             text, eols[rel] = self._read_item_text(path)
             return text
 
-        result = mutate(read, 0)
+        result = mutate(_Reader(None, read), 0)
         if not isinstance(result, Change):
             return self._not_changed(result, False, 1)
         paths = []
@@ -3696,58 +3737,11 @@ class KanbanService:
 
         # Check WIP limits (unless skipped)
         if not skip_wip_check:
-            # Determine which board this item belongs to
-            board_name = None
-            board_config = None
-            if self.config.is_multi_board and item.file_path:
-                board_config = self.config.get_board_for_path(
-                    item.file_path, self.repo_root
-                )
-                if board_config:
-                    board_name = board_config.name
-            board = self.get_board(board_name=board_name)
-            exempt_types = set(board_config.wip_exempt_types) if board_config else set()
-            item_type_str = item.item_type.value
-            # If the item being moved is itself exempt, skip WIP check entirely
-            if item_type_str not in exempt_types:
-                for col in board.columns:
-                    # the same column→status lookup the board uses (#87, #442)
-                    if board.column_status(col.id) == new_status:
-                        if col.type_wip_limits is not None:
-                            # Per-type WIP check
-                            # the moving item never holds a slot against itself
-                            type_count = len([
-                                i for i in board.get_items_by_status_and_type(
-                                    new_status, item.item_type
-                                )
-                                if i.id != item.id
-                            ])
-                            limit = col.get_wip_limit(item_type_str)
-                            # 0 is "no limit", as on the board (#402, #411)
-                            if limit and type_count >= limit:
-                                raise InputRefused(
-                                    f"WIP limit reached for {item_type_str}s "
-                                    f"in {col.name} on {board.name} "
-                                    f"({type_count}/{limit})"
-                                )
-                        else:
-                            # Aggregate WIP check — exclude exempt types from count
-                            items_in_status = [
-                                i for i in board.get_items_by_status(new_status)
-                                if i.id != item.id
-                            ]
-                            if exempt_types:
-                                items_in_status = [
-                                    i for i in items_in_status
-                                    if i.item_type.value not in exempt_types
-                                ]
-                            current_count = len(items_in_status)
-                            if col.wip_limit and current_count >= col.wip_limit:
-                                raise InputRefused(
-                                    f"WIP limit reached for {col.name} on "
-                                    f"{board.name} "
-                                    f"({current_count}/{col.wip_limit})"
-                                )
+            board_config = self._wip_board_config(item)
+            board = self.get_board(board_name=board_config.name if board_config else None)
+            refusal = self._wip_refusal(item, new_status, board, board_config)
+            if refusal:
+                raise InputRefused(refusal)
 
         # Evaluate transition gates (unless skipped)
         gates_skipped = False
@@ -3832,6 +3826,304 @@ class KanbanService:
             )
 
         return item
+
+    def _wip_board_config(self, item: WorkItem) -> BoardConfig | None:
+        """The board whose WIP limits a move of `item` answers to (multi-board);
+        None on a single board."""
+        if self.config.is_multi_board and item.file_path:
+            return self.config.get_board_for_path(item.file_path, self.repo_root)
+        return None
+
+    @staticmethod
+    def _wip_columns(
+        board: Board, new_status: WorkItemStatus, item: WorkItem,
+        board_config: BoardConfig | None,
+    ) -> list[Column]:
+        """The columns showing `new_status` whose WIP limit `item` answers to: none
+        when its type is exempt; a limit of 0 is "no limit" (#402, #411, #574)."""
+        exempt_types = set(board_config.wip_exempt_types) if board_config else set()
+        item_type_str = item.item_type.value
+        if item_type_str in exempt_types:
+            return []
+        # the same column→status lookup the board uses (#87, #442)
+        return [
+            col for col in board.columns
+            if board.column_status(col.id) == new_status and (
+                col.get_wip_limit(item_type_str) if col.type_wip_limits is not None
+                else col.wip_limit
+            )
+        ]
+
+    def _wip_refusal(
+        self, item: WorkItem, new_status: WorkItemStatus, board: Board,
+        board_config: BoardConfig | None,
+    ) -> str | None:
+        """Why moving `item` to `new_status` would break a WIP limit on `board`, or
+        None. Shared by `move` and `claim`, which passes a fetched tree's board
+        (#574)."""
+        exempt_types = set(board_config.wip_exempt_types) if board_config else set()
+        item_type_str = item.item_type.value
+        for col in self._wip_columns(board, new_status, item, board_config):
+            if col.type_wip_limits is not None:
+                # Per-type WIP check
+                # the moving item never holds a slot against itself
+                type_count = len([
+                    i for i in board.get_items_by_status_and_type(new_status, item.item_type)
+                    if i.id != item.id
+                ])
+                limit = col.get_wip_limit(item_type_str)
+                if limit and type_count >= limit:
+                    return (
+                        f"WIP limit reached for {item_type_str}s "
+                        f"in {col.name} on {board.name} "
+                        f"({type_count}/{limit})"
+                    )
+            else:
+                # Aggregate WIP check — exclude exempt types from count
+                items_in_status = [
+                    i for i in board.get_items_by_status(new_status)
+                    if i.id != item.id and i.item_type.value not in exempt_types
+                ]
+                current_count = len(items_in_status)
+                if col.wip_limit and current_count >= col.wip_limit:
+                    return (
+                        f"WIP limit reached for {col.name} on "
+                        f"{board.name} "
+                        f"({current_count}/{col.wip_limit})"
+                    )
+        return None
+
+    def claim_item(
+        self,
+        item_id: str,
+        *,
+        actor: str,
+        take_over: bool = False,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """Claim `item_id` for `actor`: move it to in progress with `actor` holding
+        it, as one compare-and-swap on origin's default branch (#574 §3).
+
+        Every attempt of `sync_and_push` judges the item as the FETCHED tree has it
+        (`_claim_change`), so a claim that lost the race reads the winner. Hooks
+        (`STATUS_CHANGE`, `ASSIGNED`) fire once, after the claim has landed
+        (`won` or `local`), for the winner only. `seam`, `sleep` and `jitter` are
+        `sync_and_push`'s."""
+        actor = check_identity(actor, "--agent")
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            return self._claim_change(read, item_id, actor, take_over)
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        if outcome.kind in ("won", "local") and isinstance(outcome.data, _Claimed):
+            self._fire_claim_hooks(outcome.data)
+        return outcome
+
+    def _claim_change(
+        self, read: Read, item_id: str, actor: str, take_over: bool
+    ) -> Change | NoOp | Refuse:
+        """`claim`'s `mutate` (#574 §3): the claim rules, in order, against the
+        item as `read` has it — already yours; held by another (a `holder`, so a
+        lost race says "lost to"); in progress with no holder; then legality,
+        workflow rules, WIP (counted in `read`'s tree) and gates on the PROPOSED
+        item (#586). `take_over` overrides the two holder refusals and records
+        `kb:takenOverFrom`; an item already in progress then changes holder only."""
+        found = self._claim_target(read, item_id)
+        if isinstance(found, Refuse):
+            return found
+        rel, text, item = found
+        old_status = item.status
+        in_progress = WorkItemStatus.IN_PROGRESS
+        held = item.assignee
+        holder = (held if isinstance(held, str) else str(held or "")).strip()
+        mine = bool(holder) and same_actor(holder, actor)
+
+        if mine and old_status == in_progress:
+            return NoOp(f"{item.id} is already yours ({self.status_label(item)})")
+        if holder and not mine and not take_over:
+            return Refuse(
+                f"{item.id} is held by {holder}; to take it over use claim --take-over",
+                holder=holder,
+            )
+        if not holder and old_status == in_progress and not take_over:
+            return Refuse(f"{item.id} is in progress with no holder; use claim --take-over")
+
+        proposed = replace(item, status=in_progress, assignee=actor, updated=datetime.now())
+        if old_status != in_progress:
+            valid, error = self._validate_transition(
+                replace(proposed, status=old_status), in_progress
+            )
+            if not valid:
+                return Refuse(error)
+            refusal = self._wip_refusal_in(read, proposed)
+            if refusal:
+                return Refuse(refusal)
+            blocking = [
+                r for r in self._evaluate_gates(proposed, old_status, in_progress, {})
+                if not r.passed and r.severity == "blocking"
+            ]
+            if blocking:
+                return Refuse(
+                    f"Gate check failed: {'; '.join(r.message for r in blocking)}"
+                )
+
+        taken = holder if take_over and not mine else None
+        new_text = self._history_text(
+            text, proposed, in_progress, actor, actor=actor, taken_over_from=taken
+        )
+        message = f"Claim {item.id} for {actor}"
+        if taken is not None:
+            message += f" (taken over from {taken or 'no holder'})"
+        claimed = _Claimed(
+            item_id=item.id, item_type=item.item_type.value, title=item.title,
+            old_status=old_status.value, new_status=in_progress.value, assignee=actor,
+        )
+        return Change({rel: new_text}, message, data=claimed)
+
+    def _claim_target(
+        self, read: Read, item_id: str
+    ) -> tuple[str, str, WorkItem] | Refuse:
+        """(path relative to the git work tree, LF text, parsed item) of `item_id`
+        in `read`'s tree: the fetched commit's, else the working tree's (#574)."""
+        top = self._git_toplevel()
+        if read.rev is None:
+            try:
+                current = self._writable_item(item_id, "a claim")
+            except ValueError as e:
+                return Refuse(str(e))
+            rel = Path(os.path.relpath(current.file_path, top)).as_posix()
+        else:
+            found = self._holder_at(read.rev, item_id)
+            if found is None:
+                return Refuse(f"Item not found on origin: {item_id}")
+            rel = found
+        text = read(rel)
+        if text is None:
+            return Refuse(f"Item not found: {item_id} ({rel} is gone)")
+        item = self._parse_text(top / rel, text)
+        if item is None or (
+            item.id.upper() != item_id.upper()
+            and (self._id_key(item.id) is None or self._id_key(item.id) != self._id_key(item_id))
+        ):
+            return Refuse(f"Item not found: {item_id} ({rel} does not hold it)")
+        return rel, text, item
+
+    def _wip_refusal_in(self, read: Read, proposed: WorkItem) -> str | None:
+        """`_wip_refusal` for `proposed` with the items counted in `read`'s tree:
+        the fetched commit's, else the working tree's (#574). A fetched tree is
+        parsed only when a WIP limit applies."""
+        board_config = self._wip_board_config(proposed)
+        if read.rev is None:
+            board = self.get_board(board_name=board_config.name if board_config else None)
+            return self._wip_refusal(proposed, proposed.status, board, board_config)
+        if self.config.is_multi_board:
+            board_config = board_config or self._named_board(None)
+            if board_config is None:
+                return None
+        board = self._board_of(board_config, [])
+        if not self._wip_columns(board, proposed.status, proposed, board_config):
+            return None
+        board.items = self._items_at(read.rev, board_config)
+        return self._wip_refusal(proposed, proposed.status, board, board_config)
+
+    def _items_at(self, rev: str, board_config: BoardConfig | None) -> list[WorkItem]:
+        """The items of `board_config` (None: the single board) as commit `rev`
+        holds them, parsed from their text as a scan parses files, ignore patterns
+        applied (#574)."""
+        top = self._git_toplevel()
+        if board_config is not None:
+            roots = [_under(self.repo_root, board_config.path)]
+        else:
+            roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
+            roots += sorted(self._placement_dirs())
+        rels = sorted({
+            rel.as_posix() for root in roots
+            if (rel := self._repo_relative(root, top)) is not None
+        })
+        if not rels:
+            return []
+        listed = self._git_run("ls-tree", "-r", "--name-only", "--full-tree", rev, "--", *rels)
+        names = []
+        for name in dict.fromkeys(listed.stdout.splitlines()):
+            path = top / name
+            if not name.endswith(".md") or (
+                self._should_ignore_for_board(path, board_config) if board_config
+                else self._should_ignore(path)
+            ):
+                continue
+            names.append(name)
+        items: dict[str, WorkItem] = {}
+        with self._scan_scope():
+            for name, raw in self._blobs_at(rev, names).items():
+                item = self._parse_text(top / name, raw)
+                if item is not None:
+                    items[item.id] = item
+        return list(items.values())
+
+    def _blobs_at(self, rev: str, names: list[str]) -> dict[str, str]:
+        """Each of `names` (paths from the work tree's top) as commit `rev` holds it,
+        its text as a file read with `newline=""` gives it: one `git archive`, since
+        git never reads stdin (#580). A non-UTF-8 file is left out."""
+        import io
+        import tarfile
+
+        if not names:
+            return {}
+        top = sorted({str(Path(n).parent.as_posix()) for n in names})
+        done = subprocess.run(
+            ["git", "archive", "--format=tar", rev, "--", *top],
+            cwd=self._git_toplevel(),
+            capture_output=True,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        wanted, blobs = set(names), {}
+        if done.returncode != 0:
+            return {}
+        with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
+            for member in tar:
+                if member.name not in wanted or not member.isfile():
+                    continue
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                with suppress(UnicodeDecodeError):
+                    blobs[member.name] = handle.read().decode("utf-8")
+        return blobs
+
+    def _fire_claim_hooks(self, claimed: _Claimed) -> None:
+        """The hooks of a claim that landed (#574): STATUS_CHANGE when the status
+        changed, and ASSIGNED."""
+        if claimed.old_status != claimed.new_status:
+            self._hook_engine.trigger(
+                HookEvent.STATUS_CHANGE,
+                HookContext(
+                    event=HookEvent.STATUS_CHANGE,
+                    item_id=claimed.item_id,
+                    item_type=claimed.item_type,
+                    title=claimed.title,
+                    old_status=claimed.old_status,
+                    new_status=claimed.new_status,
+                    assignee=claimed.assignee,
+                ),
+            )
+        self._hook_engine.trigger(
+            HookEvent.ASSIGNED,
+            HookContext(
+                event=HookEvent.ASSIGNED,
+                item_id=claimed.item_id,
+                item_type=claimed.item_type,
+                title=claimed.title,
+                new_status=claimed.new_status,
+                assignee=claimed.assignee,
+            ),
+        )
 
     def _fire_create_hook(self, item: WorkItem) -> None:
         """Fire on_create hooks after successful item creation."""
@@ -4108,7 +4400,30 @@ class KanbanService:
         by the caller (#630).
         """
         content, eol = self._read_item_text(item.file_path)
+        content = self._history_text(
+            content, item, new_status, assignee, actor=actor, forced=forced,
+            closed_by=closed_by, gates_skipped=gates_skipped,
+        )
+        self._write_item_text(item.file_path, content, eol)
 
+    def _history_text(
+        self,
+        content: str,
+        item: WorkItem,
+        new_status: WorkItemStatus,
+        assignee: str | None = None,
+        *,
+        actor: str,
+        forced: bool = False,
+        closed_by: str | None = None,
+        gates_skipped: bool = False,
+        taken_over_from: str | None = None,
+    ) -> str:
+        """`content` (an item's LF text) moved to `new_status`: the frontmatter
+        status and assignee edits and the status-history node that
+        `_update_item_file_with_history` writes, text to text, so `claim` makes the
+        same edit to a fetched file (#574). `taken_over_from` records
+        `kb:takenOverFrom` (`""`: there was no holder)."""
         # Determine board-native status name (e.g., 'active' for HDD), on a single
         # board too (#439)
         native_status = self._item_reverse_status_mapping(item).get(
@@ -4140,6 +4455,8 @@ class KanbanService:
                     f"Invalid value for closed_by: contains disallowed characters: {closed_by!r}"
                 )
             ttl_entry += f'\n    kb:closedBy <{closed_by}> ;'
+        if taken_over_from is not None:
+            ttl_entry += f'\n    kb:takenOverFrom "{_turtle_string(taken_over_from)}" ;'
 
         # Check if yurtle block with status changes exists
         # Match block with prefix declarations and statusChange predicates
@@ -4172,8 +4489,7 @@ class KanbanService:
   ] .
 ```"""
             content = content.rstrip() + "\n\n" + new_block + "\n"
-
-        self._write_item_text(item.file_path, content, eol)
+        return content
 
     # Frontmatter is closed by the first line that STARTS with `---` (the same
     # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
