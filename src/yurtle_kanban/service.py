@@ -2157,12 +2157,16 @@ class KanbanService:
     def _default_branch(self) -> str:
         """The remote's default branch: `origin/HEAD` when set locally, else what the
         remote itself says (`ls-remote --symref`), else `main` (#585)."""
+        self._guessed_default = False
         known = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
         if known.returncode == 0 and known.stdout.strip().startswith("origin/"):
             return known.stdout.strip().removeprefix("origin/")
         asked = self._git_run("ls-remote", "--symref", "origin", "HEAD")
         match = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", asked.stdout, re.M)
-        return match.group(1) if match else "main"
+        if match:
+            return match.group(1)
+        self._guessed_default = True  # never recorded as origin/HEAD (#685)
+        return "main"
 
     def _fetch_default(self, branch: str) -> subprocess.CompletedProcess[str]:
         """Fetch exactly `origin/<branch>` (#585), then record it locally as
@@ -2171,7 +2175,7 @@ class KanbanService:
         fetch = self._git_run(
             "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         )
-        if fetch.returncode == 0:
+        if fetch.returncode == 0 and not getattr(self, "_guessed_default", False):
             ref = f"refs/remotes/origin/{branch}"
             known = self._git_run("symbolic-ref", "-q", "refs/remotes/origin/HEAD")
             if known.returncode != 0 or known.stdout.strip() != ref:
@@ -2316,10 +2320,12 @@ class KanbanService:
     @staticmethod
     def _stem_holds(stem: str, key: tuple[str, int]) -> bool:
         """Whether a filename stem starts with the id `key` names (`_id_key`):
-        its text, then its number, then no more of an id (`EXP-003-Title` holds
-        (`EXP-`, 3); `H1.2-Title` does not hold (`H`, 1)) (#661)."""
+        its text, then its number, then no more of an id (`EXP-003-Title` and
+        `EXP-003.v2` hold (`EXP-`, 3); `H1.2-Title`, a paper-scoped id, does not hold
+        (`H`, 1)) (#661, #685)."""
         text, num = key
-        match = re.match(r"(\d+)(?![\d.])", stem[len(text):]) if stem.startswith(text) else None
+        rest = stem[len(text):] if stem.startswith(text) else None
+        match = re.match(r"(\d+)(?!\d|\.\d)", rest) if rest is not None else None
         return match is not None and int(match.group(1)) == num
 
     @classmethod
