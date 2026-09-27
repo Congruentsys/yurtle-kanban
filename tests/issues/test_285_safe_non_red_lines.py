@@ -285,6 +285,9 @@ def test_hdd_create_push_file_line_is_escaped(
     _evil_type_dir(repo, monkeypatch)
 
     def push(self: KanbanService, **kwargs: Any) -> dict[str, Any]:
+        # `create_item` takes no `render`/`id_prefix` (#641): keep the local guess
+        kwargs.pop("render", None)
+        kwargs.pop("id_prefix", None)
         item = self.create_item(**kwargs)
         return {"success": True, "pushed": True, "id": item.id, "item": item}
 

@@ -952,8 +952,8 @@ def hypothesis_create(
     # The requirement was never about the method; it was about ID ALLOCATION,
     # because ids are formatted H{paper}.{n}. So an unparented hypothesis simply
     # takes the ordinary H-NNN form every other work type already uses, and
-    # paper-scoped numbering is untouched (get_next_hypothesis_number scans for
-    # the `H130.` prefix and never reads the dashed allocator).
+    # paper-scoped numbering is untouched: the one allocator numbers the `H130.`
+    # id space apart from the dashed `H` one (#641).
     #
     # A DOTTED --id NAMES ITS OWN PAPER. Making --paper optional opened a state
     # that click used to make unreachable: `--id H130.1` with no --paper, which
@@ -973,7 +973,7 @@ def hypothesis_create(
             hyp_id = service.get_next_unparented_hypothesis_id()
             hyp_n = None
         else:
-            next_n = service.get_next_hypothesis_number(str(paper_num))
+            next_n = service._get_next_id_number(f"H{paper_num}.")
             hyp_id = f"H{paper_num}.{next_n}"
             hyp_n = str(next_n)
     else:
