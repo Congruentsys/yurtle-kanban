@@ -5,10 +5,10 @@ Refusal 2 (#736) is a CLOSED 4-tick fence that quotes the full canonical
 status-history opener: `swallowed_fence_line` reports it, and "never closed" is
 false there. Decided ([steer] on #758): wording true in both cases.
 
-- `validate --json`: the `unclosed_fence` message reads
+- `validate --json`: the `swallowing_fence` message reads
   "<ID>: the body's code fence on line N runs over <what>: close it, or reword a
   quoted heading inside it"; `type`, `line` and `swallows` are unchanged.
-- `validate` text: the `UNCLOSED FENCE:` line carries the same wording.
+- `validate` text: the `SWALLOWING FENCE:` line carries the same wording.
 - The body-edit refusal (`_replace_body`, via `update --body`) carries the hint
   "... reword a quoted heading inside it".
 
@@ -82,7 +82,7 @@ def test_validate_json_message_says_runs_over(repo: Repo, case: str) -> None:
     build, what = CASES[case]
     item_id, line = build(repo)
     result = invoke(["validate", "--json"])
-    issues = [i for i in json.loads(result.output)["issues"] if i["type"] == "unclosed_fence"]
+    issues = [i for i in json.loads(result.output)["issues"] if i["type"] == "swallowing_fence"]
     assert [i["id"] for i in issues] == [item_id], issues
     issue = issues[0]
     assert issue["line"] == line and issue["swallows"] == what, issue
@@ -96,10 +96,10 @@ def test_validate_text_says_runs_over(repo: Repo, case: str) -> None:
     build, what = CASES[case]
     item_id, line = build(repo)
     out = _flat(invoke(["validate"]).output)
-    assert "UNCLOSED FENCE" in out, out
-    report = out[out.index("UNCLOSED FENCE") :]
+    assert "SWALLOWING FENCE" in out, out
+    report = out[out.index("SWALLOWING FENCE") :]
     assert "never closed" not in report, report
-    assert f"UNCLOSED FENCE: {_expected(item_id, line, what)}" in report, report
+    assert f"SWALLOWING FENCE: {_expected(item_id, line, what)}" in report, report
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -136,6 +136,6 @@ def test_clean_item_has_no_fence_report(repo: Repo) -> None:
     _ok(["update", "EXP-2", "--body", "Intro\n```python\nx = 1\n```\n"])
     result = invoke(["validate", "--json"])
     issues = json.loads(result.output)["issues"]
-    assert not [i for i in issues if i["type"] == "unclosed_fence"], issues
-    assert "UNCLOSED FENCE" not in _flat(invoke(["validate"]).output)
+    assert not [i for i in issues if i["type"] == "swallowing_fence"], issues
+    assert "SWALLOWING FENCE" not in _flat(invoke(["validate"]).output)
     _ok(["update", "EXP-2", "--body", "repaired"])

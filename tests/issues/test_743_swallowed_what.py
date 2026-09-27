@@ -95,7 +95,7 @@ def test_validate_json_message_names_what_is_swallowed(repo: Repo, case: str) ->
     build, want, absent = CASES[case]
     item_id, line = build(repo)
     result = invoke(["validate", "--json"])
-    issues = [i for i in json.loads(result.output)["issues"] if i["type"] == "unclosed_fence"]
+    issues = [i for i in json.loads(result.output)["issues"] if i["type"] == "swallowing_fence"]
     assert [i["id"] for i in issues] == [item_id], issues
     assert issues[0]["line"] == line, issues
     _check(issues[0]["message"], want, absent, line)
@@ -107,9 +107,9 @@ def test_validate_text_names_what_is_swallowed(repo: Repo, case: str) -> None:
     item_id, line = build(repo)
     result = invoke(["validate"])
     out = _flat(result.output)
-    assert "UNCLOSED FENCE" in out and item_id in out, out
-    # only the UNCLOSED FENCE report, not the rest of validate's output
-    report = out[out.index("UNCLOSED FENCE") :]
+    assert "SWALLOWING FENCE" in out and item_id in out, out
+    # only the SWALLOWING FENCE report, not the rest of validate's output
+    report = out[out.index("SWALLOWING FENCE") :]
     _check(report, want, absent, line)
 
 
@@ -134,13 +134,13 @@ def test_service_replace_body_names_what_is_swallowed(repo: Repo, case: str) -> 
     _check(str(refused.value), want, absent, line)
 
 
-def test_clean_item_has_no_unclosed_fence_issue(repo: Repo) -> None:
+def test_clean_item_has_no_swallowing_fence_issue(repo: Repo) -> None:
     """Control: history and comments with every fence closed are not reported."""
     _ok(["move", "EXP-2", "ready", "--force", "--skip-gates"])
     _ok(["comment", "EXP-2", "--body", "a comment", "--agent", "a"])
     result = invoke(["validate", "--json"])
     issues = json.loads(result.output)["issues"]
-    assert not [i for i in issues if i["type"] == "unclosed_fence"], issues
+    assert not [i for i in issues if i["type"] == "swallowing_fence"], issues
     _ok(["update", "EXP-2", "--body", "repaired"])
 
 

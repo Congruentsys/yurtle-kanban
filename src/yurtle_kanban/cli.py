@@ -1647,7 +1647,7 @@ def validate(fix: bool, as_json: bool):
         )
 
     for item in items:
-        # a body fence never closed swallows the history (#727)
+        # a body fence that swallows the history or comments (#727, #769)
         try:
             text = item.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
         except (OSError, UnicodeDecodeError):
@@ -1655,7 +1655,7 @@ def validate(fix: bool, as_json: bool):
         if text is not None and (line := service.swallowed_fence_line(text)) is not None:
             issues.append(
                 {
-                    "type": "unclosed_fence",
+                    "type": "swallowing_fence",
                     "id": item.id,
                     "line": line,
                     "swallows": (what := service.swallowed_what(text, line)),
@@ -1714,9 +1714,9 @@ def validate(fix: bool, as_json: bool):
             console.print(
                 f"[red]DEPENDENCY CYCLE:[/red] {safe(' → '.join(issue['ids']))}", soft_wrap=True
             )
-        elif issue["type"] == "unclosed_fence":
+        elif issue["type"] == "swallowing_fence":
             console.print(
-                f"[yellow]UNCLOSED FENCE:[/yellow] {safe(issue['id'])}: the body's code "
+                f"[yellow]SWALLOWING FENCE:[/yellow] {safe(issue['id'])}: the body's code "
                 f"fence on line {safe(str(issue['line']))} runs over "
                 f"{safe(issue['swallows'])}: close it, or reword a quoted heading inside it",
                 soft_wrap=True,
