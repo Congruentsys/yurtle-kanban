@@ -2770,20 +2770,32 @@ class KanbanService:
         return int(match.group(1)) if match else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
-        """The file under the work paths at commit `rev` that holds `item_id`, by
-        its filename or its frontmatter `id:`, or None (#634). Ids are the same when
-        the text before their number, separator included, and the number are:
-        `EXP-3` is `EXP-003` (#641), but `EXP3` is not (#661)."""
+        """The file under the work paths at commit `rev` that holds `item_id`, or
+        None (#634). Ids are the same when the text before their number, separator
+        included, and the number are: `EXP-3` is `EXP-003` (#641), but `EXP3` is not
+        (#661). The file whose frontmatter `id:` is the ID wins; a filename counts
+        only for a file with no `id:` of its own, since the board names an item by
+        its `id:` and never by a lookalike outline or another item's file (#788)."""
         names, ids = self._ids_at(rev)
+        holders = self._holders_at(rev, item_id, ids)
+        if holders:
+            return holders[0]
         key = self._id_key(item_id)
         folded = item_id.upper()  # `m-042` holds `M-042` (#732, #764)
+        with_id = {path for path, _ in ids}
         for name in names:
-            stem = Path(name).stem.upper()
-            if stem == folded or stem.startswith(folded + "-") or (
+            if name in with_id:
+                continue  # it holds its own `id:` only (#788)
+            # the stem's own head slice, folded: an upper-cased stem may be longer
+            # (`ß` is `SS`), so fold only what lines up with the ID (#775, #792)
+            stem = Path(name).stem
+            head, rest = stem[: len(folded)], stem[len(folded):]
+            if (len(head) == len(folded) and head.upper() == folded
+                    and rest[:1] in ("", "-")) or (
                 key is not None and self._stem_holds(stem, key)
             ):
                 return name
-        return next(iter(self._holders_at(rev, item_id, ids)), None)
+        return None
 
     def _holders_at(
         self, rev: str, item_id: str, ids: list[tuple[str, str]] | None = None
