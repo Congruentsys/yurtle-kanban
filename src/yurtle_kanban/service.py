@@ -39,7 +39,7 @@ from .models import (
     Board,
     Column,
     Comment,
-    InvalidText,
+    InputRefused,
     WorkItem,
     WorkItemStatus,
     WorkItemType,
@@ -1829,6 +1829,7 @@ class KanbanService:
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
         self._check_no_comments_heading(description)
+        self._check_no_comments_heading(content, "The rendered content")  # templated (#666)
         # Generate or use provided ID
         if item_id is None:
             prefix = self._get_type_prefix(item_type)
@@ -1948,6 +1949,7 @@ class KanbanService:
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
         self._check_no_comments_heading(description)
+        self._check_no_comments_heading(content, "The rendered content")  # templated (#666)
         import json as json_mod
 
         # A board outside the git repository can't be committed or pushed (#174):
@@ -1984,7 +1986,7 @@ class KanbanService:
         # the allocation record names who allocated: no actor, nothing is written (#620)
         try:
             actor = resolve_actor(None, cwd=self.repo_root)
-        except ValueError as e:
+        except InputRefused as e:
             return self._push_failed(str(e))
 
         if self._has_remote():
@@ -2010,7 +2012,7 @@ class KanbanService:
         current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
         if render is not None and current_id != item_id_local:
             content = render(current_id)
-            self._check_text(content=content)
+            self._check_rendered(content)
         item, text = self._new_item(
             item_type, title, current_id, priority, assignee, description, tags, content
         )
@@ -2109,8 +2111,8 @@ class KanbanService:
             text_in = render(current_id) if render is not None else content
             if render is not None:
                 try:
-                    self._check_text(content=text_in)
-                except InvalidText as e:
+                    self._check_rendered(text_in)
+                except InputRefused as e:
                     raise _CasRefusedError(f"{e}; nothing was created") from None
             item, text = self._new_item(
                 item_type, title, current_id, priority, assignee, description, tags, text_in
@@ -3317,7 +3319,7 @@ class KanbanService:
             # the record names who allocated: no actor, nothing is written (#620)
             try:
                 actor = resolve_actor(None, cwd=self.repo_root)
-            except ValueError as e:
+            except InputRefused as e:
                 return {"success": False, "id": None, "prefix": prefix, "number": None,
                         "message": str(e)}
 
@@ -4252,23 +4254,33 @@ class KanbanService:
                 fence = None
         return opened if fence is not None else None
 
-    def _check_no_comments_heading(self, description: str | None) -> None:
-        """Refuse a description with a `## Comments` line outside fenced code: it
-        would become the item's comments section (#605), on update or create (#644).
+    def _check_no_comments_heading(self, text: str | None, what: str = "A description") -> None:
+        """Refuse text with a `## Comments` line outside fenced code: it would become
+        the item's comments section (#605), on update or create (#644). `what` names
+        the text, as a message's subject: "A description", or "The rendered content"
+        of a templated create, which is
+        checked whole, since a user field can reach its body raw (#666). No shipped
+        template has a `## Comments` line, so such a line always came from input.
         Refuse one with an unclosed fence too: it would swallow the status-history
         block, and the next body edit would delete the history (#720)."""
-        if description is not None and (line := self._unclosed_fence_line(description)):
-            raise ValueError(
-                f"A description can't leave a code fence open (the fence on line {line} "
+        if text is not None and (line := self._unclosed_fence_line(text)):
+            raise InputRefused(
+                f"{what} can't leave a code fence open (the fence on line {line} "
                 "is never closed): close it, or it would swallow the status history."
             )
-        if description is not None and self._find_line_outside_fences(
-            description, 0, self._COMMENTS_RE
+        if text is not None and self._find_line_outside_fences(
+            text, 0, self._COMMENTS_RE
         ) >= 0:
-            raise ValueError(
-                "A description can't contain a `## Comments` line outside a code block: "
+            raise InputRefused(
+                f"{what} can't contain a `## Comments` line outside a code block: "
                 "that heading starts the comments section. Use add_comment for comments."
             )
+
+    def _check_rendered(self, content: str | None) -> None:
+        """The checks a templated create's content gets, run again on each re-render
+        (per fetched base, #590): writable text (#641), no forged comments (#666)."""
+        self._check_text(content=content)
+        self._check_no_comments_heading(content, "The rendered content")
 
     def add_comment(
         self,
@@ -5102,7 +5114,7 @@ class KanbanService:
         # Allow dotted sub-IDs like EXPR-131.5 (common for sub-experiments)
         # fullmatch: `$` would accept a trailing newline (#183)
         if not re.fullmatch(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*", expr_id):
-            raise ValueError(
+            raise InputRefused(
                 f"Invalid experiment ID format: {expr_id!r} — "
                 "expected PREFIX-ID (e.g., EXPR-130 or EXPR-131.5)"
             )
@@ -5164,7 +5176,7 @@ class KanbanService:
         # Allow dotted sub-IDs like EXPR-131.5 (common for sub-experiments)
         # fullmatch: `$` would accept a trailing newline (#183)
         if not re.fullmatch(r"[A-Za-z]+-[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)*", expr_id):
-            raise ValueError(
+            raise InputRefused(
                 f"Invalid experiment ID format: {expr_id!r} — "
                 "expected PREFIX-ID (e.g., EXPR-130 or EXPR-131.5)"
             )

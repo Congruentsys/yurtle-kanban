@@ -33,7 +33,13 @@ def unknown_priority_message(value: object) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
-class InvalidText(ValueError):  # noqa: N818 — the name #239 specifies
+class InputRefused(ValueError):  # noqa: N818 — the name #666 specifies
+    """A refusal of the user's input, never a bug: a CLI command shows it as a
+    one-line `Error:` and exits 1, while any other `ValueError` keeps its traceback
+    (#666). A `ValueError`, so a caller catching that (MCP) is unaffected."""
+
+
+class InvalidText(InputRefused):  # noqa: N818 — the name #239 specifies
     """User text that can't be written as UTF-8: a refusal of the input, never a
     bug, so a CLI command shows it as a one-line error (#239)."""
 
