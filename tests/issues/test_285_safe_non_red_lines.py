@@ -182,8 +182,8 @@ def test_update_parent_line_is_escaped(
     )
 
     class _Service:
-        def update_parent_turtle_block(self, *args: Any, **kwargs: Any) -> bool:
-            return True
+        def link_parent(self, *args: Any, **kwargs: Any) -> str:  # (#750)
+            return "added"
 
     hdd_commands._update_parent(_Service(), EVIL, "literature", "LIT-001")
     _assert_all_escaped(buf.getvalue(), "Updated")

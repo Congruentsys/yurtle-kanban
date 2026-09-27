@@ -1963,9 +1963,10 @@ class KanbanService:
                 content=content,
                 item_id=item_id_local,
             )
-            linked = parent is not None and self.update_parent_turtle_block(
+            parent_state = None if parent is None else self.link_parent(
                 parent, item_type.value, item.id
             )
+            linked = parent_state == "added"
             return {
                 "success": True,
                 "item": item,
@@ -1973,6 +1974,7 @@ class KanbanService:
                 "pushed": False,
                 "committed": False,
                 "parent_linked": linked,
+                "parent_state": None if linked else parent_state,  # parsed once (#750)
                 "message": (
                     f"Created {item.id}; not committed: the board is outside "
                     "the git repository"
@@ -2013,7 +2015,7 @@ class KanbanService:
             item_type, title, current_id, priority, assignee, description, tags, content
         )
         # the parent's link, worked out before anything is written (#674)
-        edit = None if parent is None else self._parent_link_edit(
+        edit, parent_state = (None, None) if parent is None else self._parent_link_edit(
             parent, item_type.value, current_id
         )
         in_commit = edit is not None and not self._outside_repo(edit[0].file_path)
@@ -2061,6 +2063,7 @@ class KanbanService:
             "id": current_id,
             "pushed": False,
             "parent_linked": linked,
+            "parent_state": parent_state,  # why no link, parsed once (#750)
             "message": f"Created and committed {current_id}: {title} (no remote configured)",
         }
 
@@ -2786,36 +2789,40 @@ class KanbanService:
         Returns:
             True if the parent was updated, False otherwise.
         """
-        edit = self._parent_link_edit(parent_id, child_type, child_id)
+        return self.link_parent(parent_id, child_type, child_id) == "added"
+
+    def link_parent(self, parent_id: str, child_type: str, child_id: str) -> str:
+        """`update_parent_turtle_block`, saying what happened: 'added', or why no
+        link was written ('missing', 'no-relation', 'no-block', 'unparseable',
+        'linked'), from the one parse that tried (#750)."""
+        edit, state = self._parent_link_edit(parent_id, child_type, child_id)
         if edit is None:
-            return False
+            return state or "linked"
         self._apply_parent_link(*edit)
-        return True
+        return "added"
 
     def _parent_link_edit(
         self, parent_id: str, child_type: str, child_id: str
-    ) -> tuple[WorkItem, str, LineEndings] | None:
+    ) -> tuple[tuple[WorkItem, str, LineEndings] | None, str | None]:
         """The parent item, its file's text with the inverse reference to `child_id`
-        added, and its line endings, without writing anything; None when there is
-        nothing to add (#674)."""
+        added, and its line endings, without writing anything (#674); or None and
+        why there is nothing to add, as `parent_link_state` names it (#750)."""
         self._check_text(child_id=child_id)  # before the parent is rewritten (#239)
         if child_type not in self._INVERSE_RELATIONS:
             logger.debug(f"No inverse relation defined for child type: {child_type}")
-            return None
+            return None, "no-relation"
 
         parent = self._current_item(parent_id)  # the file now (#638)
-        if parent is None:
+        if parent is None or not parent.file_path.exists():
             # the CLI says it; no warning as well (#724)
             logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
-            return None
-
-        if not parent.file_path.exists():
-            logger.warning(f"Parent file {parent.file_path} missing — skipping")
-            return None
+            return None, "missing"
 
         content, eol = self._read_item_text(parent.file_path)
-        new_content, _ = self._linked_parent_text(content, parent_id, child_type, child_id)
-        return None if new_content is None else (parent, new_content, eol)
+        new_content, state = self._linked_parent_text(
+            content, parent_id, child_type, child_id
+        )
+        return (None, state) if new_content is None else ((parent, new_content, eol), None)
 
     def _apply_parent_link(self, parent: WorkItem, new_content: str, eol: LineEndings) -> None:
         """Write a `_parent_link_edit`, and refresh the parent's graph and cache (#638)."""
@@ -2872,7 +2879,7 @@ class KanbanService:
         if child_type not in self._INVERSE_RELATIONS:
             return "no-relation"
         content = parent.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-        text, state = self._linked_parent_text(content, parent_id, child_type, child_id)
+        _, state = self._linked_parent_text(content, parent_id, child_type, child_id)
         return state or "addable"
 
     def _linked_parent_text(

@@ -81,10 +81,13 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
     Silent on failure — the child creation is the primary operation.
     """
     try:
-        if service.update_parent_turtle_block(parent_id, child_type, child_id):
+        state = service.link_parent(parent_id, child_type, child_id)
+        if state == "added":
             _print_parent_linked(parent_id)
-        else:
-            _print_parent_missing(service, parent_id, child_type, child_id)
+        else:  # the reason from the one parse that tried (#750)
+            _print_parent_missing(
+                service, parent_id, child_type, child_id, {"parent_state": state}
+            )
     except Exception as e:
         console.print(
             f"  [yellow]Warning: could not update {safe(parent_id)}: "

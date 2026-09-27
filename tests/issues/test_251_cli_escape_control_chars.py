@@ -159,7 +159,7 @@ def test_hdd_parent_update_warning_is_escaped(
     def boom(self: KanbanService, *args: object, **kwargs: object) -> bool:
         raise RuntimeError(f"bad turtle in parent: {EVIL}")  # text read from the parent
 
-    monkeypatch.setattr(KanbanService, "update_parent_turtle_block", boom)
+    monkeypatch.setattr(KanbanService, "link_parent", boom)
     args = ["literature", "create", "Survey", "--idea", "IDEA-R-001"]
     out = _run_tty(repo, args, monkeypatch)
     assert "could not update" in out, repr(out)
