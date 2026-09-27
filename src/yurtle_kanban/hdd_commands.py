@@ -159,7 +159,9 @@ def _push_only_head_or_exit(service, what: str) -> None:
     done = service._git_run("push", remote, f"HEAD:{merge}")
     if done.returncode != 0:
         console.print(
-            f"  [yellow]Warning: git push failed: {safe(service._git_output(done))}[/yellow]",
+            # git's multi-line stderr folded onto one line, as #603 does (#623)
+            f"  [yellow]Warning: git push failed: "
+            f"{safe(' '.join(service._git_output(done).split()))}[/yellow]",
             soft_wrap=True,
         )
         return
@@ -1225,21 +1227,13 @@ def experiment_run(
     console.print(f"  Path: {safe(run_path)}")
 
     if push:
-        import subprocess
-
-        _commit_or_exit(
+        # push only the run's own commit, never other unpushed work (#623, as #614)
+        if _commit_or_exit(
             service, run_path / "config.yaml", f"experiment run: {expr_id} ({run_path.name})"
-        )
-        try:
-            subprocess.run(
-                ["git", "push"],
-                cwd=str(service.repo_root),
-                capture_output=True,
-                check=True,
-            )
-            console.print("  [dim]Committed and pushed[/dim]")
-        except subprocess.CalledProcessError as e:
-            console.print(f"  [yellow]Warning: git push failed: {safe(e)}[/yellow]")
+        ):
+            _push_only_head_or_exit(service, "experiment run")
+        else:
+            console.print("  [dim]Run config unchanged — nothing committed or pushed[/dim]")
 
 
 @experiment.command("status")
