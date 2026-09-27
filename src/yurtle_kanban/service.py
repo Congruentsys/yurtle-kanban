@@ -1723,180 +1723,293 @@ class KanbanService:
                 ),
             }
 
-        has_remote = self._has_remote()
-        attempts = max_retries if has_remote else 1
-
-        for attempt in range(attempts):
-            # Step 1: Pull latest (only if remote exists)
-            if has_remote:
-                try:
-                    subprocess.run(
-                        ["git", "pull", "origin", "main"],
-                        cwd=self.repo_root,
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                except Exception as e:
-                    logger.warning(f"Git pull failed: {e}")
-
-            # Step 2: Re-scan
-            self._items.clear()
-            self.scan()
-
-            # Step 3: Allocate ID (or use provided)
-            if item_id is not None:
-                current_id = item_id
-            else:
-                prefix = self._get_type_prefix(item_type)
-                next_num = self._get_next_id_number(prefix)
-                current_id = f"{prefix}-{next_num:03d}"
-
-            # Step 4: Create the file
-            type_dir = self._get_type_directory(item_type)
-            slug = self._slugify(title)
-            filename = f"{current_id}-{slug}.md" if slug else f"{current_id}.md"
-            file_path = type_dir / filename
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-
-            item = WorkItem(
-                id=current_id,
-                title=title,
-                item_type=item_type,
-                status=WorkItemStatus.BACKLOG,
-                file_path=file_path,
+        if self._has_remote():
+            return self._create_on_default_branch(
+                item_type,
+                title,
                 priority=priority,
                 assignee=assignee,
-                created=date.today(),
                 description=description,
-                tags=tags or [],
+                tags=tags,
+                max_retries=max_retries,
+                content=content,
+                item_id=item_id,
             )
-            if content is not None:
-                file_path.write_text(self._apply_priority(content, priority))
-            else:
-                file_path.write_text(item.to_markdown())
 
-            # Step 5: Update _ID_ALLOCATIONS.json
-            lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
-            lock_file.parent.mkdir(parents=True, exist_ok=True)
+        # No remote: allocate, create and commit locally (no push, no retry needed)
+        self._items.clear()
+        self.scan()
+        current_id = item_id or self._next_item_id(item_type, 0)
+        item, text = self._new_item(
+            item_type, title, current_id, priority, assignee, description, tags, content
+        )
+        file_path = item.file_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(text)
 
-            allocations = []
-            if lock_file.exists():
-                try:
-                    allocations = json_mod.loads(lock_file.read_text())
-                except Exception:
-                    allocations = []
-
-            alloc_prefix = self._get_type_prefix(item_type)
-            # Extract trailing number for allocation record
-            num_match = re.search(r"(\d+)$", current_id)
-            alloc_num = int(num_match.group(1)) if num_match else 0
-
-            allocations.append(
-                {
-                    "id": current_id,
-                    "prefix": alloc_prefix,
-                    "number": alloc_num,
-                    "allocated_at": datetime.now().isoformat(),
-                    "allocated_by": self._get_git_user(),
-                }
-            )
-            allocations = allocations[-100:]
-            lock_file.write_text(json_mod.dumps(allocations, indent=2))
-
-            # Step 6: Commit both files
+        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        allocations = []
+        if lock_file.exists():
             try:
-                subprocess.run(
-                    ["git", "add", str(file_path), str(lock_file)],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                )
-                subprocess.run(
-                    ["git", "commit", "-m", f"Create {current_id}: {title}"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                )
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"Git commit failed: {e}")
-                return {
-                    "success": False,
-                    "item": None,
-                    "id": None,
-                    "pushed": False,
-                    "message": f"Git commit failed: {e}",
-                }
+                allocations = json_mod.loads(lock_file.read_text())
+            except Exception:
+                allocations = []
+        lock_file.write_text(self._with_allocation(allocations, item_type, current_id))
 
-            # Step 7: Push (only if remote exists)
-            if not has_remote:
-                self._items[current_id] = item
-                self._fire_create_hook(item)
-                return {
-                    "success": True,
-                    "item": item,
-                    "id": current_id,
-                    "pushed": False,
-                    "message": (
-                        f"Created and committed {current_id}: "
-                        f"{title} (no remote configured)"
-                    ),
-                }
-
-            push_result = subprocess.run(
-                ["git", "push"],
+        try:
+            subprocess.run(
+                ["git", "add", str(file_path), str(lock_file)],
                 cwd=self.repo_root,
                 capture_output=True,
-                text=True,
-                timeout=30,
+                check=True,
             )
+            subprocess.run(
+                ["git", "commit", "-m", f"Create {current_id}: {title}"],
+                cwd=self.repo_root,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Git commit failed: {e}")
+            return {
+                "success": False,
+                "item": None,
+                "id": None,
+                "pushed": False,
+                "message": f"Git commit failed: {e}",
+            }
 
-            if push_result.returncode == 0:
-                self._items[current_id] = item
-                self._fire_create_hook(item)
-                return {
-                    "success": True,
-                    "item": item,
-                    "id": current_id,
-                    "pushed": True,
-                    "message": f"Created and pushed {current_id}: {title}",
-                }
-
-            # Push failed — another agent got there first
-            logger.warning(f"Push failed (attempt {attempt + 1}), rebasing: {push_result.stderr}")
-
-            # Clean up: remove the file and reset the commit
-            try:
-                subprocess.run(
-                    ["git", "reset", "HEAD~1"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                )
-                if file_path.exists():
-                    file_path.unlink()
-            except Exception:
-                pass
-
-            # Pull latest and retry
-            try:
-                subprocess.run(
-                    ["git", "pull", "origin", "main", "--rebase"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                    timeout=30,
-                )
-            except Exception as e:
-                logger.warning(f"Rebase failed on retry {attempt + 1}: {e}")
-
+        self._items[current_id] = item
+        self._fire_create_hook(item)
         return {
-            "success": False,
-            "item": None,
-            "id": None,
+            "success": True,
+            "item": item,
+            "id": current_id,
             "pushed": False,
-            "message": f"Failed to create item after {max_retries} retries",
+            "message": f"Created and committed {current_id}: {title} (no remote configured)",
         }
+
+    def _create_on_default_branch(
+        self,
+        item_type: WorkItemType,
+        title: str,
+        priority: str,
+        assignee: str | None,
+        description: str | None,
+        tags: list[str] | None,
+        max_retries: int,
+        content: str | None,
+        item_id: str | None,
+    ) -> dict[str, Any]:
+        """`create --push` with a remote (#585): fetch and push ONE explicit ref, the
+        remote's default branch. The commit is built on the freshly fetched
+        `origin/<default>` in a temporary index, so the user's worktree, index and
+        branch are never touched while it races; a lost race refetches and retries
+        with a new id, and a failure of any kind leaves nothing behind. Only when the
+        push has landed, and HEAD is on the default branch, is the checkout
+        fast-forwarded to it."""
+        import json
+        import tempfile
+
+        def failed(message: str) -> dict[str, Any]:
+            return {"success": False, "item": None, "id": None, "pushed": False,
+                    "message": message}
+
+        default = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+        branch = default.stdout.strip().removeprefix("origin/") if default.returncode == 0 else ""
+        branch = branch or "main"
+        top = self._git_toplevel()
+        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+        lock_rel = self._repo_relative(lock_file, top)
+
+        attempts = max(1, max_retries)
+        for attempt in range(attempts):
+            fetch = self._git_run(
+                "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+            )
+            if fetch.returncode != 0:
+                return failed(
+                    f"Could not fetch origin/{branch} from the remote: "
+                    f"{fetch.stderr.strip()} (nothing was created)"
+                )
+            base = self._git_run("rev-parse", f"refs/remotes/origin/{branch}").stdout.strip()
+
+            self._items.clear()
+            self.scan()
+            current_id = item_id or self._next_item_id(
+                item_type, self._next_id_number_at(base, self._get_type_prefix(item_type))
+            )
+            item, text = self._new_item(
+                item_type, title, current_id, priority, assignee, description, tags, content
+            )
+            item_rel = self._repo_relative(item.file_path, top)
+            if item_rel is None or lock_rel is None:
+                return failed(f"{item.file_path} is outside the git repository at {top}")
+
+            shown = self._git_run("show", f"{base}:{lock_rel.as_posix()}")
+            try:
+                allocations = json.loads(shown.stdout) if shown.returncode == 0 else []
+            except Exception:
+                allocations = []
+            blobs = {
+                item_rel: text,
+                lock_rel: self._with_allocation(allocations, item_type, current_id),
+            }
+
+            # Build the commit on `base` without touching the worktree or the index
+            with tempfile.TemporaryDirectory() as tmp:
+                env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+                steps = [self._git_run("read-tree", base, env=env)]
+                for rel, body in blobs.items():
+                    blob = self._git_run("hash-object", "-w", "--stdin", input=body)
+                    steps += [blob, self._git_run(
+                        "update-index", "--add", "--cacheinfo",
+                        f"100644,{blob.stdout.strip()},{rel.as_posix()}", env=env,
+                    )]
+                tree = self._git_run("write-tree", env=env)
+                steps.append(tree)
+                commit = self._git_run(
+                    "commit-tree", tree.stdout.strip(), "-p", base,
+                    "-m", f"Create {current_id}: {title}",
+                )
+                steps.append(commit)
+            bad = next((s for s in steps if s.returncode != 0), None)
+            if bad is not None:
+                return failed(f"Git commit failed: {bad.stderr.strip()}")
+            sha = commit.stdout.strip()
+
+            push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
+            if push.returncode != 0:
+                logger.warning(
+                    f"Push to origin/{branch} rejected (attempt {attempt + 1}): "
+                    f"{push.stderr.strip()}"
+                )
+                continue
+
+            head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
+            local = head == branch and (
+                self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
+            )
+            if local:
+                self._items[current_id] = item
+            self._fire_create_hook(item)
+            note = "" if local else f" (not in this checkout yet: pull {branch} to see it)"
+            return {
+                "success": True,
+                "item": item,
+                "id": current_id,
+                "pushed": True,
+                "message": f"Created and pushed {current_id} to origin/{branch}: {title}{note}",
+            }
+
+        # Best effort: leave origin/<default> showing the commits that beat us
+        self._git_run("fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        return failed(
+            f"Failed to create item: the push to origin/{branch} was rejected "
+            f"{attempts} time(s) (lost the race to another writer each attempt); "
+            "nothing was left behind — retry"
+        )
+
+    def _git_run(
+        self, *args: str, env: dict[str, str] | None = None, input: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one git command in the repo root, capturing text output."""
+        return subprocess.run(
+            ["git", *args],
+            cwd=self.repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            input=input,
+        )
+
+    def _next_item_id(self, item_type: WorkItemType, floor: int) -> str:
+        """The next id for `item_type`: past the scanned board and past `floor`."""
+        prefix = self._get_type_prefix(item_type)
+        return f"{prefix}-{max(self._get_next_id_number(prefix), floor):03d}"
+
+    def _next_id_number_at(self, rev: str, prefix: str) -> int:
+        """Next id number for `prefix` as commit `rev` sees it: item filenames under
+        the work paths plus the allocation records committed there (#585)."""
+        import json
+
+        top = self._git_toplevel()
+        rels = [
+            rel.as_posix()
+            for p in self.config.get_work_paths()
+            if (rel := self._repo_relative(_under(self.repo_root, p), top)) is not None
+        ]
+        max_num = 0
+        if rels:
+            listed = self._git_run("ls-tree", "-r", "--name-only", "--full-tree", rev, "--", *rels)
+            for name in listed.stdout.splitlines():
+                stem = Path(name).stem
+                if name.endswith(".md") and stem.startswith(prefix + "-"):
+                    match = re.match(r"(\d+)", stem[len(prefix) + 1:])
+                    if match:
+                        max_num = max(max_num, int(match.group(1)))
+        lock_rel = self._repo_relative(self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top)
+        if lock_rel is not None:
+            shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}")
+            if shown.returncode == 0:
+                try:
+                    max_num = max(max_num, self._max_allocated(json.loads(shown.stdout), prefix))
+                except Exception:
+                    pass
+        return max_num + 1
+
+    def _new_item(
+        self,
+        item_type: WorkItemType,
+        title: str,
+        current_id: str,
+        priority: str,
+        assignee: str | None,
+        description: str | None,
+        tags: list[str] | None,
+        content: str | None,
+    ) -> tuple[WorkItem, str]:
+        """The new backlog item and the text of its file (not written)."""
+        type_dir = self._get_type_directory(item_type)
+        slug = self._slugify(title)
+        filename = f"{current_id}-{slug}.md" if slug else f"{current_id}.md"
+        item = WorkItem(
+            id=current_id,
+            title=title,
+            item_type=item_type,
+            status=WorkItemStatus.BACKLOG,
+            file_path=type_dir / filename,
+            priority=priority,
+            assignee=assignee,
+            created=date.today(),
+            description=description,
+            tags=tags or [],
+        )
+        if content is not None:
+            return item, self._apply_priority(content, priority)
+        return item, item.to_markdown()
+
+    def _with_allocation(
+        self, allocations: list[dict[str, Any]], item_type: WorkItemType, current_id: str
+    ) -> str:
+        """`allocations` plus a record for `current_id` (last 100), as JSON text."""
+        import json
+
+        # Extract trailing number for allocation record
+        num_match = re.search(r"(\d+)$", current_id)
+        allocations = [
+            *allocations,
+            {
+                "id": current_id,
+                "prefix": self._get_type_prefix(item_type),
+                "number": int(num_match.group(1)) if num_match else 0,
+                "allocated_at": datetime.now().isoformat(),
+                "allocated_by": self._get_git_user(),
+            },
+        ]
+        return json.dumps(allocations[-100:], indent=2)
 
     def _get_type_prefix(self, item_type: WorkItemType) -> str:
         """Get ID prefix for item type."""
@@ -1930,6 +2043,32 @@ class KanbanService:
         }
         return prefixes.get(item_type, "ITEM")
 
+    @staticmethod
+    def _max_allocated(allocations: list[dict[str, Any]], prefix: str) -> int:
+        """Highest number `allocations` records in the `prefix-` id space."""
+        max_num = 0
+        for alloc in allocations:
+            if alloc.get("prefix") != prefix:
+                continue
+            # ⚠ The `prefix` field alone is NOT the id space. A
+            # paper-scoped hypothesis H130.1 is stamped
+            # `prefix: "H", number: 1`, so matching on the prefix
+            # counted it toward the DASHED H-NNN space: in a repo with a
+            # 3-hypothesis paper, the first unparented hypothesis came
+            # out H-004. `_get_next_id_number` sources 2 and 3 have always filtered on
+            # `prefix + "-"`; this one did not, so the three sources
+            # disagreed about what counts.
+            #
+            # A legacy record with no stored id keeps counting — this
+            # can then only ever SKIP an id, never mint a duplicate.
+            alloc_id = alloc.get("id")
+            if alloc_id is not None and not str(alloc_id).startswith(
+                prefix + "-"
+            ):
+                continue
+            max_num = max(max_num, alloc.get("number", 0))
+        return max_num
+
     def _get_next_id_number(self, prefix: str) -> int:
         """Get next available ID number for a prefix.
 
@@ -1951,27 +2090,7 @@ class KanbanService:
         lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
         if lock_file.exists():
             try:
-                allocations = json.loads(lock_file.read_text())
-                for alloc in allocations:
-                    if alloc.get("prefix") != prefix:
-                        continue
-                    # ⚠ The `prefix` field alone is NOT the id space. A
-                    # paper-scoped hypothesis H130.1 is stamped
-                    # `prefix: "H", number: 1`, so matching on the prefix
-                    # counted it toward the DASHED H-NNN space: in a repo with a
-                    # 3-hypothesis paper, the first unparented hypothesis came
-                    # out H-004. Sources 2 and 3 below have always filtered on
-                    # `prefix + "-"`; this one did not, so the three sources
-                    # disagreed about what counts.
-                    #
-                    # A legacy record with no stored id keeps counting — this
-                    # can then only ever SKIP an id, never mint a duplicate.
-                    alloc_id = alloc.get("id")
-                    if alloc_id is not None and not str(alloc_id).startswith(
-                        prefix + "-"
-                    ):
-                        continue
-                    max_num = max(max_num, alloc.get("number", 0))
+                max_num = self._max_allocated(json.loads(lock_file.read_text()), prefix)
             except (json.JSONDecodeError, Exception):
                 pass
 
