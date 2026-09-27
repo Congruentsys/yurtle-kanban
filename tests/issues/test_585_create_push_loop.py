@@ -34,6 +34,25 @@ Interleavings are deterministic, not timed: ``subprocess.run`` is wrapped, and j
 before any ``git ... push`` the service issues, clone B pushes a commit to origin/main
 (the wrapper itself uses the original ``subprocess.run``).
 
+Round 2 (review of PR #594):
+
+7. A push the remote refuses for a reason other than a lost race (a pre-receive hook
+   saying "protected branch"; a read-only remote's unpacker error) fails at once: exactly
+   ONE push attempt, non-zero exit, the remote's stderr in the message, and no "lost
+   the race" wording.
+8. A git call that times out (``subprocess.TimeoutExpired``, simulated by the wrapper)
+   exits non-zero with a "timed out" message and no traceback. A fetch timeout leaves
+   the tree clean. A push timeout is not retried, and its message says the push may
+   have landed and to check origin/<default>.
+9. On a feature branch (the item is not fast-forwarded into the checkout), the CLI
+   tells the user to pull the default branch and prints no ``File:`` line for a path
+   that is not in the checkout.
+10. A remote whose default branch is ``master``, added with ``git remote add`` (so no
+    ``refs/remotes/origin/HEAD``): ``create --push`` lands the item on ``master``.
+11. Every git subprocess the CLI runs for ``create --push`` gets ``stdin=DEVNULL`` (or
+    explicit ``input``) and an environment with ``GIT_TERMINAL_PROMPT=0``, even when
+    the caller's environment does not set it.
+
 Not covered here: ``next-id`` (``allocate_next_id``) has its own, separate retry path
 (bare ``push``, ``pull --rebase``) — it does not share this loop.
 """
@@ -84,15 +103,21 @@ def _configure(clone: Path) -> None:
 class World:
     """A bare remote (default branch main) plus two clones, A (under test) and B."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, default: str = "main", remote_add: bool = False) -> None:
         self.remote = tmp_path / "remote.git"
         self.a = tmp_path / "A"
         self.b = tmp_path / "B"
+        self.default = default
         self.b_pushes = 0
-        git(tmp_path, "init", "--bare", "-b", "main", str(self.remote))
-        git(tmp_path, "clone", str(self.remote), str(self.a))
+        git(tmp_path, "init", "--bare", "-b", default, str(self.remote))
+        if remote_add:  # `git remote add` only: no refs/remotes/origin/HEAD
+            self.a.mkdir()
+            git(self.a, "init", "-b", default)
+            git(self.a, "remote", "add", "origin", str(self.remote))
+        else:
+            git(tmp_path, "clone", str(self.remote), str(self.a))
         _configure(self.a)
-        git(self.a, "checkout", "-B", "main")
+        git(self.a, "checkout", "-B", default)
         (self.a / EXP_DIR).mkdir(parents=True)
         (self.a / EXP_DIR / ".gitkeep").write_text("")
         (self.a / "kanban-work" / "signals").mkdir(parents=True)
@@ -108,15 +133,17 @@ class World:
         config.save(self.a / ".kanban" / "config.yaml")
         git(self.a, "add", "-A")
         git(self.a, "commit", "-m", "seed")
-        git(self.a, "push", "-u", "origin", "main")
+        git(self.a, "push", "-u", "origin", default)
         git(tmp_path, "clone", str(self.remote), str(self.b))
         _configure(self.b)
 
     # --- remote views -------------------------------------------------------
-    def remote_sha(self, ref: str = "main") -> str:
+    def remote_sha(self, ref: str | None = None) -> str:
+        ref = ref or self.default
         return git(self.remote, "rev-parse", ref).strip()
 
-    def remote_files(self, ref: str = "main") -> list[str]:
+    def remote_files(self, ref: str | None = None) -> list[str]:
+        ref = ref or self.default
         return git(self.remote, "ls-tree", "-r", "--name-only", ref).split()
 
     def remote_items(self) -> dict[str, list[str]]:
@@ -130,7 +157,7 @@ class World:
         return found
 
     def remote_show(self, path: str) -> str:
-        return git(self.remote, "show", f"main:{path}")
+        return git(self.remote, "show", f"{self.default}:{path}")
 
     # --- clone B, the rival -----------------------------------------------------
     def b_push_item(self) -> None:
@@ -379,3 +406,172 @@ def test_happy_path_creates_commits_pushes_one_item(world, monkeypatch) -> None:
     assert len(_items_titled(world, TITLE)) == 1
     assert int(git(world.remote, "rev-list", "--count", "main")) == before + 1
     assert porcelain(world.a) == []
+
+
+# === Round 2 (review of PR #594) =====================================================
+
+
+class GitRecorder:
+    """Wrap subprocess.run: record every git call; ``on(subcommand)`` may act first."""
+
+    def __init__(self, actions: dict[str, Callable[[Any, dict[str, Any]], Any]] | None = None):
+        self.actions = actions or {}
+        self.calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def count(self, sub: str) -> int:
+        return sum(1 for cmd, _ in self.calls if sub in cmd)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> subprocess.CompletedProcess:
+        cmd = args[0] if args else kwargs.get("args")
+        if isinstance(cmd, (list, tuple)) and cmd and Path(str(cmd[0])).name == "git":
+            words = [str(c) for c in cmd]
+            self.calls.append((words, dict(kwargs)))
+            for sub, action in self.actions.items():
+                if sub in words[1:]:
+                    return action(args, kwargs)
+        return _ORIG_RUN(*args, **kwargs)
+
+
+def _no_traceback(result: Any, out: str) -> None:
+    assert "Traceback" not in out, out
+    assert result.exception is None or isinstance(result.exception, SystemExit), (
+        f"uncaught {type(result.exception).__name__}: {out}"
+    )
+
+
+# --- 7. a remote-side refusal is not a lost race ------------------------------------------
+
+
+def _assert_refused_once(world: World, monkeypatch, pattern: str) -> None:
+    rec = GitRecorder()
+    monkeypatch.setattr(subprocess, "run", rec)
+    before = world.remote_sha()
+    result = run_create(world, monkeypatch)
+    out = output_of(result)
+
+    assert rec.count("push") == 1, f"retried a refusal {rec.count('push')} times: {out}"
+    assert result.exit_code != 0, out
+    assert re.search(pattern, out, re.I), f"remote's stderr missing: {out}"
+    assert "lost the race" not in out.lower(), out
+    assert world.remote_sha() == before
+    assert porcelain(world.a) == []
+
+
+def test_pre_receive_rejection_fails_at_once(world, monkeypatch) -> None:
+    hook = world.remote / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\necho 'protected branch: main is locked' >&2\nexit 1\n")
+    hook.chmod(0o755)
+    _assert_refused_once(world, monkeypatch, r"protected branch")
+
+
+def test_read_only_remote_fails_at_once(world, monkeypatch) -> None:
+    objects = world.remote / "objects"
+    dirs = [objects, *(p for p in objects.rglob("*") if p.is_dir())]
+    for d in dirs:
+        d.chmod(0o555)
+    try:
+        _assert_refused_once(world, monkeypatch, r"unpack|permission")
+    finally:
+        for d in dirs:
+            d.chmod(0o755)
+
+
+# --- 8. timeouts are messages, not tracebacks ------------------------------------------
+
+
+def _timeout(args: Any, kwargs: dict[str, Any]) -> Any:
+    raise subprocess.TimeoutExpired(args[0] if args else kwargs.get("args"), 30)
+
+
+def _push_then_timeout(args: Any, kwargs: dict[str, Any]) -> Any:
+    _ORIG_RUN(*args, **kwargs)  # the push lands, but the caller never hears back
+    raise subprocess.TimeoutExpired(args[0] if args else kwargs.get("args"), 30)
+
+
+def test_fetch_timeout_is_a_clear_message(world, monkeypatch) -> None:
+    monkeypatch.setattr(subprocess, "run", GitRecorder({"fetch": _timeout}))
+    head_before = git(world.a, "rev-parse", "HEAD").strip()
+    result = run_create(world, monkeypatch)
+    out = output_of(result)
+
+    _no_traceback(result, out)
+    assert result.exit_code != 0, out
+    assert re.search(r"timed out", out, re.I), out
+    assert git(world.a, "rev-parse", "HEAD").strip() == head_before
+    assert porcelain(world.a) == []
+
+
+def test_push_timeout_says_it_may_have_landed(world, monkeypatch) -> None:
+    rec = GitRecorder({"push": _push_then_timeout})
+    monkeypatch.setattr(subprocess, "run", rec)
+    result = run_create(world, monkeypatch)
+    out = output_of(result)
+
+    _no_traceback(result, out)
+    assert rec.count("push") == 1, "a push that may have landed was retried"
+    assert result.exit_code != 0, out
+    flat = " ".join(out.split())
+    assert re.search(r"timed out", flat, re.I), out
+    assert re.search(r"may have|might have", flat, re.I), out
+    assert "origin/main" in flat, out
+    assert porcelain(world.a) == []
+
+
+# --- 9. feature branch: the CLI says to pull, and shows no missing File: ------------------
+
+
+def test_feature_branch_cli_says_pull_and_no_missing_file(world, monkeypatch) -> None:
+    scenario_feature_branch(world, monkeypatch)
+    result = run_create(world, monkeypatch)
+    out = output_of(result)
+    flat = " ".join(out.split())
+
+    assert result.exit_code == 0, out
+    assert len(_items_titled(world, TITLE)) == 1
+    assert re.search(r"\bpull\b[^.]*\bmain\b", flat, re.I), f"no hint to pull main: {out}"
+    assert not [p for p in (world.a / EXP_DIR).iterdir() if ID_RE.match(p.name)]
+    assert not re.search(r"^\s*File:", out, re.M), f"a File: path not in this checkout: {out}"
+
+
+# --- 10. default branch `master`, no origin/HEAD ------------------------------------------
+
+
+def test_master_default_without_origin_head(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    world = World(tmp_path, default="master", remote_add=True)
+    assert git(world.a, "symbolic-ref", "refs/remotes/origin/HEAD", check=False) == ""
+    result = run_create(world, monkeypatch)
+    out = output_of(result)
+
+    assert result.exit_code == 0, out
+    assert list(world.remote_items()) == ["EXP-001"]
+    assert len(_items_titled(world, TITLE)) == 1
+    assert "main" not in git(world.remote, "branch", "--list").split()
+    assert porcelain(world.a) == []
+
+
+# --- 11. no git call can prompt ---------------------------------------------------------
+
+
+def test_every_git_call_is_non_interactive(world, monkeypatch) -> None:
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    rec = GitRecorder()
+    monkeypatch.setattr(subprocess, "run", rec)
+    result = run_create(world, monkeypatch)
+    assert result.exit_code == 0, output_of(result)
+    assert rec.count("push") == 1
+
+    import os
+
+    bad_stdin = [
+        cmd for cmd, kw in rec.calls
+        if kw.get("stdin") is not subprocess.DEVNULL and kw.get("input") is None
+    ]
+    bad_env = [
+        cmd for cmd, kw in rec.calls
+        if (kw.get("env") if kw.get("env") is not None else os.environ).get(
+            "GIT_TERMINAL_PROMPT"
+        ) != "0"
+    ]
+    assert not bad_stdin, f"git calls without stdin=DEVNULL: {bad_stdin}"
+    assert not bad_env, f"git calls without GIT_TERMINAL_PROMPT=0: {bad_env}"
