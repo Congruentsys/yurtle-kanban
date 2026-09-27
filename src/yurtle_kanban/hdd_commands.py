@@ -92,9 +92,14 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
         )
 
 
-def _print_parent_missing(service, parent_id: str, child_type: str, child_id: str) -> None:
-    """Say why no link was written, from what the parent file shows (#718, #724)."""
-    state = service.parent_link_state(parent_id, child_type, child_id)
+def _print_parent_missing(
+    service, parent_id: str, child_type: str, child_id: str, result: dict | None = None
+) -> None:
+    """Say why no link was written (#718, #724): from the copy the link was built
+    against when a `--push` create reports it (origin's, #645), else the local file."""
+    state = (result or {}).get("parent_state") or service.parent_link_state(
+        parent_id, child_type, child_id
+    )
     if state == "missing":
         console.print(
             f"  [yellow]{safe(parent_id)} is not on any board: "
@@ -801,7 +806,9 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             if result.get("parent_linked"):
                 _print_parent_linked(str(source_idea), result)
             elif source_idea:
-                _print_parent_missing(service, str(source_idea), "literature", str(result["id"]))
+                _print_parent_missing(
+                    service, str(source_idea), "literature", str(result["id"]), result
+                )
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1061,7 +1068,7 @@ def hypothesis_create(
                 _print_parent_linked(f"PAPER-{paper_num}", result)
             elif paper_num is not None:
                 _print_parent_missing(
-                    service, f"PAPER-{paper_num}", "hypothesis", str(result["id"])
+                    service, f"PAPER-{paper_num}", "hypothesis", str(result["id"]), result
                 )
         else:
             raise click.ClickException(f"Failed: {result['message']}")
@@ -1197,7 +1204,9 @@ def experiment_create(
             if result.get("parent_linked"):
                 _print_parent_linked(str(hyp_id), result)
             elif hyp_id:
-                _print_parent_missing(service, str(hyp_id), "experiment", str(result["id"]))
+                _print_parent_missing(
+                    service, str(hyp_id), "experiment", str(result["id"]), result
+                )
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
