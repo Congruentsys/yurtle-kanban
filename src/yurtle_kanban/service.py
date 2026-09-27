@@ -4436,7 +4436,14 @@ class KanbanService:
         tags: list[str] | None = None,
         commit: bool = True,
         message: str | None = None,
-        **edges: Any,
+        *,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+        depends_on: list[str] | None = None,
+        add_depends_on: list[str] | None = None,
+        remove_depends_on: list[str] | None = None,
+        related: list[str] | None = None,
+        allow_unknown: bool = False,
     ) -> WorkItem:
         """Update a work item's properties (not status - use move_item for that).
 
@@ -4449,11 +4456,15 @@ class KanbanService:
             tags: New tags list (optional, replaces existing)
             commit: Whether to git commit the change
             message: Optional commit message
-            **edges: the tag and dependency edits of `update_item_changes`
+            add_tags ... allow_unknown: the tag and dependency edits of
+                `update_item_changes`
         """
         item, _ = self.update_item_changes(
             item_id, title=title, priority=priority, assignee=assignee,
-            description=description, tags=tags, commit=commit, message=message, **edges,
+            description=description, tags=tags, add_tags=add_tags,
+            remove_tags=remove_tags, depends_on=depends_on,
+            add_depends_on=add_depends_on, remove_depends_on=remove_depends_on,
+            related=related, allow_unknown=allow_unknown, commit=commit, message=message,
         )
         return item
 
@@ -4481,10 +4492,12 @@ class KanbanService:
 
         Lists: `tags` / `depends_on` replace the list, then `add_*` append what is
         missing (in order) and `remove_*` drop. Dependency and related IDs are
-        upper-cased (#576). A dependency this edit adds is refused when it is the
-        item itself, an ID on more than one board, an ID on no board (unless
-        `allow_unknown`), or a step on a path back to this item (a cycle). Every
-        refusal is a ValueError raised before anything is written.
+        upper-cased, and compared upper-cased with the file's, so an entry equal
+        ignoring case is no change (#576, #721). A blank tag is refused (#721), and so
+        is an item whose ID is on more than one board (#721). A dependency this edit
+        adds is refused when it is the item itself, an ID on more than one board, an
+        ID on no board (unless `allow_unknown`), or a step on a path back to this item
+        (a cycle). Every refusal is a ValueError raised before anything is written.
         """
         priority = self._normalize_priority(priority)
         if title is not None:
@@ -4496,6 +4509,9 @@ class KanbanService:
             related=related,
         )
         self._check_no_comments_heading(description)
+        for tag in [*(tags or []), *(add_tags or [])]:
+            if not str(tag).strip():
+                raise ValueError("A tag is empty: give a tag")
         editing_deps = (
             depends_on is not None or bool(add_depends_on) or bool(remove_depends_on)
         )
@@ -4504,6 +4520,12 @@ class KanbanService:
         item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
+        if item.id in self.duplicate_ids:
+            where = ", ".join(self._display_path(f) for f in self.duplicate_ids[item.id])
+            raise ValueError(
+                f"{item.id} is on more than one board ({where}): an update to it is "
+                "ambiguous; fix the duplicate ID first"
+            )
 
         new_tags: list[str] | None = None
         if tags is not None or add_tags or remove_tags:
@@ -4552,7 +4574,8 @@ class KanbanService:
             ("depends_on", item.depends_on, new_deps),
             ("related", item.related, new_related),
         ):
-            if new is not None and new != old:
+            same = old == new if key == "tags" else self._id_list(old) == new
+            if new is not None and not same:
                 content = self._add_or_update_frontmatter_field(
                     content, key, yaml_flow_list(new), items=new
                 )
@@ -4589,10 +4612,14 @@ class KanbanService:
 
     @staticmethod
     def _list_change(key: str, old: list[Any], new: list[str]) -> str:
-        """`depends_on +EXP-3 -EXP-2`: a list edit as the commit message names it."""
+        """`depends_on +EXP-3 -EXP-2`: a list edit as the commit message names it;
+        just `key` when nothing changed. IDs compare upper-cased; tags as written."""
+        norm = str if key == "tags" else str.upper
         old_ids = [str(i) for i in old]
-        edits = [f"+{i}" for i in new if i not in old_ids]
-        edits += [f"-{i}" for i in old_ids if i not in new]
+        old_keys = {norm(i) for i in old_ids}
+        new_keys = {norm(i) for i in new}
+        edits = [f"+{i}" for i in new if norm(i) not in old_keys]
+        edits += [f"-{i}" for i in old_ids if norm(i) not in new_keys]
         return " ".join([key, *edits])
 
     def _check_new_dependencies(
@@ -4700,7 +4727,12 @@ class KanbanService:
         return None
 
     def dependency_cycles(self) -> list[list[str]]:
-        """Every dependency cycle, each once, starting at its smallest ID (#576)."""
+        """Dependency cycles, each once, starting at its smallest ID (#576).
+
+        `find_cycle` gives one cycle per start node, so a node on two cycles may
+        report only one of them: every node on some cycle is on a reported one,
+        but not every cycle is reported (#721).
+        """
         graph = self.dependency_graph()
         cycles: dict[tuple[str, ...], list[str]] = {}
         for node in sorted(graph):
