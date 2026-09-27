@@ -2372,9 +2372,10 @@ class KanbanService:
     def _id_key(item_id: str) -> tuple[str, int] | None:
         """`item_id` as (the text before its trailing number, separator included,
         number), for comparing ids: `EXP-3` and `EXP-003` are (`EXP-`, 3), `EXP3`
-        is (`EXP`, 3), so they differ (#661). None when it ends in no number."""
+        is (`EXP`, 3), so they differ (#661). The text is case folded: `exp-3` is
+        `EXP-3` (#732, #764). None when it ends in no number."""
         match = re.fullmatch(r"(.*?)(\d+)", item_id)
-        return None if match is None else (match.group(1), int(match.group(2)))
+        return None if match is None else (match.group(1).upper(), int(match.group(2)))
 
     @staticmethod
     def _stem_holds(stem: str, key: tuple[str, int]) -> bool:
@@ -2382,8 +2383,8 @@ class KanbanService:
         its text, then its number, then no more of an id (`EXP-003-Title` and
         `EXP-003.v2` hold (`EXP-`, 3); `H1.2-Title`, a paper-scoped id, does not hold
         (`H`, 1)) (#661, #685)."""
-        text, num = key
-        rest = stem[len(text):] if stem.startswith(text) else None
+        text, num = key  # `_id_key` folds the text; the stem is folded too (#764)
+        rest = stem[len(text):] if stem.upper().startswith(text) else None
         match = re.match(r"(\d+)(?!\d|\.\d)", rest) if rest is not None else None
         return match is not None and int(match.group(1)) == num
 
@@ -2402,15 +2403,17 @@ class KanbanService:
         `EXP-3` is `EXP-003` (#641), but `EXP3` is not (#661)."""
         names, ids = self._ids_at(rev)
         key = self._id_key(item_id)
+        folded = item_id.upper()  # `m-042` holds `M-042` (#732, #764)
         for name in names:
-            stem = Path(name).stem
-            if stem == item_id or stem.startswith(item_id + "-") or (
+            stem = Path(name).stem.upper()
+            if stem == folded or stem.startswith(folded + "-") or (
                 key is not None and self._stem_holds(stem, key)
             ):
                 return name
         return next(
             (path for path, found in ids
-             if found == item_id or (key is not None and self._id_key(found) == key)),
+             if found.upper() == folded
+             or (key is not None and self._id_key(found) == key)),
             None,
         )
 
