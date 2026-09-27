@@ -572,10 +572,12 @@ class KanbanMCPServer:
             return error
         if error := self._check_string_lists(args, "tags", "depends_on", "related"):
             return error
-        # a long-lived server: see duplicates as the files are now (#732)
-        self.service.scan()
         if error := self._check_booleans(args, "allow_unknown"):
             return error
+        # a long-lived server: see duplicates as the files are now (#732); a deps
+        # edit is rescanned by the service itself (#638), so once either way (#740)
+        if args.get("depends_on") is None:
+            self.service.scan()
         item_id = args["item_id"].upper()
 
         item = self.service.update_item(
