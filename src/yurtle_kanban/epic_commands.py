@@ -237,7 +237,7 @@ def _do_create(title: str, priority: str, items: str | None, push: bool, group: 
 
     if push and item_ids:
         console.print(
-            f"[yellow]Warning: --push committed only the {type_label.lower()}; the item "
+            f"[yellow]Warning: --push committed only the {safe(type_label.lower())}; the item "
             "links below are local changes. Commit and push them yourself.[/yellow]"
         )
 
