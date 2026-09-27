@@ -45,6 +45,7 @@ from .models import (
     turtle_string,
     turtle_unescape,
     unknown_priority_message,
+    yaml_flow_list,
     yaml_quote,
     yaml_scalar,
 )
@@ -3261,16 +3262,6 @@ class KanbanService:
         }
         return transitions.get(status, [])
 
-    def _update_item_file(self, item: WorkItem) -> None:
-        """Update the work item file with current state, keeping its line endings (#151)."""
-        eol: LineEndings | str = "\n"
-        text = item.to_markdown()
-        if item.file_path.exists():
-            old, eol = self._read_item_text(item.file_path)
-            if old.endswith("\n") and not text.endswith("\n"):
-                text += "\n"  # keep the file's final newline
-        self._write_item_text(item.file_path, text, eol)
-
     def _update_item_file_with_history(
         self,
         item: WorkItem,
@@ -3801,36 +3792,48 @@ class KanbanService:
 
         self._check_text(title=title, description=description, assignee=assignee, tags=tags)
 
-        # Track what changed for commit message
+        # Field-level edits only, like rank_item (#583): every line the update
+        # doesn't touch - unknown keys, the native status, the history block,
+        # comments - stays byte-for-byte, and so do the file's line endings.
+        content, eol = self._read_item_text(item.file_path)
+        original = content
         changes = []
 
         if title is not None and title != item.title:
+            content = self._add_or_update_frontmatter_field(content, "title", yaml_quote(title))
+            content = self._replace_h1(content, title)
             item.title = title
             changes.append("title")
 
         if priority is not None and priority != item.priority:
+            content = self._add_or_update_frontmatter_field(content, "priority", priority)
             item.priority = priority
             changes.append("priority")
 
         if assignee is not None and assignee != item.assignee:
+            content = self._add_or_update_frontmatter_field(
+                content, "assignee", yaml_scalar(assignee) if assignee else "null"
+            )
             item.assignee = assignee
             changes.append("assignee")
 
-        if description is not None and description != item.description:
-            item.description = description
-            changes.append("description")
+        if description is not None:
+            updated = self._replace_body(content, description)
+            if updated != content:
+                content = updated
+                item.description = description
+                changes.append("description")
 
         if tags is not None and tags != item.tags:
+            content = self._add_or_update_frontmatter_field(content, "tags", yaml_flow_list(tags))
             item.tags = tags
             changes.append("tags")
 
-        if not changes:
-            return item  # Nothing to update
+        if not changes or content == original:
+            return item  # Nothing to update: no write, no commit
 
         item.updated = datetime.now()
-
-        # Update file
-        self._update_item_file(item)
+        self._write_item_text(item.file_path, content, eol)
 
         # Git commit if requested
         if commit:
@@ -3841,6 +3844,51 @@ class KanbanService:
             )
 
         return item
+
+    def _body_start(self, content: str) -> int:
+        """Offset just past the frontmatter's closing `---` line (0 without frontmatter)."""
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
+            return 0
+        eol = content.find("\n", match.end())
+        return len(content) if eol < 0 else eol + 1
+
+    _H1_RE = re.compile(r"^# .*$", re.MULTILINE)
+
+    def _replace_h1(self, content: str, title: str) -> str:
+        """Rewrite only the `# Title` line after the frontmatter (#583)."""
+        match = self._H1_RE.search(content, self._body_start(content))
+        if not match:
+            return content
+        # one line: a newline in the title would end the heading
+        heading = "# " + " ".join(title.splitlines())
+        return content[: match.start()] + heading + content[match.end() :]
+
+    # The description ends at the first knowledge block or the comments section
+    _BODY_END_RE = re.compile(r"^(?:```(?:yurtle|turtle)\b|## Comments\b)", re.MULTILINE)
+
+    def _replace_body(self, content: str, description: str) -> str:
+        """Replace only the body span: after the H1 (or the frontmatter when there is
+        no H1) up to the first ```yurtle fence or `## Comments` (#583).
+
+        Returns `content` unchanged when the span already holds `description`.
+        """
+        start = self._body_start(content)
+        h1 = self._H1_RE.search(content, start)
+        if h1:
+            eol = content.find("\n", h1.end())
+            start = len(content) if eol < 0 else eol + 1
+        tail = self._BODY_END_RE.search(content, start)
+        end = tail.start() if tail else len(content)
+        if content[start:end].strip() == description.strip():
+            return content
+        text = description.strip("\n")
+        span = f"\n{text}\n" if text else ""
+        if tail:
+            span += "\n"  # a blank line before the fence / comments
+        if start == len(content) and content and not content.endswith("\n"):
+            span = "\n" + span  # an H1 without a final newline
+        return content[:start] + span + content[end:]
 
     def rank_item(
         self,
