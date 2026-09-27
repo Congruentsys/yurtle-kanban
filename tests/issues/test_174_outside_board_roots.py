@@ -396,19 +396,3 @@ def test_symlinked_item_file_comment_not_outside(linked_item, caplog):
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         service.add_comment("FEAT-009", "hello there", "tester")
     assert OUTSIDE_NOTE not in caplog.text, caplog.text
-
-
-# 4. `_commit_and_push_file` (HDD parent/link push) on an outside file.
-
-
-@pytest.mark.parametrize("kind", ["absolute", "dotdot"])
-def test_commit_and_push_file_outside_repo(outside_board, caplog, kind):
-    repo, outside = outside_board
-    target = outside / "features" / "FEAT-001-out.md"
-    path = target if kind == "absolute" else repo / ".." / "outside" / target.relative_to(outside)
-    target.write_text(target.read_text() + "\nedit\n")
-    with caplog.at_level(logging.WARNING, logger=LOGGER):
-        ok = _service(repo)._commit_and_push_file(path, "link parent")
-    assert ok is False
-    assert COMMIT_FAILED not in caplog.text, caplog.text
-    assert OUTSIDE_NOTE in caplog.text, f"no '{OUTSIDE_NOTE}' warning:\n{caplog.text}"

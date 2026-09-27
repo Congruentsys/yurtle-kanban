@@ -201,12 +201,11 @@ class TestUpdateRunStatus:
 
 
 class TestUpdateParentTurtleBlock:
-    @pytest.mark.parametrize("push", [False, True], ids=["no-push", "push"])
-    def test_bad_child_id_refused(self, hdd: Path, push: bool) -> None:
+    def test_bad_child_id_refused(self, hdd: Path) -> None:
         svc = _service(hdd)
         _refused(
             hdd,
-            lambda: svc.update_parent_turtle_block("IDEA-R-001", "literature", LONE, push=push),
+            lambda: svc.update_parent_turtle_block("IDEA-R-001", "literature", LONE),
             "child_id",
         )
 

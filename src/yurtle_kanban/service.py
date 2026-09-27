@@ -1844,6 +1844,7 @@ class KanbanService:
         item_id: str | None = None,
         render: Callable[[str], str] | None = None,
         id_prefix: str | None = None,
+        parent: str | None = None,
     ) -> dict[str, Any]:
         """Atomically create a work item, commit, and push to remote.
 
@@ -1868,9 +1869,15 @@ class KanbanService:
                     and the content rendered for it (#590).
             id_prefix: The id prefix to allocate in, when it is not the type's own
                        (IDEA-R, IDEA-F).
+            parent: The id of an HDD parent to link the item from (its turtle
+                    block's inverse reference). With a remote the link is made to
+                    the parent as the fetched base holds it, in the item's own
+                    commit; a parent this board has but the base lacks is refused
+                    (#645).
 
         Returns:
-            dict with 'success', 'item', 'id', 'pushed', and 'message' keys
+            dict with 'success', 'item', 'id', 'pushed', 'parent_linked' and
+            'message' keys
         """
         priority = self._normalize_priority(priority) or "medium"
         prefix = id_prefix or self._get_type_prefix(item_type)
@@ -1899,12 +1906,16 @@ class KanbanService:
                 content=content,
                 item_id=item_id_local,
             )
+            linked = parent is not None and self.update_parent_turtle_block(
+                parent, item_type.value, item.id
+            )
             return {
                 "success": True,
                 "item": item,
                 "id": item.id,
                 "pushed": False,
                 "committed": False,
+                "parent_linked": linked,
                 "message": (
                     f"Created {item.id}; not committed: the board is outside "
                     "the git repository"
@@ -1924,6 +1935,7 @@ class KanbanService:
                 item_id=item_id,
                 render=render,
                 id_prefix=id_prefix,
+                parent=parent,
             )
 
         # No remote: allocate, create and commit locally (no push, no retry needed)
@@ -1950,8 +1962,14 @@ class KanbanService:
                 allocations = []
         lock_file.write_text(self._with_allocation(allocations, current_id))
 
+        paths = [file_path, lock_file]
+        linked = parent is not None and self.update_parent_turtle_block(
+            parent, item_type.value, current_id
+        )
+        if linked and (held := self.get_item(parent)) and not self._outside_repo(held.file_path):
+            paths.append(held.file_path)  # the link in the item's own commit (#645)
         try:
-            self._commit_paths([file_path, lock_file], f"Create {current_id}: {title}")
+            self._commit_paths(paths, f"Create {current_id}: {title}")
         except GitCommitError as e:
             return self._push_failed(str(e))
 
@@ -1962,6 +1980,7 @@ class KanbanService:
             "item": item,
             "id": current_id,
             "pushed": False,
+            "parent_linked": linked,
             "message": f"Created and committed {current_id}: {title} (no remote configured)",
         }
 
@@ -1978,6 +1997,7 @@ class KanbanService:
         item_id: str | None,
         render: Callable[[str], str] | None = None,
         id_prefix: str | None = None,
+        parent: str | None = None,
     ) -> dict[str, Any]:
         """`create --push` with a remote (#585): fetch and push ONE explicit ref, the
         remote's default branch. The commit is built on the freshly fetched
@@ -1989,7 +2009,9 @@ class KanbanService:
         against each fetched base (#590), and `render` (when given) renders the
         item's text for that id, checked like any other text (#641); an explicit
         `item_id` that a fetched base already holds, by the same number in the same
-        id space, is refused, naming the file that holds it (#634, #641)."""
+        id space, is refused, naming the file that holds it (#634, #641). A `parent`'s
+        inverse reference is added to the parent as that base holds it, in the
+        same commit, so a lost race rebuilds it on the new base (#645)."""
         prefix = id_prefix or self._get_type_prefix(item_type)
         made: dict[str, Any] = {}
 
@@ -2014,11 +2036,12 @@ class KanbanService:
                 raise _CasRefusedError(
                     f"{item.file_path} is outside the git repository at {self._git_toplevel()}"
                 )
-            made.update(item=item, id=current_id)
-            return (
-                {item_rel: text, **self._allocation_blob(base, current_id)},
-                f"Create {current_id}: {title}",
+            blobs = {item_rel: text, **self._allocation_blob(base, current_id)}
+            linked = {} if parent is None else self._parent_link_blob(
+                base, parent, item_type.value, current_id
             )
+            made.update(item=item, id=current_id, parent_linked=bool(linked))
+            return {**blobs, **linked}, f"Create {current_id}: {title}"
 
         def landed(branch: str, local: bool) -> dict[str, Any]:
             item, current_id = made["item"], made["id"]
@@ -2033,6 +2056,7 @@ class KanbanService:
                 "pushed": True,
                 "local": local,
                 "branch": branch,
+                "parent_linked": made["parent_linked"],
                 "message": message if local else f"{message}. {pull_note_text(branch)}",
             }
 
@@ -2595,13 +2619,14 @@ class KanbanService:
         parent_id: str,
         child_type: str,
         child_id: str,
-        push: bool = False,
     ) -> bool:
         """Update a parent item's turtle block with an inverse reference to a child.
 
         When a child HDD item is created (hypothesis, experiment, literature),
         this method adds a triple to the parent's turtle block so the parent
-        knows about its children.
+        knows about its children. The file is changed in the working tree only:
+        with `--push` the link rides in the child's own compare-and-swap commit
+        instead (`create_item_and_push(parent=...)`, #645).
 
         Uses rdflib for correct Turtle parsing, triple addition, and
         serialization. Requires yurtle-rdflib to be installed.
@@ -2611,14 +2636,12 @@ class KanbanService:
             child_type: Type of the child item ("hypothesis", "experiment",
                         "literature").
             child_id: ID of the child item (e.g., "H130.1", "EXPR-130").
-            push: Whether to commit and push the parent file update.
 
         Returns:
             True if the parent was updated, False otherwise.
         """
         self._check_text(child_id=child_id)  # before the parent is rewritten (#239)
-        relation = self._INVERSE_RELATIONS.get(child_type)
-        if relation is None:
+        if child_type not in self._INVERSE_RELATIONS:
             logger.debug(f"No inverse relation defined for child type: {child_type}")
             return False
 
@@ -2632,10 +2655,31 @@ class KanbanService:
             return False
 
         content, eol = self._read_item_text(parent.file_path)
+        new_content = self._linked_parent_text(content, parent_id, child_type, child_id)
+        if new_content is None:
+            return False
+        self._write_item_text(parent.file_path, new_content, eol)
+
+        # Re-parse graph for the updated parent, and refresh the cache (#638)
+        parent.graph = self._parse_graph(new_content)
+        self._reread_item(parent)
+        return True
+
+    def _linked_parent_text(
+        self, content: str, parent_id: str, child_type: str, child_id: str
+    ) -> str | None:
+        """A parent's LF text with the inverse reference to `child_id` added to its
+        turtle block, or None when there is nothing to add: no relation for
+        `child_type`, no turtle block, or the link is already there (#645)."""
+        relation = self._INVERSE_RELATIONS.get(child_type)
+        if relation is None:
+            logger.debug(f"No inverse relation defined for child type: {child_type}")
+            return None
+
         match = self._TURTLE_BLOCK_RE.search(content)
         if not match:
             logger.warning(f"No turtle block in {parent_id} — skipping inverse reference")
-            return False
+            return None
 
         # Build rdflib URIs for the predicate and child object
         pred_ns = Namespace(PREFIXES[relation["predicate_ns"]])
@@ -2644,27 +2688,54 @@ class KanbanService:
         child_uri = child_ns[child_id]
 
         # Modify the turtle block using rdflib
-        old_inner = match.group(2)
-        new_inner, changed = self._modify_turtle_block(old_inner, predicate, child_uri)
+        new_inner, changed = self._modify_turtle_block(match.group(2), predicate, child_uri)
         if not changed:
-            return False
+            return None
 
         # Replace the turtle block in the file
         new_block = match.group(1) + new_inner + "\n" + match.group(3)
-        new_content = content[: match.start()] + new_block + content[match.end() :]
-        self._write_item_text(parent.file_path, new_content, eol)
+        return content[: match.start()] + new_block + content[match.end() :]
 
-        # Re-parse graph for the updated parent, and refresh the cache (#638)
-        parent.graph = self._parse_graph(new_content)
-        self._reread_item(parent)
-
-        if push:
-            self._commit_and_push_file(
-                parent.file_path,
-                f"chore(hdd): link {child_id} → {parent_id}",
+    def _parent_link_blob(
+        self, base: str, parent_id: str, child_type: str, child_id: str
+    ) -> dict[Path, str]:
+        """The parent's file as commit `base` holds it, with the inverse reference to
+        `child_id` added, keyed by its repo-relative path; empty when there is
+        nothing to add. A parent this board has but `base` doesn't hold is refused:
+        the link can only ride in the child's commit when the parent is already
+        there (#645). A parent that exists nowhere is skipped, as it is locally."""
+        held = self._holder_at(base, parent_id)
+        if held is None and self.get_item(parent_id) is None:
+            logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
+            return {}
+        if held is None:
+            raise _CasRefusedError(
+                f"{parent_id} is not on origin/{self._default_branch()}, so {child_type} "
+                f"{child_id} can't be linked to it there: push {parent_id} first; "
+                "nothing was created"
             )
-
-        return True
+        # the blob's own bytes: text mode would turn a CRLF file into LF (#128)
+        shown = subprocess.run(
+            ["git", "cat-file", "blob", f"{base}:{held}"],
+            cwd=self.repo_root,
+            capture_output=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        if shown.returncode != 0:
+            raise _CasRefusedError(
+                f"Could not read {held} on the default branch: "
+                f"{shown.stderr.decode('utf-8', 'replace').strip()}; nothing was created"
+            )
+        try:
+            content, eol = LineEndings.read(shown.stdout.decode("utf-8"))
+        except UnicodeDecodeError as e:
+            raise _CasRefusedError(
+                f"{held} on the default branch is not UTF-8 ({e}); nothing was created"
+            ) from None
+        new_content = self._linked_parent_text(content, parent_id, child_type, child_id)
+        return {} if new_content is None else {Path(held): eol.apply(new_content)}
 
     def _modify_turtle_block(
         self,
@@ -2762,38 +2833,6 @@ class KanbanService:
 
         # Replace the old block content with the merged content
         return content[:match.start(2)] + merged_inner + content[match.end(2):]
-
-    def _commit_and_push_file(self, file_path: Path, message: str) -> bool:
-        """Commit a single file change and push to remote.
-
-        Used for follow-up operations (e.g., parent turtle block updates)
-        after the main create-and-push.
-
-        Returns:
-            True if commit (and optional push) succeeded, False if the push failed.
-
-        Raises:
-            GitCommitError: git refused the commit; nothing is pushed (#584).
-        """
-        if self._outside_repo(file_path):
-            return False
-        self._commit_paths([file_path], message)
-
-        if self._has_remote():
-            try:
-                subprocess.run(
-                    ["git", "push"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                    timeout=30,
-                    stdin=subprocess.DEVNULL,
-                )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                logger.warning(f"Git push failed for parent update: {e}")
-                return False
-
-        return True
 
     # ------------------------------------------------------------------
     # Backfill: add turtle blocks to HDD files that lack them

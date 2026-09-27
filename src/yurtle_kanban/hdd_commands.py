@@ -74,28 +74,24 @@ def _print_created_file(result: dict) -> None:
         console.print(pull_note(result))
 
 
-def _update_parent(
-    service,
-    parent_id: str,
-    child_type: str,
-    child_id: str,
-    push: bool,
-) -> None:
-    """Best-effort update of parent's turtle block with inverse reference.
+def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> None:
+    """Best-effort local update of parent's turtle block with inverse reference.
+    (With `--push` the link rides in the child's commit instead: `parent=`, #645.)
 
     Silent on failure — the child creation is the primary operation.
     """
     try:
-        updated = service.update_parent_turtle_block(
-            parent_id, child_type, child_id, push=push,
-        )
-        if updated:
-            console.print(f"  [dim]Updated {safe(parent_id)} with inverse reference[/dim]")
+        if service.update_parent_turtle_block(parent_id, child_type, child_id):
+            _print_parent_linked(parent_id)
     except Exception as e:
         console.print(
             f"  [yellow]Warning: could not update {safe(parent_id)}: "
             f"{safe(e)}[/yellow]"
         )
+
+
+def _print_parent_linked(parent_id: str) -> None:
+    console.print(f"  [dim]Updated {safe(parent_id)} with inverse reference[/dim]")
 
 
 def _commit_or_exit(service, path, message: str) -> bool:
@@ -765,6 +761,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             priority=priority,
             content=content,
             **_push_ids(engine, "literature", variables, item_id, prefix),
+            parent=source_idea,
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -773,8 +770,8 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
                 f"{safe(title)}[/green]"
             )
             _print_created_file(result)
-            if source_idea:
-                _update_parent(service, source_idea, "literature", result["id"], push=True)
+            if result.get("parent_linked"):
+                _print_parent_linked(str(source_idea))
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -788,7 +785,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
         console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
         if source_idea:
-            _update_parent(service, source_idea, "literature", item.id, push=False)
+            _update_parent(service, source_idea, "literature", item.id)
 
 
 # ---------------------------------------------------------------------------
@@ -1020,6 +1017,8 @@ def hypothesis_create(
             priority=priority,
             content=content,
             **_push_ids(engine, "hypothesis", variables, hyp_id, auto_prefix),
+            # No paper -> no parent to back-reference: 'PAPER-None' never exists.
+            parent=None if paper_num is None else f"PAPER-{paper_num}",
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -1028,10 +1027,8 @@ def hypothesis_create(
                 f"{safe(statement)}[/green]"
             )
             _print_created_file(result)
-            # No paper -> no parent to back-reference. Guarding here rather than
-            # inside _update_parent keeps the 'PAPER-None' string from ever existing.
-            if paper_num is not None:
-                _update_parent(service, f"PAPER-{paper_num}", "hypothesis", result["id"], push=True)
+            if result.get("parent_linked"):
+                _print_parent_linked(f"PAPER-{paper_num}")
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1045,7 +1042,7 @@ def hypothesis_create(
         console.print(f"[green]Created {safe(item.id)}: {safe(statement)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
         if paper_num is not None:
-            _update_parent(service, f"PAPER-{paper_num}", "hypothesis", item.id, push=False)
+            _update_parent(service, f"PAPER-{paper_num}", "hypothesis", item.id)
 
 
 # ---------------------------------------------------------------------------
@@ -1154,6 +1151,7 @@ def experiment_create(
             priority=priority,
             content=content,
             **_push_ids(engine, "experiment", variables, expr_id, "EXPR" if auto_id else None),
+            parent=hyp_id or None,  # no hypothesis -> no parent to back-reference
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
@@ -1162,9 +1160,8 @@ def experiment_create(
                 f"{safe(title)}[/green]"
             )
             _print_created_file(result)
-            # No hypothesis -> no parent to back-reference.
-            if hyp_id:
-                _update_parent(service, hyp_id, "experiment", result["id"], push=True)
+            if result.get("parent_linked"):
+                _print_parent_linked(str(hyp_id))
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1178,7 +1175,7 @@ def experiment_create(
         console.print(f"[green]Created {safe(item.id)}: {safe(title)}[/green]")
         console.print(f"  File: {safe(item.file_path)}")
         if hyp_id:
-            _update_parent(service, hyp_id, "experiment", item.id, push=False)
+            _update_parent(service, hyp_id, "experiment", item.id)
 
 
 @experiment.command("run")
