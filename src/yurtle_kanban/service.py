@@ -3654,7 +3654,7 @@ class KanbanService:
         for candidate in re.finditer(r"[ \t]+#", head):
             try:
                 yaml.load(f"k: {head[: candidate.start()]}", Loader=KanbanService._YAML_LOADER)
-            except yaml.YAMLError:
+            except (yaml.YAMLError, TypeError, ValueError):
                 continue
             return head[candidate.start() :]
         return ""
@@ -3667,14 +3667,14 @@ class KanbanService:
         Comment (and blank) lines in the old list are kept as written, anchored to
         the item that follows them: they go right before that item wherever it
         lands, and are dropped with it when it's removed. A kept item keeps its
-        old line. Without comment lines, or when an item spans several lines,
-        every item is written fresh.
+        old line, trailing comment and spelling included. An old item matches by
+        its text, so a `- 2026` or `- yes` YAML reads as a non-string still
+        matches the string `"2026"` or `"yes"` (#639). When an item spans several
+        lines or doesn't parse, every item is written fresh.
         """
         old_lines = rest.split("\n")[1:]  # `rest` starts with the newline
         fresh = "".join(f"\n{dash}{yaml_scalar(v)}" for v in items)
-        if not any(ln.lstrip().startswith("#") for ln in old_lines):
-            return fresh
-        entries: list[tuple[object, str, list[str]]] = []  # (value, line, comments)
+        entries: list[tuple[set[str], str, list[str]]] = []  # (texts, line, comments)
         pending: list[str] = []
         for line in old_lines:
             item = re.match(r"[ \t]*-(?:[ \t]+(.*))?$", line)
@@ -3684,15 +3684,17 @@ class KanbanService:
                 text = cls._strip_line_comment(item.group(1) or "")
                 try:
                     parsed = yaml.load(f"k: {text}", Loader=cls._YAML_LOADER)["k"]
-                except (yaml.YAMLError, TypeError):
+                except (yaml.YAMLError, TypeError, ValueError):
                     return fresh
-                entries.append((parsed, line, pending))
+                # the parsed text (`"a b"` -> `a b`, `2026` -> `2026`) or, for a
+                # non-string, the text as written (`yes`, `null`, #639)
+                entries.append(({str(parsed), text.strip()}, line, pending))
                 pending = []
             else:
                 return fresh  # a multi-line item: no safe anchoring
         out: list[str] = []
         for value in items:
-            hit = next((e for e in entries if e[0] == value), None)
+            hit = next((e for e in entries if value in e[0]), None)
             if hit is None:
                 out.append(f"{dash}{yaml_scalar(value)}")
                 continue
