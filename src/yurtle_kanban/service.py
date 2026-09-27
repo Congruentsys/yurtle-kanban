@@ -4584,7 +4584,10 @@ class KanbanService:
     @staticmethod
     def _id_list(ids: list[Any]) -> list[str]:
         """Item IDs as written and looked up: stripped, upper-cased, blanks and
-        repeats dropped, order kept (#576)."""
+        repeats dropped, order kept (#576). A bare string is refused: it would be
+        written as a list of its characters (#719)."""
+        if isinstance(ids, str):
+            raise ValueError(f"expected a list of item IDs, got the string {ids!r}")
         return list(dict.fromkeys(s for i in ids if (s := str(i).strip().upper())))
 
     @staticmethod

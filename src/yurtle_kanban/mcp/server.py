@@ -401,9 +401,31 @@ class KanbanMCPServer:
             return {"error": unknown_priority_message(priority)}
         return None
 
+    @staticmethod
+    def _check_string_lists(args: dict[str, Any], *keys: str) -> dict[str, Any] | None:
+        """The schema says these are arrays of strings: a string or other type is
+        refused, never split into characters (#719)."""
+        for key in keys:
+            value = args.get(key)
+            if value is not None and not (
+                isinstance(value, list) and all(isinstance(v, str) for v in value)
+            ):
+                return {"error": f"{key} must be an array of strings"}
+        return None
+
+    @staticmethod
+    def _check_booleans(args: dict[str, Any], *keys: str) -> dict[str, Any] | None:
+        """The schema says these are booleans: "false" is not true (#719)."""
+        for key in keys:
+            if key in args and not isinstance(args[key], bool):
+                return {"error": f"{key} must be true or false (a JSON boolean)"}
+        return None
+
     def _create_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Create a new work item."""
         if error := self._check_priority(args.get("priority")):
+            return error
+        if error := self._check_string_lists(args, "tags"):
             return error
         item_type = WorkItemType.from_string(args["item_type"])
 
@@ -520,6 +542,10 @@ class KanbanMCPServer:
         """Update a work item's properties."""
         if error := self._check_priority(args.get("priority")):
             return error
+        if error := self._check_string_lists(args, "tags", "depends_on", "related"):
+            return error
+        if error := self._check_booleans(args, "allow_unknown"):
+            return error
         item_id = args["item_id"].upper()
 
         item = self.service.update_item(
@@ -531,7 +557,7 @@ class KanbanMCPServer:
             tags=args.get("tags"),
             depends_on=args.get("depends_on"),
             related=args.get("related"),
-            allow_unknown=bool(args.get("allow_unknown", False)),
+            allow_unknown=args.get("allow_unknown", False),
         )
 
         return {
@@ -542,6 +568,8 @@ class KanbanMCPServer:
 
     def _next_id(self, args: dict[str, Any]) -> dict[str, Any]:
         """Allocate the next available ID for a prefix."""
+        if error := self._check_booleans(args, "sync_remote"):
+            return error
         prefix = args["prefix"].upper()
         sync_remote = args.get("sync_remote", True)
 
