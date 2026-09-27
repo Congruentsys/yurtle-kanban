@@ -143,6 +143,30 @@ def _scalar_text(value: Any) -> Any:
     return str(value) if isinstance(value, (int, float)) else value
 
 
+def _list_text(value: Any) -> list[Any]:
+    """A frontmatter list field as text entries (#653): a comma-separated string
+    is split, a single scalar is one entry, each entry is read as text
+    (`2026` -> '2026', `yes` -> 'true' as #225 reads it, `2026-01-01` as
+    written), and null entries are dropped."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",")]
+    if isinstance(value, dict):
+        return value  # not a scalar: as it is (#675)
+    if not isinstance(value, list):
+        value = [value]  # `tags: 2026` is one entry (#653)
+    return [_entry_text(v) for v in value if v is not None]
+
+
+def _entry_text(value: Any) -> Any:
+    """One list entry as text: `_scalar_text`, and a YAML date or timestamp as
+    written (`2026-01-01`); a nested list or mapping as it is (#675)."""
+    if isinstance(value, (date, datetime)):
+        return value.isoformat() if isinstance(value, datetime) else str(value)
+    return _scalar_text(value)
+
+
 _MAX_FIELD_NODES = 10_000  # values in one frontmatter field, aliases expanded (#277)
 
 
@@ -748,17 +772,11 @@ class KanbanService:
             # everywhere they're shown (#179, #206). A list stays a list.
             priority = _scalar_text(frontmatter.get("priority"))
             assignee = _scalar_text(frontmatter.get("assignee"))
-            tags = frontmatter.get("tags", [])
-            if isinstance(tags, str):
-                tags = [t.strip() for t in tags.split(",")]
+            tags = _list_text(frontmatter.get("tags", []))
 
-            depends_on = frontmatter.get("depends_on", [])
-            if isinstance(depends_on, str):
-                depends_on = [d.strip() for d in depends_on.split(",")]
+            depends_on = _list_text(frontmatter.get("depends_on", []))
 
-            related = frontmatter.get("related", [])
-            if isinstance(related, str):
-                related = [r.strip() for r in related.split(",")]
+            related = _list_text(frontmatter.get("related", []))
 
             created = None
             if "created" in frontmatter:
@@ -796,9 +814,7 @@ class KanbanService:
                         f"Unknown resolution '{resolution}' in {file_path}. "
                         f"Valid values: {', '.join(sorted(valid_resolutions))}"
                     )
-            superseded_by = frontmatter.get("superseded_by", [])
-            if isinstance(superseded_by, str):
-                superseded_by = [s.strip() for s in superseded_by.split(",")]
+            superseded_by = _list_text(frontmatter.get("superseded_by", []))
 
             compute_requirement = frontmatter.get("compute_requirement")
 
@@ -3743,7 +3759,12 @@ class KanbanService:
                     return fresh
                 # the parsed text (`"a b"` -> `a b`, `2026` -> `2026`) or, for a
                 # non-string, the text as written (`yes`, `null`, #639)
-                keys = {parsed} if isinstance(parsed, str) else {str(parsed), text.strip()}
+                keys = (
+                    {parsed}
+                    if isinstance(parsed, str)
+                    # as written, as Python spells it, and as the reader does (#653)
+                    else {str(parsed), text.strip(), str(_entry_text(parsed))}
+                )
                 entries.append((keys, line, pending))
                 pending = []
             else:
