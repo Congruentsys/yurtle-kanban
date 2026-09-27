@@ -340,3 +340,120 @@ def test_mcp_update_item_is_field_level(fixture_name: str, request: pytest.Fixtu
     new = it.path.read_bytes()
     _assert_preserved(old, new, it.status)
     _assert_only_lines(old, new, "title", "Beta two", "Beta two")
+
+
+# ---------------------------------------------------------------------------
+# round 2 (review of PR #591)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fixture_name", ["nautical", "hdd_draft"])
+def test_mcp_read_modify_write_keeps_one_comments_section(
+    fixture_name: str, request: pytest.FixtureRequest
+) -> None:
+    """An agent reads the item and sends the description it got back unchanged along
+    with a new title: only the title lines change, and `## Comments` isn't copied."""
+    it: Item = request.getfixturevalue(fixture_name)
+    old = it.path.read_bytes()
+    srv = KanbanMCPServer(repo_root=it.root)
+    got = srv._get_item({"item_id": it.id})
+    assert "item" in got, got
+    description = got["item"]["description"]
+    assert description, got
+    result = srv._update_item({"item_id": it.id, "title": "Beta two", "description": description})
+    assert result.get("success") is True, result
+    new = it.path.read_bytes()
+    assert new.count(b"## Comments") == 1, f"## Comments duplicated:\n{new.decode()}"
+    _assert_preserved(old, new, it.status)
+    _assert_only_lines(old, new, "title", "Beta two", "Beta two")
+
+
+@pytest.mark.parametrize("fixture_name", ["nautical", "hdd_draft"])
+def test_service_parsed_description_sent_back_is_a_noop(
+    fixture_name: str, request: pytest.FixtureRequest
+) -> None:
+    it: Item = request.getfixturevalue(fixture_name)
+    old = it.path.read_bytes()
+    svc = _service(it.root)
+    parsed = svc.get_item(it.id)
+    assert parsed is not None and parsed.description
+    svc.update_item(it.id, description=parsed.description, commit=False)
+    new = it.path.read_bytes()
+    assert new == old, f"sending the parsed description back changed the file:\n{new.decode()}"
+
+
+def _custom(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_frontmatter: str) -> Item:
+    """A nautical EXP whose text after the frontmatter is exactly `after_frontmatter`."""
+    it = _build(tmp_path, monkeypatch, "nautical")
+    text = it.path.read_text(encoding="utf-8")
+    fm_close = text.index("\n---\n", 4) + len("\n---\n")
+    it.path.write_text(text[:fm_close] + after_frontmatter, encoding="utf-8")
+    _git(it.root, "commit", "-am", "custom body")
+    return it
+
+
+NO_H1 = "\nBody text.\n\n```bash\n# install\npip install thing\n```\n"
+
+
+def test_title_change_without_h1_is_frontmatter_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Decided: with no `# Title` heading, a title change edits only the frontmatter
+    `title:` line; nothing after the frontmatter changes (a `# install` line inside a
+    fenced code block is code, not a heading)."""
+    it = _custom(tmp_path, monkeypatch, NO_H1)
+    old = it.path.read_bytes()
+    _service(it.root).update_item(it.id, title="Renamed", commit=False)
+    new = it.path.read_bytes()
+    assert b"```bash\n# install\npip install thing\n```\n" in new, (
+        f"fenced code block rewritten:\n{new.decode()}"
+    )
+    assert new.endswith(NO_H1.encode()), f"text after the frontmatter changed:\n{new.decode()}"
+    _assert_only_lines(old, new, "title", "Renamed")
+
+
+FENCED_COMMENTS = "\n# Alpha one\n\nIntro.\n\n```md\n## Comments\nnot real\n```\n\nTail para.\n"
+
+
+def _fences_balanced(data: bytes) -> bool:
+    return sum(1 for line in data.split(b"\n") if line.rstrip(b"\r").startswith(b"```")) % 2 == 0
+
+
+def test_description_skips_comments_heading_inside_a_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `## Comments` line inside a fenced block is not the comments section: the
+    description change replaces the whole body (fence and tail included)."""
+    it = _custom(tmp_path, monkeypatch, FENCED_COMMENTS)
+    old = it.path.read_bytes()
+    _service(it.root).update_item(it.id, description="New desc.", commit=False)
+    new = it.path.read_bytes()
+    h1_end = old.index(b"# Alpha one\n") + len(b"# Alpha one\n")
+    assert new[:h1_end] == old[:h1_end], f"frontmatter/H1 changed:\n{new.decode()}"
+    assert _fences_balanced(new), f"unbalanced fence:\n{new.decode()}"
+    for gone in (b"Intro.", b"not real", b"Tail para.", b"```md"):
+        assert gone not in new, f"{gone!r} left behind:\n{new.decode()}"
+    reparsed = _service(it.root).get_item(it.id)
+    assert reparsed is not None
+    assert reparsed.description == "New desc.", repr(reparsed.description)
+
+
+def test_description_with_fenced_comments_keeps_the_real_comments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same body plus a real `## Comments` section: the body up to the REAL comments
+    heading is replaced and the real comments stay byte-identical."""
+    it = _custom(tmp_path, monkeypatch, FENCED_COMMENTS)
+    _service(it.root).add_comment(it.id, "the real one", "bob", commit=False)
+    _git(it.root, "commit", "-am", "real comment")
+    old = it.path.read_bytes()
+    real = old[old.rindex(b"## Comments") :]
+    assert b"the real one" in real
+    _service(it.root).update_item(it.id, description="New desc.", commit=False)
+    new = it.path.read_bytes()
+    assert new.endswith(real), f"real comments changed:\n{new.decode()}"
+    assert new.count(b"## Comments") == 1, new.decode()
+    assert _fences_balanced(new), f"unbalanced fence:\n{new.decode()}"
+    for gone in (b"Intro.", b"not real", b"Tail para."):
+        assert gone not in new, f"{gone!r} left behind:\n{new.decode()}"
+    assert b"New desc." in new
