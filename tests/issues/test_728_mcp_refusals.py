@@ -41,3 +41,19 @@ def test_null_booleans_mean_omitted(repo: Repo) -> None:
         "kanban_update_item", {"item_id": "EXP-2", "depends_on": ["EXP-3"], "allow_unknown": None}
     )
     assert out.get("success"), out
+
+
+def test_null_arguments_mean_no_arguments(repo: Repo) -> None:
+    out = _mcp(repo).handle_tool_call("kanban_get_board", None)
+    assert "error" not in out, out
+
+
+@pytest.mark.parametrize("args", [[1, 2], "x", 5])
+def test_non_object_arguments_are_refused_clearly(repo: Repo, args) -> None:
+    out = _mcp(repo).handle_tool_call("kanban_get_board", args)
+    assert out.get("error") == "arguments must be an object", out
+
+
+def test_unknown_tool_is_reported_before_arg_types(repo: Repo) -> None:
+    out = _mcp(repo).handle_tool_call("kanban_bogus", {"item_id": 5})
+    assert "Unknown tool" in out.get("error", ""), out
