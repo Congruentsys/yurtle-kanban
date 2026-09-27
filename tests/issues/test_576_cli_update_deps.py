@@ -489,3 +489,20 @@ def test_validate_reports_cross_board_cycle(repo: Repo) -> None:
     out = _flat(result.output)
     assert result.exit_code == 1, result.output
     assert "cycle" in out.lower() and "EXP-1" in out and "H1.1" in out, out
+
+
+def test_validate_reports_duplicate_id_across_boards(repo: Repo) -> None:
+    """Decision 3 on #576: the scan records a cross-board duplicate instead of
+    silently dropping the second item, and `validate` reports it."""
+    dup_a = repo.root / "work" / "expeditions" / "EXP-9-a.md"
+    dup_b = repo.root / "research" / "ideas" / "EXP-9-b.md"
+    dup_b.parent.mkdir(parents=True, exist_ok=True)
+    dup_a.write_text(_item_text("EXP-9", []), encoding="utf-8")
+    dup_b.write_text(
+        _item_text("EXP-9", []).replace("type: expedition", "type: idea"), encoding="utf-8"
+    )
+    repo.commit("duplicate EXP-9")
+    result = invoke(["validate"])
+    out = _flat(result.output)
+    assert result.exit_code == 1, result.output
+    assert "EXP-9" in out and "duplicate" in out.lower(), out
