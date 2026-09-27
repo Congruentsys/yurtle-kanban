@@ -45,14 +45,16 @@ def _push_ids(
     """The id arguments for `create_item_and_push`. `prefix` set means `item_id` was
     auto-allocated from the local scan: the service then allocates it again against
     each fetched base and renders the template for that id, so a rival's id is
-    never reused (#590). An id the user gave (or a paper-scoped one) stays as is."""
+    never reused (#590). A paper-scoped prefix (`H130.`) re-renders `{n}` too (#634).
+    An id the user gave stays as is, and is refused if the base holds it."""
     if prefix is None:
         return {"item_id": item_id}
-    return {
-        "item_id": item_id,
-        "id_prefix": prefix,
-        "render": lambda new_id: _render(engine, "hdd", template, {**variables, "id": new_id}),
-    }
+
+    def render(new_id: str) -> str:
+        scoped = {"n": new_id.removeprefix(prefix)} if prefix.endswith(".") else {}
+        return _render(engine, "hdd", template, {**variables, "id": new_id, **scoped})
+
+    return {"item_id": item_id, "id_prefix": prefix, "render": render}
 
 
 def _get_engine() -> TemplateEngine:
@@ -964,7 +966,8 @@ def hypothesis_create(
         if head.startswith("H") and head[1:].isdigit():
             paper_num = int(head[1:])
 
-    auto_id = hyp_id is None and paper_num is None
+    # an auto id is allocated again on each fetched base, paper-scoped too (#634)
+    auto_prefix = None if hyp_id is not None else "H" if paper_num is None else f"H{paper_num}."
     if hyp_id is None:
         if paper_num is None:
             hyp_id = service.get_next_unparented_hypothesis_id()
@@ -1016,7 +1019,7 @@ def hypothesis_create(
             title=statement,
             priority=priority,
             content=content,
-            **_push_ids(engine, "hypothesis", variables, hyp_id, "H" if auto_id else None),
+            **_push_ids(engine, "hypothesis", variables, hyp_id, auto_prefix),
         )
         if result["success"]:
             pushed = " and pushed" if result.get("pushed") else ""
