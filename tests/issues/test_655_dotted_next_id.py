@@ -137,5 +137,6 @@ def test_dotted_allocation_record_on_origin(world, rival, want_id, want_num) -> 
     except Exception:
         pass
     record = record_for(world, want_id)
+    assert record["id"] == want_id, record
     assert record["prefix"] == "H130.", record
     assert record["number"] == want_num, record

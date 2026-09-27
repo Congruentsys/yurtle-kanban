@@ -62,3 +62,6 @@ def test_title_ending_in_a_period_gets_no_second_one():
     assert ".." not in got
     got_local = _created_and_pushed_message("EXP-001", "main", "Fix the thing.", local=True)
     assert got_local == "Created and pushed EXP-001 to origin/main: Fix the thing."
+    # only a doubled period is dropped: an ellipsis keeps all three dots (#679)
+    wait = _created_and_pushed_message("EXP-001", "main", "Wait...", local=False)
+    assert "Wait... Pushed to origin/main" in wait, wait
