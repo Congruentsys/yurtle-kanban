@@ -1572,7 +1572,15 @@ class KanbanService:
         """Get a work item by ID."""
         if not self._items:
             self.scan()
-        return self._items.get(item_id)
+        return self._lookup(item_id)
+
+    def _lookup(self, item_id: str) -> WorkItem | None:
+        """The cached item for `item_id`: an exact match first, else the one whose
+        ID differs only in case, since `exp-9` and `EXP-9` are one ID (#732, #741)."""
+        item = self._items.get(item_id)
+        if item is None and (folded := self._folded_items.get(item_id.upper())):
+            item = self._items.get(folded.id)
+        return item
 
     def _current_item(self, item_id: str) -> WorkItem | None:
         """A writer's lookup: the item as its file says NOW (#638).
@@ -1585,7 +1593,7 @@ class KanbanService:
         item = self.get_item(item_id)
         if item is None:
             self.scan()
-            return self._items.get(item_id)
+            return self._lookup(item_id)
         return self._reread_item(item)
 
     def _reread_item(self, item: WorkItem) -> WorkItem | None:
@@ -1845,7 +1853,7 @@ class KanbanService:
         item.graph = self._parse_graph(file_content)
 
         # Add to cache
-        self._items[item_id] = item
+        self._index_item(item)  # the folded index too (#741)
 
         # Fire hooks (after successful create)
         self._fire_create_hook(item)
