@@ -103,10 +103,10 @@ The unified graph materializes all frontmatter metadata as RDF triples:
 | `kb:supersededBy` | URI | Supersession link |
 | `kb:description` | Literal | The body text (not comments) |
 | `kb:comment` | blank node | One per comment: `kb:author`, `kb:text`, and `kb:at` (xsd:dateTime; absent for text before the first comment heading) |
-
-Reach comments through their item (`?item kb:comment ?c . ?c kb:text ?t`): a fenced block can write free-floating `kb:author`/`kb:text` nodes of its own, and only the `kb:comment` link is guaranteed to come from the item's comments section.
 | `kb:priorityRank` | xsd:integer | Captain's priority rank |
 | `kb:computeRequirement` | Literal | Compute requirement (e.g., "dgx-training") |
+
+Reach comments through their item (`?item kb:comment ?c . ?c kb:text ?t`): a fenced block can write free-floating `kb:author`/`kb:text` nodes of its own, and only the `kb:comment` link is guaranteed to come from the item's comments section.
 
 Items are typed as `kb:Expedition`, `kb:Chore`, `kb:Voyage`, `kb:Feature`, etc.
 
