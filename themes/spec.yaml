@@ -1,10 +1,9 @@
 # Spec-Driven Development Theme
 # For teams using RFCs, ADRs, and formal specifications
 
-name: Spec-Driven Development
-description: |
-  A theme for specification-driven development workflows.
-  Emphasizes design-first with RFCs, formal specs, and architecture decision records.
+theme:
+  name: spec
+  description: "Specification-driven development: design-first with RFCs, formal specs and ADRs"
 
 # Work item types
 item_types:
@@ -73,9 +72,9 @@ columns:
     order: 6
     description: Cannot proceed due to blocker
 
-# Status mappings (for compatibility)
-status_aliases:
-  backlog: draft
-  ready: proposed
-  in_progress: implementing
-  done: accepted
+# Native status names, native -> canonical, as every theme maps them (#588)
+status_mappings:
+  draft: backlog
+  proposed: ready
+  implementing: in_progress
+  accepted: done
