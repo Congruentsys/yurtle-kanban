@@ -86,17 +86,6 @@ transitions:
   abandoned: [draft]  # Can resurrect abandoned work
 
 # ID format specifications
-# These are used by CLI commands to generate proper IDs
-id_formats:
-  idea_research: "IDEA-R-{N:03d}"
-  idea_feature: "IDEA-F-{N:03d}"
-  literature: "LIT-{N:03d}"
-  paper: "PAPER-{N}"
-  hypothesis: "H{paper}.{n}"
-  hypothesis_draft: "H-DRAFT-{N:03d}"
-  experiment: "EXPR-{paper}"
-  measure: "M-{N:03d}"
-
 # State mappings for compatibility with WorkItemStatus
 status_mappings:
   draft: backlog
