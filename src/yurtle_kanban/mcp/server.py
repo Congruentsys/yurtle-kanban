@@ -520,6 +520,16 @@ class KanbanMCPServer:
         """Update a work item's properties."""
         if error := self._check_priority(args.get("priority")):
             return error
+        # the schema says arrays and a boolean: a string is refused, never split
+        # into characters, and "false" is not true (#719)
+        for key in ("tags", "depends_on", "related"):
+            value = args.get(key)
+            if value is not None and not (
+                isinstance(value, list) and all(isinstance(v, str) for v in value)
+            ):
+                return {"error": f"{key} must be an array of strings"}
+        if not isinstance(args.get("allow_unknown", False), bool):
+            return {"error": "allow_unknown must be true or false (a JSON boolean)"}
         item_id = args["item_id"].upper()
 
         item = self.service.update_item(
@@ -531,7 +541,7 @@ class KanbanMCPServer:
             tags=args.get("tags"),
             depends_on=args.get("depends_on"),
             related=args.get("related"),
-            allow_unknown=bool(args.get("allow_unknown", False)),
+            allow_unknown=args.get("allow_unknown", False),
         )
 
         return {
