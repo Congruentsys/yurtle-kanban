@@ -2619,23 +2619,24 @@ class KanbanService:
 
     @classmethod
     def _number_in_space(cls, item_id: str, prefix: str) -> int:
-        """`item_id`'s number when it is in `prefix`'s id space, judged as
-        `_id_space` judges it, case folded (`idea-r-3` is in `IDEA-R`, not `IDEA`;
-        `H130.2` is in `H130.`, not `H`), else 0 (#752, #765)."""
-        found = cls._id_space(item_id)
-        return found[1] if found is not None and found[0].upper() == prefix.upper() else 0
+        """`item_id`'s number when it is in `prefix`'s id space: the text before
+        its number is exactly the prefix and its separator, case folded
+        (`idea-r-3` is in `IDEA-R`, not `IDEA`; `H130.2` is in `H130.`, not `H`;
+        a dashless `EXP3` is in no dashed space, as #661 has it), else 0 (#752,
+        #765, #776)."""
+        key = cls._id_key(item_id)  # its text is folded (#764)
+        head = (prefix + cls._id_sep(prefix)).upper()
+        return key[1] if key is not None and key[0] == head else 0
 
     @classmethod
     def _max_allocated(cls, allocations: list[dict[str, Any]], prefix: str) -> int:
         """Highest number `allocations` records in `prefix`'s id space, judged by
         each record's id alone (#641): `H130.7` counts in `H130.`, never in the
         dashed `H` space, whatever its `prefix` field says."""
-        max_num = 0
-        for alloc in allocations:
-            found = cls._id_space(str(alloc.get("id", "")))
-            if found is not None and found[0].upper() == prefix.upper():  # (#752)
-                max_num = max(max_num, found[1])
-        return max_num
+        return max(
+            (cls._number_in_space(str(alloc.get("id", "")), prefix) for alloc in allocations),
+            default=0,
+        )  # one id-space rule for every source (#752, #765, #776)
 
     def _fetched_default(self) -> str | None:
         """The already-fetched `refs/remotes/origin/<default>`, when this clone has
