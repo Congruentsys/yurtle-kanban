@@ -151,15 +151,11 @@ class KanbanMCPServer:
                         },
                         "new_status": {
                             "type": "string",
-                            "description": "The new status",
-                            "enum": [
-                                "backlog",
-                                "ready",
-                                "in_progress",
-                                "review",
-                                "done",
-                                "blocked",
-                            ],
+                            "description": (
+                                "The new status: a canonical name (backlog, ready,"
+                                " in_progress, review, done, blocked) or one of the"
+                                " item's theme's own names (hdd `active`)"
+                            ),
                         },
                     },
                     "required": ["item_id", "new_status"],
@@ -408,7 +404,14 @@ class KanbanMCPServer:
     def _move_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Move a work item to a new status."""
         item_id = args["item_id"].upper()
-        new_status = WorkItemStatus.from_string(args["new_status"])
+        target = self.service.get_item(item_id)
+        if target is None:
+            return {"error": f"Item not found: {item_id}"}
+        # the item's own theme's names only, as `move` resolves them (#587, #604)
+        new_status = self.service.resolve_status_name(target, str(args["new_status"]))
+        if new_status is None:
+            valid = ", ".join(sorted(self.service.legal_status_names(target)))
+            return {"error": f"Unknown status: {args['new_status']}. Valid statuses: {valid}"}
 
         item = self.service.move_item(item_id, new_status)
 
