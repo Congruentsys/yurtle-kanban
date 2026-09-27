@@ -295,7 +295,7 @@ def comment_first(
     match = re.search(r"Created (\S+):", created.output)
     assert match, created.output
     item_id = match.group(1)
-    _cli("comment", item_id, EARLY, "--author", "alice")
+    _cli("comment", item_id, "--body", EARLY, "--agent", "alice")
     parsed = _service(root).get_item(item_id)
     assert parsed is not None
     path = parsed.file_path
@@ -356,7 +356,7 @@ def test_comment_before_first_move_search_text(
 
 
 def test_comment_after_the_move_parses_too(comment_first: Item) -> None:
-    _cli("comment", comment_first.id, LATER, "--author", "bob")
+    _cli("comment", comment_first.id, "--body", LATER, "--agent", "bob")
     _cli("move", comment_first.id, "review", "--force")  # a second history entry
     parsed = _service(comment_first.root).get_item(comment_first.id)
     assert parsed is not None
