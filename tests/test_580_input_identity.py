@@ -952,3 +952,20 @@ class TestFlagNormalisation:
 
 def test_conftest_unsets_yurtle_agent():
     assert "YURTLE_AGENT" not in os.environ
+
+
+def test_conftest_gives_a_hermetic_git_identity(tmp_path):
+    """No host identity leaks in, and CI (no identity) still has one (#580)."""
+    _git(tmp_path, "init", "-b", "main")
+    name = subprocess.run(
+        ["git", "config", "user.name"], cwd=tmp_path, capture_output=True, text=True,
+    ).stdout.strip()
+    assert name == "test-git-user"
+
+
+def test_no_global_git_opts_out_of_the_suite_identity(tmp_path, no_global_git):
+    _git(tmp_path, "init", "-b", "main")
+    done = subprocess.run(
+        ["git", "config", "user.name"], cwd=tmp_path, capture_output=True, text=True,
+    )
+    assert done.stdout.strip() == ""
