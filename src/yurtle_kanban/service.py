@@ -1029,6 +1029,22 @@ class KanbanService:
         r"### (.+) \((\d{4}-\d\d-\d\d \d\d:\d\d)\)[ \t]*$", re.MULTILINE
     )
 
+    _KNOWLEDGE_BLOCK_RE = re.compile(r"```(?:yurtle|turtle).*?```", re.DOTALL)
+    # a line add_comment escaped: backslashes then `###`
+    _ESCAPED_HEAD_RE = re.compile(r"\\+###")
+
+    @classmethod
+    def _escape_comment_line(cls, line: str) -> str:
+        """Escape a comment-text line that could read back as a comment heading:
+        a line of backslashes then `###` gets one more backslash in front (#605).
+        The text stays visible; the parser takes the backslash off again."""
+        return "\\" + line if re.match(r"\\*###", line) else line
+
+    @classmethod
+    def _unescape_comment_line(cls, line: str) -> str:
+        """Undo `_escape_comment_line` (#605)."""
+        return line[1:] if cls._ESCAPED_HEAD_RE.match(line) else line
+
     def _parse_comments(self, section: str) -> list[Comment]:
         """The comments in a `## Comments` section, in file order (#605).
 
@@ -1054,7 +1070,10 @@ class KanbanService:
                 when = datetime.strptime(head.group(2), "%Y-%m-%d %H:%M")
             except ValueError:
                 continue  # not a real timestamp: not a comment heading
-            lines = section[text_start:text_end].split("\n")
+            # a knowledge block (the kb:statusChange history a later `move`
+            # appends) is never comment text
+            text = self._KNOWLEDGE_BLOCK_RE.sub("", section[text_start:text_end])
+            lines = [self._unescape_comment_line(ln) for ln in text.split("\n")]
             while lines and not lines[0].strip():
                 lines.pop(0)
             while lines and not lines[-1].strip():
@@ -1071,7 +1090,7 @@ class KanbanService:
         content, _ = self._split_comments(content)
 
         # Remove yurtle and turtle knowledge blocks
-        content = re.sub(r"```(?:yurtle|turtle).*?```", "", content, flags=re.DOTALL)
+        content = self._KNOWLEDGE_BLOCK_RE.sub("", content)
 
         # Remove the heading (title): only a `# ` H1 on the first non-blank line,
         # so a `# ` line in a code block or a leading `## Background` is kept (#583)
@@ -3693,7 +3712,10 @@ class KanbanService:
 
         # Add comment
         timestamp = comment.created_at.strftime("%Y-%m-%d %H:%M")
-        content += f"\n### {comment.author} ({timestamp})\n\n{comment.content}\n"
+        # a heading-shaped line in the text is escaped, so it can't read back as
+        # a second comment; the parser unescapes it (#605)
+        text = "\n".join(self._escape_comment_line(ln) for ln in comment.content.split("\n"))
+        content += f"\n### {comment.author} ({timestamp})\n\n{text}\n"
 
         self._write_item_text(item.file_path, content, eol)
 
@@ -3905,6 +3927,14 @@ class KanbanService:
             raise ValueError(f"Item not found: {item_id}")
 
         self._check_text(title=title, description=description, assignee=assignee, tags=tags)
+        if description is not None and self._find_line_outside_fences(
+            description, 0, self._COMMENTS_RE
+        ) >= 0:
+            # it would become the item's comments section (#605)
+            raise ValueError(
+                "A description can't contain a `## Comments` line outside a code block: "
+                "that heading starts the comments section. Use add_comment for comments."
+            )
 
         # Field-level edits only, like rank_item (#583): every line the update
         # doesn't touch - unknown keys, the native status, the history block,
