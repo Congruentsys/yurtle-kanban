@@ -41,3 +41,24 @@ def test_update_keeps_nested_lines(repo: Path) -> None:
 def test_mapping_valued_field_stays_a_mapping(repo: Path) -> None:
     _write(repo, BASE + "depends_on:\n  a: [x]\n")
     assert _service(repo).get_item(ITEM_ID).depends_on == {"a": ["x"]}
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "tags:\n  -\n    - a\n    - b\n  - plain\n",  # a bare dash opening a nested list
+        "tags:\n  - plain\n  -\n    - a\n    - b\n",
+        "tags:\n  - k: v\n    j: w\n  - plain\n",  # a block mapping entry
+    ],
+    ids=["bare-dash-first", "bare-dash-last", "block-mapping"],
+)
+def test_update_after_block_nested_entry_keeps_the_item(repo: Path, block: str) -> None:
+    """A nested entry written in block style spans several lines: the list is
+    written fresh, as valid YAML, and the item stays readable (#675 review)."""
+    path = _write(repo, BASE + block)
+    svc = _service(repo)
+    item = svc.get_item(ITEM_ID)
+    svc.update_item(ITEM_ID, tags=item.tags + ["x"])
+    reread = _service(repo).get_item(ITEM_ID)
+    assert reread is not None, path.read_text()
+    assert reread.tags == item.tags + ["x"], path.read_text()
