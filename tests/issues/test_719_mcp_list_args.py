@@ -48,3 +48,26 @@ def test_service_refuses_a_bare_string_list(repo: Repo) -> None:
     svc = KanbanService(KanbanConfig.load(repo.root / ".kanban" / "config.yaml"), repo.root)
     with pytest.raises(ValueError):
         svc.update_item("EXP-2", depends_on="EXP-3", allow_unknown=True)
+
+
+@pytest.mark.parametrize("value", ["ui", 5, ["a", 5]])
+def test_mcp_create_refuses_non_list_tags(repo: Repo, value) -> None:
+    before = repo.snapshot()
+    out = _mcp(repo).handle_tool_call(
+        "kanban_create_item", {"item_type": "expedition", "title": "T", "tags": value}
+    )
+    assert "error" in out and "tags" in out["error"], out
+    assert repo.snapshot() == before
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1])
+def test_mcp_next_id_refuses_non_boolean_sync_remote(repo: Repo, value) -> None:
+    head = repo.head()
+    out = _mcp(repo).handle_tool_call("kanban_next_id", {"prefix": "EXP", "sync_remote": value})
+    assert "error" in out and "sync_remote" in out["error"], out
+    assert repo.head() == head
+
+
+def test_mcp_update_via_dispatcher_refuses_string(repo: Repo) -> None:
+    out = _mcp(repo).handle_tool_call("kanban_update_item", {"item_id": "EXP-2", "tags": "ui"})
+    assert "error" in out and "tags" in out["error"], out
