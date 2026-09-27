@@ -53,6 +53,12 @@ from .workflow import WorkflowConfig, WorkflowParser
 
 logger = get_logger("yurtle-kanban")  # escapes control characters (#215)
 
+
+class GitCommitError(ValueError):
+    """Git refused a kanban commit (#584), e.g. a pre-commit hook said no. The
+    message carries git's (or the hook's) own output. A ValueError, so every CLI
+    command's existing error path reports it and exits non-zero."""
+
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
 _HYP = Namespace(PREFIXES["hyp"])
 _PAPER_NS = Namespace(PREFIXES["paper"])
@@ -1754,27 +1760,9 @@ class KanbanService:
         lock_file.write_text(self._with_allocation(allocations, item_type, current_id))
 
         try:
-            subprocess.run(
-                ["git", "add", str(file_path), str(lock_file)],
-                cwd=self.repo_root,
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", f"Create {current_id}: {title}"],
-                cwd=self.repo_root,
-                capture_output=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Git commit failed: {e}")
-            return {
-                "success": False,
-                "item": None,
-                "id": None,
-                "pushed": False,
-                "message": f"Git commit failed: {e}",
-            }
+            self._commit_paths([file_path, lock_file], f"Create {current_id}: {title}")
+        except GitCommitError as e:
+            return self._push_failed(str(e))
 
         self._items[current_id] = item
         self._fire_create_hook(item)
@@ -1912,6 +1900,16 @@ class KanbanService:
                     )]
                 tree = self._git_run("write-tree", env=env)
                 steps.append(tree)
+                # commit-tree runs no hooks: run pre-commit against this index (#584)
+                if all(s.returncode == 0 for s in steps):
+                    hook = self._git_run(
+                        "hook", "run", "--ignore-missing", "pre-commit", env=env, timeout=None
+                    )
+                    if hook.returncode != 0:
+                        return failed(
+                            f"Git commit failed: the pre-commit hook refused it: "
+                            f"{self._git_output(hook)} (nothing was created)"
+                        )
                 commit = self._git_run(
                     "commit-tree", tree.stdout.strip(), "-p", base,
                     "-m", f"Create {current_id}: {title}",
@@ -1967,12 +1965,17 @@ class KanbanService:
         )
 
     def _git_run(
-        self, *args: str, env: dict[str, str] | None = None, input: str | None = None
+        self,
+        *args: str,
+        env: dict[str, str] | None = None,
+        input: str | None = None,
+        timeout: float | None = 30,
     ) -> subprocess.CompletedProcess[str]:
         """Run one git command in the repo root, capturing text output. Never
         interactive (#585): stdin is closed (unless `input` feeds it) and git may not
         prompt for credentials, so a remote that wants a password fails instead of
-        hanging on the terminal."""
+        hanging on the terminal. Commands that run the user's hooks pass
+        `timeout=None`: a hook may legitimately take longer (#584)."""
         extra: dict[str, Any] = {"input": input} if input is not None else {
             "stdin": subprocess.DEVNULL
         }
@@ -1981,7 +1984,7 @@ class KanbanService:
             cwd=self.repo_root,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
             env={**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0"},
             **extra,
         )
@@ -2447,26 +2450,14 @@ class KanbanService:
         after the main create-and-push.
 
         Returns:
-            True if commit (and optional push) succeeded, False otherwise.
+            True if commit (and optional push) succeeded, False if the push failed.
+
+        Raises:
+            GitCommitError: git refused the commit; nothing is pushed (#584).
         """
         if self._outside_repo(file_path):
             return False
-        try:
-            subprocess.run(
-                ["git", "add", str(file_path)],
-                cwd=self.repo_root,
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=self.repo_root,
-                capture_output=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Git commit failed for parent update: {e}")
-            return False
+        self._commit_paths([file_path], message)
 
         if self._has_remote():
             try:
@@ -2775,18 +2766,7 @@ class KanbanService:
         # Step 5: Commit the allocation
         if commit_allocation:
             try:
-                subprocess.run(
-                    ["git", "add", str(lock_file)],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                )
-                subprocess.run(
-                    ["git", "commit", "-m", f"Allocate ID: {item_id}"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                )
+                self._commit_paths([lock_file], f"Allocate ID: {item_id}")
                 # Push to remote to claim the ID
                 if sync_remote:
                     push_result = subprocess.run(
@@ -2801,8 +2781,9 @@ class KanbanService:
                         # Pull and retry
                         logger.warning(f"Push failed, will retry: {push_result.stderr}")
                         return self._retry_allocation(prefix)
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"Git commit failed: {e}")
+            except GitCommitError as e:
+                # a refused commit is an error, and nothing is pushed (#584)
+                return {"success": False, "id": None, "prefix": prefix, "message": str(e)}
 
         return {
             "success": True,
@@ -3531,24 +3512,35 @@ class KanbanService:
         )
 
     def _git_commit(self, file_path: Path, message: str) -> None:
-        """Commit changes to git."""
+        """Commit one item file; raises GitCommitError if git refuses (#584)."""
         if self._outside_repo(file_path):
             return
-        try:
-            subprocess.run(
-                ["git", "add", str(file_path)],
-                cwd=self.repo_root,
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=self.repo_root,
-                capture_output=True,
-                check=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Git commit failed: {e}")
+        self._commit_paths([file_path], message)
+
+    def _commit_paths(self, paths: list[Path], message: str) -> None:
+        """Commit exactly `paths`, with the user's hooks (#584).
+
+        `git commit --only` commits just these paths: whatever else the user has
+        staged stays staged and out of the commit, and unstaged work is untouched.
+        No change to commit is not an error. A refusal (a pre-commit hook saying no)
+        raises GitCommitError carrying git's output; the edit stays in the working
+        tree for the user to commit once the hook is satisfied.
+        """
+        rels = [str(p) for p in paths]
+        add = self._git_run("add", "--", *rels)
+        if add.returncode != 0:
+            raise GitCommitError(f"Git commit failed ({message}): {self._git_output(add)}")
+        if self._git_run("diff", "--cached", "--quiet", "HEAD", "--", *rels).returncode == 0:
+            return  # nothing of ours changed
+        done = self._git_run("commit", "--only", "-m", message, "--", *rels, timeout=None)
+        if done.returncode != 0:
+            raise GitCommitError(f"Git commit failed ({message}): {self._git_output(done)}")
+
+    @staticmethod
+    def _git_output(done: subprocess.CompletedProcess[str]) -> str:
+        """What a failed git command (or the hook it ran) said, stderr and stdout."""
+        said = [t.strip() for t in (done.stderr, done.stdout) if t and t.strip()]
+        return "\n".join(said) or f"git exited {done.returncode}"
 
     def add_comment(
         self,
