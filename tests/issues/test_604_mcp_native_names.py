@@ -269,11 +269,12 @@ def test_mcp_move_canonical_names_still_accepted(repo: Path, buf: io.StringIO) -
         assert _mcp_ok(repo, item_id, name)["item"]["status"] == name
 
 
-# theme, another theme's name, names the error must offer
+# theme, another theme's name, names the error must offer (the theme's own
+# spelling; a renamed status's canonical name isn't listed since #643)
 MCP_REFUSE = [
-    ("nautical", "active", ["underway", "in_progress", "stranded"]),
-    ("nautical", "on-hold", ["harbor", "backlog"]),
-    ("hdd", "underway", ["active", "in_progress", "abandoned"]),
+    ("nautical", "active", ["underway", "stranded"]),
+    ("nautical", "on-hold", ["harbor", "provisioning"]),
+    ("hdd", "underway", ["active", "abandoned"]),
     ("hdd", "implementing", ["draft", "complete"]),
     ("software", "stranded", list(CANONICAL)),
     ("spec", "active", ["implementing", "accepted"]),
