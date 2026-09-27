@@ -1853,8 +1853,12 @@ class KanbanService:
 
     @staticmethod
     def _push_failed(message: str) -> dict[str, Any]:
-        """The result of a `create --push` that created nothing."""
-        return {"success": False, "item": None, "id": None, "pushed": False, "message": message}
+        """The result of a `create --push` that created nothing. Git's multi-line
+        stderr is folded onto one line, so no caller prints a literal `\\n` (#603)."""
+        return {
+            "success": False, "item": None, "id": None, "pushed": False,
+            "message": " ".join(message.split()),
+        }
 
     def _default_branch(self) -> str:
         """The remote's default branch: `origin/HEAD` when set locally, else what the
@@ -1891,6 +1895,7 @@ class KanbanService:
         lock_rel = self._repo_relative(lock_file, top)
 
         attempts = max(1, max_retries)
+        last_err = ""
         for attempt in range(attempts):
             fetch = self._git_run(
                 "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
@@ -1958,7 +1963,7 @@ class KanbanService:
 
             push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
             if push.returncode != 0:
-                err = push.stderr.strip()
+                err = last_err = push.stderr.strip()
                 if "[rejected]" not in err or not (
                     "fetch first" in err or "non-fast-forward" in err
                 ):
@@ -1971,10 +1976,16 @@ class KanbanService:
                 )
                 continue
 
-            head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
-            local = head == branch and (
-                self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
-            )
+            # The item has landed: from here on nothing may turn this into a failure
+            # (#603) — a checkout that can't be fast-forwarded just isn't updated
+            try:
+                head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
+                local = head.stdout.strip() == branch and (
+                    self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
+                )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.warning(f"Pushed {current_id}, but the local checkout was not updated: {e}")
+                local = False
             if local:
                 self._items[current_id] = item
             self._fire_create_hook(item)
@@ -1997,7 +2008,7 @@ class KanbanService:
         return failed(
             f"Failed to create item: the push to origin/{branch} was rejected "
             f"{attempts} time(s) (lost the race to another writer each attempt); "
-            "nothing was left behind — retry"
+            f"nothing was left behind — retry. Last rejection: {last_err}"
         )
 
     def _git_run(

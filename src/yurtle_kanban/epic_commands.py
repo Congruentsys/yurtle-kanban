@@ -228,7 +228,15 @@ def _do_create(title: str, priority: str, items: str | None, push: bool):
         f"Created {type_label} [bold green]{escape(item.id)}[/bold green]: "
         f"{escape(title)}"
     )
-    console.print(f"  File: {escape(str(item.file_path))}")
+    if push and not result.get("local", True):
+        # landed on the remote's default branch, not in this checkout (#603)
+        branch = result.get("branch") or "main"
+        console.print(
+            f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
+            f"pull {safe(branch)} to see it[/yellow]"
+        )
+    else:
+        console.print(f"  File: {escape(str(item.file_path))}")
 
     # Link items if provided
     if items:
