@@ -13,8 +13,10 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
+import random
 import re
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import replace
@@ -30,6 +32,7 @@ from ._logging import get_logger
 from .config import KanbanConfig, _fold_status_name, _status_names, _under
 from .hooks import HookContext, HookEngine, HookEvent
 from .inputs import resolve_actor
+from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
 
 if TYPE_CHECKING:
     from .config import BoardConfig
@@ -2252,8 +2255,6 @@ class KanbanService:
     ) -> dict[str, Any]:
         """The fetch / build / push loop of `_cas_on_default_branch`; `known` says
         whether `branch` may be recorded as origin/HEAD (#698)."""
-        import tempfile
-
         failed = self._push_failed
         attempts = max(1, max_retries)
         last_err = ""
@@ -2270,42 +2271,9 @@ class KanbanService:
             self.scan()
             blobs, message = build(base)
 
-            # Build the commit on `base` without touching the worktree or the index
-            with tempfile.TemporaryDirectory() as tmp:
-                env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
-                steps = [self._git_run("read-tree", base, env=env)]
-                for n, (rel, body) in enumerate(blobs.items()):
-                    # from a file, not stdin: git never reads stdin (#580);
-                    # --no-filters hashes the bytes exactly as --stdin did
-                    body_path = Path(tmp) / f"blob-{n}"
-                    body_path.write_bytes(body.encode("utf-8"))
-                    blob = self._git_run(
-                        "hash-object", "-w", "--no-filters", "--", str(body_path)
-                    )
-                    steps += [blob, self._git_run(
-                        "update-index", "--add", "--cacheinfo",
-                        f"100644,{blob.stdout.strip()},{rel.as_posix()}", env=env,
-                    )]
-                tree = self._git_run("write-tree", env=env)
-                steps.append(tree)
-                # commit-tree runs no hooks: run pre-commit against this index (#584)
-                if all(s.returncode == 0 for s in steps):
-                    hook = self._git_run(
-                        "hook", "run", "--ignore-missing", "pre-commit", env=env, timeout=None
-                    )
-                    if hook.returncode != 0:
-                        return failed(
-                            f"Git commit failed: the pre-commit hook refused it: "
-                            f"{self._git_output(hook)} (nothing was created)"
-                        )
-                commit = self._git_run(
-                    "commit-tree", tree.stdout.strip(), "-p", base, "-m", message
-                )
-                steps.append(commit)
-            bad = next((s for s in steps if s.returncode != 0), None)
-            if bad is not None:
-                return failed(f"Git commit failed: {bad.stderr.strip()}")
-            sha = commit.stdout.strip()
+            sha, error = self._commit_on(base, blobs, message)
+            if sha is None:
+                return failed(error or "Git commit failed")
 
             push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
             if push.returncode != 0:
@@ -2322,17 +2290,8 @@ class KanbanService:
                 )
                 continue
 
-            # It has landed: from here on nothing may turn this into a failure
-            # (#603) — a checkout that can't be fast-forwarded just isn't updated
-            try:
-                head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
-                local = head.stdout.strip() == branch and (
-                    self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
-                )
-            except (subprocess.TimeoutExpired, OSError) as e:
-                logger.warning(f"Pushed {sha[:12]}, but the local checkout was not updated: {e}")
-                local = False
-            return landed(branch, local)
+            # It has landed: from here on nothing may turn this into a failure (#603)
+            return landed(branch, self._fast_forward_to(branch, sha))
 
         # Best effort: leave origin/<default> showing the commits that beat us
         with suppress(subprocess.TimeoutExpired, OSError):
@@ -2341,6 +2300,263 @@ class KanbanService:
             f"Failed to create the {what}: the push to origin/{branch} was rejected "
             f"{attempts} time(s) (lost the race to another writer each attempt); "
             f"nothing was left behind — retry. Last rejection: {last_err}"
+        )
+
+    def _commit_on(
+        self, base: str, blobs: dict[Path, str], message: str
+    ) -> tuple[str | None, str | None]:
+        """Build one commit on `base` writing `blobs` (repo-relative path -> text,
+        its bytes exactly), without touching the worktree, the index or any ref
+        (#585, #574): a temporary index, the user's pre-commit hook run against it
+        (#584), then `commit-tree -p base`. Returns (sha, None), or (None, why)."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            steps = [self._git_run("read-tree", base, env=env)]
+            for n, (rel, body) in enumerate(blobs.items()):
+                # from a file, not stdin: git never reads stdin (#580);
+                # --no-filters hashes the bytes exactly as --stdin did
+                body_path = Path(tmp) / f"blob-{n}"
+                body_path.write_bytes(body.encode("utf-8"))
+                blob = self._git_run(
+                    "hash-object", "-w", "--no-filters", "--", str(body_path)
+                )
+                steps += [blob, self._git_run(
+                    "update-index", "--add", "--cacheinfo",
+                    f"100644,{blob.stdout.strip()},{rel.as_posix()}", env=env,
+                )]
+            tree = self._git_run("write-tree", env=env)
+            steps.append(tree)
+            # commit-tree runs no hooks: run pre-commit against this index (#584)
+            if all(s.returncode == 0 for s in steps):
+                hook = self._git_run(
+                    "hook", "run", "--ignore-missing", "pre-commit", env=env, timeout=None
+                )
+                if hook.returncode != 0:
+                    return None, (
+                        f"Git commit failed: the pre-commit hook refused it: "
+                        f"{self._git_output(hook)} (nothing was created)"
+                    )
+            commit = self._git_run(
+                "commit-tree", tree.stdout.strip(), "-p", base, "-m", message
+            )
+            steps.append(commit)
+        bad = next((s for s in steps if s.returncode != 0), None)
+        if bad is not None:
+            return None, f"Git commit failed: {bad.stderr.strip()}"
+        return commit.stdout.strip(), None
+
+    def _fast_forward_to(self, branch: str, sha: str) -> bool:
+        """After a push of `sha` to origin/`branch` has landed: fast-forward the
+        checkout when it is on `branch`. Never fails (#603): a checkout that can't
+        be fast-forwarded just isn't updated, and False says so."""
+        try:
+            head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
+            return head.stdout.strip() == branch and (
+                self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning(f"Pushed {sha[:12]}, but the local checkout was not updated: {e}")
+            return False
+
+    def sync_and_push(
+        self,
+        mutate: Mutate,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+        attempts: int = 5,
+    ) -> Outcome:
+        """The one kanban push (#574): a compare-and-swap of one commit onto
+        origin's default branch that never touches the worktree, index or branch.
+
+        Each attempt fetches `origin/<default>` and calls `mutate(read, attempt)`,
+        where `read(path)` is that base's LF text (None when absent). A `Change` is
+        committed on the base in a temporary index (`_commit_on`), `seam(attempt)`
+        runs, and the commit is pushed. A non-fast-forward rejection sleeps
+        `jitter(0.1, 1.0) * (attempt + 1)` and retries on a fresh base; after
+        `attempts` it is "busy". A `Refuse` with a holder after such a rejection is
+        "lost". Any other refusal is "push_refused" and a remote that can't be
+        reached "unreachable", neither retried. With no `origin`, or a board outside
+        the repository, the change is made and committed here only ("local")."""
+        if not self._has_remote() or self._board_outside_repo():
+            return self._sync_locally(mutate)
+        branch = "main"
+        rejected = False
+        attempts = max(1, attempts)
+        try:
+            branch, known = self._resolve_default()
+            for attempt in range(attempts):
+                fetch = self._fetch_default(branch, record=known)
+                if fetch.returncode != 0:
+                    said = " ".join(self._git_output(fetch).split())
+                    return Outcome(
+                        "unreachable",
+                        f"Could not fetch origin/{branch}: {said}; nothing was changed",
+                        attempts=attempt + 1,
+                    )
+                base = self._git_run(
+                    "rev-parse", f"refs/remotes/origin/{branch}"
+                ).stdout.strip()
+                eols: dict[str, LineEndings] = {}
+                result = mutate(self._reader_at(base, eols), attempt)
+                if not isinstance(result, Change):
+                    return self._not_changed(result, rejected, attempt + 1)
+                blobs = {
+                    Path(rel): eols[rel].apply(text) if rel in eols else text
+                    for rel, text in result.files.items()
+                }
+                sha, error = self._commit_on(base, blobs, result.message)
+                if sha is None:
+                    return Outcome("refused", error or "Git commit failed", attempts=attempt + 1)
+                if seam is not None:
+                    seam(attempt)
+                push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
+                if push.returncode == 0:
+                    return self._won(branch, sha, result, attempt + 1)
+                err = self._git_output(push)
+                if "[rejected]" in err and ("fetch first" in err or "non-fast-forward" in err):
+                    rejected = True
+                    logger.warning(
+                        f"Push to origin/{branch} rejected (attempt {attempt + 1}): {err}"
+                    )
+                    if attempt + 1 < attempts:
+                        sleep(jitter(0.1, 1.0) * (attempt + 1))
+                    continue
+                if any(
+                    mark in err
+                    for mark in ("[remote rejected]", "[rejected]", "hook declined",
+                                 "protected", "denied")
+                ):
+                    return Outcome(
+                        "push_refused",
+                        f"The remote refused the push to origin/{branch}: "
+                        f"{' '.join(err.split())}; nothing was changed",
+                        attempts=attempt + 1,
+                    )
+                return Outcome(
+                    "unreachable",
+                    f"Could not push to origin/{branch}: {' '.join(err.split())}; "
+                    "nothing was changed",
+                    attempts=attempt + 1,
+                )
+        except subprocess.TimeoutExpired as e:
+            if "push" in [str(a) for a in (e.cmd or [])]:
+                return Outcome(
+                    "unreachable",
+                    f"Timed out pushing to origin/{branch}: the push may have landed. "
+                    f"Fetch origin/{branch} and check before trying again",
+                )
+            return Outcome(
+                "unreachable",
+                f"Timed out talking to origin ({' '.join(map(str, e.cmd or []))}); "
+                "nothing was changed",
+            )
+        except OSError as e:
+            return Outcome(
+                "unreachable", f"Could not run git for origin/{branch}: {e}; nothing was changed"
+            )
+        with suppress(subprocess.TimeoutExpired, OSError):
+            self._fetch_default(branch, record=known)  # show what beat us
+        return Outcome(
+            "busy",
+            f"origin/{branch} is busy: the push was rejected {attempts} time(s), other "
+            "commits landing each time; nothing was changed — retry",
+            attempts=attempts,
+        )
+
+    def _reader_at(self, base: str, eols: dict[str, LineEndings]) -> Read:
+        """`read(path)` for `mutate`: the file as commit `base` holds it, as LF text,
+        or None when it doesn't; its line endings go into `eols`, so the write keeps
+        them (#128, #574)."""
+
+        def read(rel: str) -> str | None:
+            # the blob's own bytes: text mode would turn a CRLF file into LF (#128)
+            shown = subprocess.run(
+                ["git", "cat-file", "blob", f"{base}:{Path(rel).as_posix()}"],
+                cwd=self.repo_root,
+                capture_output=True,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+            if shown.returncode != 0:
+                return None
+            text, eols[rel] = LineEndings.read(shown.stdout.decode("utf-8"))
+            return text
+
+        return read
+
+    @staticmethod
+    def _not_changed(result: NoOp | Refuse, rejected: bool, attempts: int) -> Outcome:
+        """The outcome of a `NoOp` or `Refuse` from `mutate` (#574): a refusal with a
+        holder after a rejected push lost the race to that holder."""
+        if isinstance(result, NoOp):
+            return Outcome("noop", result.message, attempts=attempts)
+        if rejected and result.holder:
+            return Outcome(
+                "lost", f"Lost to {result.holder}: {result.message}", attempts=attempts
+            )
+        return Outcome("refused", result.message, attempts=attempts)
+
+    def _won(self, branch: str, sha: str, change: Change, attempts: int) -> Outcome:
+        """The outcome of a push that landed; nothing here may turn it into a
+        failure (#603)."""
+        message = f"{change.message}: pushed to origin/{branch}"
+        if not self._fast_forward_to(branch, sha):
+            message += (
+                f". Your checkout does not show this yet: pull {branch}, and start "
+                f"feature branches from origin/{branch}"
+            )
+        return Outcome("won", message, sha=sha, attempts=attempts, data=change.data)
+
+    def _board_outside_repo(self) -> bool:
+        """True when a board root lies outside the git repository, so its files
+        can't be pushed (#174, #574)."""
+        if self.config.is_multi_board:
+            roots = [_under(self.repo_root, b.path) for b in self.config.boards]
+        else:
+            roots = list(self._placement_dirs())
+        return any(self._outside_git(r) for r in roots)
+
+    def _sync_locally(self, mutate: Mutate) -> Outcome:
+        """`sync_and_push` with no remote (#574): `read` is the working tree, and a
+        `Change` is written, keeping line endings, and committed alone (#584)."""
+        top = self._git_toplevel()
+        eols: dict[str, LineEndings] = {}
+
+        def read(rel: str) -> str | None:
+            path = top / rel
+            if not path.is_file():
+                return None
+            text, eols[rel] = self._read_item_text(path)
+            return text
+
+        result = mutate(read, 0)
+        if not isinstance(result, Change):
+            return self._not_changed(result, False, 1)
+        paths = []
+        for rel, text in result.files.items():
+            path = top / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._write_item_text(path, text, eols.get(rel, "\n"))
+            paths.append(path)
+        if self._outside_repo(*paths):
+            return Outcome(
+                "local",
+                f"{result.message}: written, not committed: outside the git repository",
+                attempts=1, data=result.data,
+            )
+        try:
+            made = self._commit_paths(paths, result.message)
+        except GitCommitError as e:
+            return Outcome("refused", str(e), attempts=1)
+        sha = self._git_run("rev-parse", "HEAD").stdout.strip() if made else None
+        return Outcome(
+            "local", f"{result.message}: no remote: committed here, local only",
+            sha=sha, attempts=1, data=result.data,
         )
 
     def _next_id_at(self, base: str, prefix: str) -> str:
