@@ -15,7 +15,7 @@ from __future__ import annotations
 import click
 from rich.console import Console
 
-from ._click import Group, safe
+from ._click import Group, pull_note, safe
 from .models import PRIORITIES, WorkItemType
 from .template_engine import TemplateEngine
 from .turtle_builder import InvalidTurtleName
@@ -53,11 +53,7 @@ def _print_created_file(result: dict) -> None:
     if result.get("local", True):
         console.print(f"  File: {safe(result['item'].file_path)}")
     else:
-        branch = result.get("branch") or "main"
-        console.print(
-            f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
-            f"pull {safe(branch)} to see it[/yellow]"
-        )
+        console.print(pull_note(result))
 
 
 def _update_parent(

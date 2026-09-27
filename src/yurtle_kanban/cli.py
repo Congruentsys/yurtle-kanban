@@ -28,7 +28,7 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
-from ._click import Group, safe
+from ._click import Group, pull_note, safe
 from .board import (
     render_board,
     render_history,
@@ -558,7 +558,7 @@ def create(
                     console.print(f"  File: {escape(str(item.file_path))}")
                     console.print("[dim]  (committed and pushed to remote)[/dim]")
                 else:
-                    console.print(_not_local_note(result))
+                    console.print(pull_note(result))
             else:
                 console.print(
                     f"[green]Created {escape(str(result['id']))}: "
@@ -586,16 +586,6 @@ def create(
         )
         console.print(f"[green]Created {escape(item.id)}: {escape(item.title)}[/green]")
         console.print(f"  File: {escape(str(item.file_path))}")
-
-
-def _not_local_note(result: dict) -> str:
-    """The line for an item `create --push` landed on the remote's default branch but
-    not in this checkout (a feature branch, detached HEAD, diverged main) (#585)."""
-    branch = result.get("branch") or "main"
-    return (
-        f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
-        f"pull {safe(branch)} to see it[/yellow]"
-    )
 
 
 @main.command()
