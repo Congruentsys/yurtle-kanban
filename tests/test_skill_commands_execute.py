@@ -390,7 +390,12 @@ def _verdict(line):
         # short flags are checked, not skipped
         ("yurtle-kanban move EXP-1 done -f", None),
         ("yurtle-kanban move EXP-1 done -z", "`-z` is not accepted by `yurtle-kanban move`"),
-        ("yurtle-kanban move EXP-1 done -m 'msg' -a Mini", None),
+        ("yurtle-kanban move EXP-1 done -m 'msg' --assign Mini", None),
+        # #580: `-a` is removed everywhere
+        (
+            "yurtle-kanban move EXP-1 done -m 'msg' -a Mini",
+            "`-a` is not accepted by `yurtle-kanban move`",
+        ),
         # an env-var prefix is still a command
         ("KANBAN_ROOT=/tmp/b yurtle-kanban list --status done", None),
         (

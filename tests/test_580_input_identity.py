@@ -825,16 +825,28 @@ def _git_calls(tree: ast.AST) -> list[ast.Call]:
 
 class TestGitStdinDevnull:
     def test_every_git_subprocess_in_src_passes_stdin_devnull(self):
+        """Literal `subprocess.<fn>(["git", ...])` sites must pass DEVNULL; calls
+        through the service's `_git_run` runner (#585) count as git calls too —
+        the runner itself is one of the literal sites, so it is checked above."""
         offenders = []
-        total = 0
+        literal = runner = 0
         for path in sorted((SRC / "yurtle_kanban").rglob("*.py")):
             tree = ast.parse(path.read_text(), filename=str(path))
             for call in _git_calls(tree):
-                total += 1
+                literal += 1
                 stdin = next((k.value for k in call.keywords if k.arg == "stdin"), None)
                 if stdin is None or not ast.unparse(stdin).endswith("DEVNULL"):
                     offenders.append(f"{path.relative_to(SRC)}:{call.lineno}")
-        assert total >= 20, f"found only {total} git calls — is the scan broken?"
+            runner += sum(
+                1 for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_git_run"
+            )
+        assert literal >= 5, f"found only {literal} literal git calls — is the scan broken?"
+        assert literal + runner >= 20, (
+            f"found only {literal} literal + {runner} _git_run calls — is the scan broken?"
+        )
         assert offenders == [], f"git calls without stdin=subprocess.DEVNULL: {offenders}"
 
     def test_no_subprocess_imported_by_another_name(self):
@@ -903,7 +915,7 @@ class TestFlagNormalisation:
         old = next(a for a in args if a in {"-a", "-d", "--assignee", "--description",
                                             "--author"})
         out = _flat(_usage_error(args).output)
-        assert re.search(rf"No such option:? {re.escape(old)}(?![\w-])", out), out
+        assert re.search(rf"No such option:? ['\"]?{re.escape(old)}(?![\w-])", out), out
 
     def test_next_agent_is_accepted(self):
         _ok(["next", "--agent", "Mini"])

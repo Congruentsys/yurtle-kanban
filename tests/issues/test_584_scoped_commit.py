@@ -178,7 +178,7 @@ def hdd(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
 # Commands that commit, per repo kind. Values: (argv, paths the commit may touch).
 SW_CMDS: dict[str, tuple[list[str], str]] = {
     "move": (["move", "FEAT-001", "in_progress", "--force"], "work/"),
-    "comment": (["comment", "FEAT-001", "hello 584"], "work/"),
+    "comment": (["comment", "FEAT-001", "--body", "hello 584"], "work/"),
     "rank": (["rank", "FEAT-001", "3"], "work/"),
     "create-push": (["create", "feature", "New thing", "--push"], "work/"),
     "next-id": (["next-id", "FEAT"], LOCK),

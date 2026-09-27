@@ -60,7 +60,7 @@ def lots(many: Path, runner: CliRunner) -> Path:
     """The #371 `many` repo plus 17 experiments: 24 experiments + 1 hypothesis = 25."""
     for k in range(N_EXPERIMENTS - 7):
         result = runner.invoke(
-            main, ["create", "experiment", f"Bulk experiment {k:02d}", "--assignee", "Mini"]
+            main, ["create", "experiment", f"Bulk experiment {k:02d}", "--assign", "Mini"]
         )
         assert result.exit_code == 0, result.output
     return many

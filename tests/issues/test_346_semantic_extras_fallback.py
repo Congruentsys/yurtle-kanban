@@ -81,10 +81,10 @@ def repo(
     result = runner.invoke(main, ["init", "--theme", "hdd"])
     assert result.exit_code == 0, result.output
     for args in (
-        ["create", "experiment", "Brain latency study", "--assignee", "Mini"],
-        ["create", "experiment", "Memory recall probe", "--assignee", "Mini"],
-        ["create", "experiment", "Someone else's run", "--assignee", "DGX"],
-        ["create", "hypothesis", "Latency drops with caching", "--assignee", "Mini"],
+        ["create", "experiment", "Brain latency study", "--assign", "Mini"],
+        ["create", "experiment", "Memory recall probe", "--assign", "Mini"],
+        ["create", "experiment", "Someone else's run", "--assign", "DGX"],
+        ["create", "hypothesis", "Latency drops with caching", "--assign", "Mini"],
     ):
         result = runner.invoke(main, args)
         assert result.exit_code == 0, result.output

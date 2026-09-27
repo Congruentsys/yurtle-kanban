@@ -166,7 +166,7 @@ def _check_file(path: Path, op: str) -> None:
 OPS = ["move", "comment", "rank"]
 CLI_ARGS = {
     "move": ["move", "FEAT-001", "ready", "--force", "--skip-gates"],
-    "comment": ["comment", "FEAT-001", "hello there"],
+    "comment": ["comment", "FEAT-001", "--body", "hello there"],
     "rank": ["rank", "FEAT-001", "3"],
 }
 

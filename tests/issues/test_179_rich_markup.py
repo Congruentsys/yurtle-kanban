@@ -170,7 +170,7 @@ def test_move_item_with_markup_title(repo: Path, runner: CliRunner, title: str) 
 @pytest.mark.parametrize("text", MARKUP_TITLES)
 def test_comment_shown_literally(repo: Path, runner: CliRunner, text: str) -> None:
     _, item_id = _create(runner, "Plain title")
-    result = runner.invoke(main, ["comment", item_id, text])
+    result = runner.invoke(main, ["comment", item_id, "--body", text])
     _assert_ok(result)
     shown = runner.invoke(main, ["show", item_id])
     _assert_ok(shown)
@@ -195,7 +195,7 @@ def test_rank_summary_literally(repo: Path, runner: CliRunner, summary: str) -> 
     [
         ["show", BAD_ID],
         ["move", BAD_ID, "done"],
-        ["comment", BAD_ID, "hi"],
+        ["comment", BAD_ID, "--body", "hi"],
         ["rank", BAD_ID, "1"],
     ],
     ids=["show", "move", "comment", "rank"],
