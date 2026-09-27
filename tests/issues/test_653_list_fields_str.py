@@ -6,12 +6,13 @@
 `TypeError` in `yaml_flow_list`.
 
 Decided ([steer] on #653): the model's list fields are `list[str]`, so the
-frontmatter reader coerces each scalar entry with `str()` (`2026` -> "2026",
-`yes` -> "True", `1.5` -> "1.5") and drops `null` entries. This applies to every
+frontmatter reader reads each scalar entry as text by #225's `_scalar_text`
+(`2026` -> "2026", `yes` -> "true", `1.5` -> "1.5") and drops `null`
+entries (amended [steer]). This applies to every
 list field `_parse_file` builds from the frontmatter: `tags`, `depends_on`,
 `related` and `superseded_by` (`blocks` isn't read from the frontmatter; it lands
 in `metadata`). The round trip then works, and #639's matcher keeps each kept
-item's original line (`- 2026 # year`), since `str(parsed)` is one of its keys.
+item's original line (`- yes # flag`): it matches the `_scalar_text` spelling too.
 
 Fixtures are #596's; the edit helper follows #639's.
 """
@@ -36,7 +37,7 @@ from yurtle_kanban.mcp.server import KanbanMCPServer
 
 TAIL = "assignee: null\n"
 LIST_FIELDS = ["tags", "depends_on", "related", "superseded_by"]
-EXPECTED = ["2026", "True", "1.5", "a"]
+EXPECTED = ["2026", "true", "1.5", "a"]
 
 BLOCK_NO_COMMENTS = "tags:\n  - 2026\n  - yes\n  - 1.5\n  - null\n  - a\n"
 
@@ -91,7 +92,7 @@ def test_update_item_round_trips_nonstring_tags(repo: Path) -> None:
     new = path.read_text(encoding="utf-8")
     assert new == old.replace(COMMENTED, COMMENTED + "  - x\n"), new
     again = _service(repo).get_item(ITEM_ID)
-    assert again is not None and again.tags == ["a", "2026", "True", "1.5", "x"], (
+    assert again is not None and again.tags == ["a", "2026", "true", "1.5", "x"], (
         again and again.tags
     )
 
@@ -108,7 +109,7 @@ def test_update_item_round_trips_with_null_tag(repo: Path) -> None:
     for line in ("  - a # s\n", "  - 2026 # year\n", "  - yes # flag\n", "  - 1.5 # v\n",
                  "  - x\n"):
         assert line in new, f"missing {line!r}:\n{new}"
-    assert '"2026"' not in new and '"True"' not in new, new
+    assert '"2026"' not in new and '"true"' not in new, new
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +129,7 @@ def test_list_field_read_as_str(repo: Path, field: str, layout: object) -> None:
 @pytest.mark.parametrize("field", LIST_FIELDS)
 def test_list_field_short_flow_read_as_str(repo: Path, field: str) -> None:
     item = _get(repo, f"{field}: [2026, yes]\n")
-    assert getattr(item, field) == ["2026", "True"], getattr(item, field)
+    assert getattr(item, field) == ["2026", "true"], getattr(item, field)
 
 
 @pytest.mark.parametrize("field", LIST_FIELDS)
