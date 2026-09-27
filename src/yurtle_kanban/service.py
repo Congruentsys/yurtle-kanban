@@ -3905,10 +3905,19 @@ class KanbanService:
         old line, trailing comment and spelling included. An old item matches by
         its text, so a `- 2026` or `- yes` YAML reads as a non-string still
         matches the string `"2026"` or `"yes"` (#639). When an item spans several
-        lines or doesn't parse, every item is written fresh.
+        lines or doesn't parse, every item is written fresh, keeping the comment
+        lines before the first item; comments between or inside items are dropped,
+        having nothing safe to anchor to (#695).
         """
         old_lines = rest.split("\n")[1:]  # `rest` starts with the newline
-        fresh = "".join(f"\n{dash}{yaml_scalar(v)}" for v in items)
+        lead: list[str] = []
+        for line in old_lines:
+            if line.strip() and not line.lstrip().startswith("#"):
+                break
+            lead.append(line)
+        fresh = "".join(f"\n{line}" for line in lead) + "".join(
+            f"\n{dash}{yaml_scalar(v)}" for v in items
+        )
         entries: list[tuple[set[str], str, list[str]]] = []  # (texts, line, comments)
         pending: list[str] = []
         indent: int | None = None
@@ -3994,9 +4003,18 @@ class KanbanService:
             if items:
                 # a block list (`key:` then `- item` lines) stays a block list
                 head = m.group("head")[: len(m.group("head")) - len(comment)].strip()
-                dash = re.search(r"^([ \t]*-[ \t]+)\S", m.group("rest"), re.MULTILINE)
+                # the dash of the value's FIRST item line (a bare `-` included), with
+                # its own spacing, so a fresh write keeps the key's indent; only when
+                # that first non-blank, non-comment line is an item (#695)
+                first = next(
+                    (ln for ln in m.group("rest").split("\n")
+                     if ln.strip() and not ln.lstrip().startswith("#")),
+                    "",
+                )
+                dash = re.match(r"([ \t]*-)(?:([ \t]+)(?=\S)|[ \t]*$)", first)
                 if not head and dash:
-                    lines = self._block_list_lines(m.group("rest"), dash.group(1), items)
+                    spaced = dash.group(1) + (dash.group(2) or " ")
+                    lines = self._block_list_lines(m.group("rest"), spaced, items)
                     return f"{m.group('key')}:{comment}{lines}"
             return f"{m.group('key')}: {value}{comment}"
 
