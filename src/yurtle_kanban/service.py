@@ -1815,7 +1815,7 @@ class KanbanService:
         item_id_local = item_id
         if render is not None:
             # rendered for the id the local scan picks; with a remote, again per base
-            item_id_local = item_id or f"{prefix}-{self._get_next_id_number(prefix):03d}"
+            item_id_local = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
             content = render(item_id_local)
             item_id = None
         self._check_text(
@@ -1866,7 +1866,7 @@ class KanbanService:
         # No remote: allocate, create and commit locally (no push, no retry needed)
         self._items.clear()
         self.scan()
-        current_id = item_id or f"{prefix}-{self._get_next_id_number(prefix):03d}"
+        current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
         if render is not None and current_id != item_id_local:
             content = render(current_id)
         item, text = self._new_item(
@@ -1923,11 +1923,17 @@ class KanbanService:
         push has landed, and HEAD is on the default branch, is the checkout
         fast-forwarded to it. Unless `item_id` is explicit, the id is allocated
         against each fetched base (#590), and `render` (when given) renders the
-        item's text for that id."""
+        item's text for that id; an explicit `item_id` that a fetched base already
+        holds is refused, naming the file that holds it (#634)."""
         prefix = id_prefix or self._get_type_prefix(item_type)
         made: dict[str, Any] = {}
 
         def build(base: str) -> tuple[dict[Path, str], str]:
+            if item_id is not None and (rival := self._holder_at(base, item_id)):
+                raise _CasRefusedError(
+                    f"{item_id} is already taken on the default branch by {rival}; "
+                    "nothing was created"
+                )
             current_id = item_id or self._next_id_at(base, prefix)
             text_in = render(current_id) if render is not None else content
             item, text = self._new_item(
@@ -2120,10 +2126,58 @@ class KanbanService:
         )
 
     def _next_id_at(self, base: str, prefix: str) -> str:
-        """The next `prefix-NNN` id: past the scanned board and past what commit
-        `base` holds (#590)."""
+        """The next id in `prefix`'s space: past the scanned board and past what
+        commit `base` holds (#590, #634)."""
         num = max(self._get_next_id_number(prefix), self._next_id_number_at(base, prefix))
-        return f"{prefix}-{num:03d}"
+        return self._format_id(prefix, num)
+
+    @staticmethod
+    def _id_sep(prefix: str) -> str:
+        """What follows `prefix` in its ids: nothing for a paper-scoped `H130.`
+        (`H130.2`), else a dash (`EXP-007`) (#634)."""
+        return "" if prefix.endswith(".") else "-"
+
+    @classmethod
+    def _format_id(cls, prefix: str, num: int) -> str:
+        """Id number `num` in `prefix`'s space: `H130.2`, or `EXP-007` (#634)."""
+        return f"{prefix}-{num:03d}" if cls._id_sep(prefix) else f"{prefix}{num}"
+
+    def _holder_at(self, rev: str, item_id: str) -> str | None:
+        """The file under the work paths at commit `rev` that holds `item_id`, by
+        its filename or its frontmatter `id:`, or None (#634)."""
+        names, ids = self._ids_at(rev)
+        for name in names:
+            stem = Path(name).stem
+            if stem == item_id or stem.startswith(item_id + "-"):
+                return name
+        return next((path for path, found in ids if found == item_id), None)
+
+    def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
+        """The `.md` files under the work paths at commit `rev`, and each
+        frontmatter `id:` there as (path, id) (#590, #634)."""
+        top = self._git_toplevel()
+        rels = [
+            rel.as_posix()
+            for p in self.config.get_work_paths()
+            if (rel := self._repo_relative(_under(self.repo_root, p), top)) is not None
+        ]
+        if not rels:
+            return [], []
+        listed = self._git_run("ls-tree", "-r", "--name-only", "--full-tree", rev, "--", *rels)
+        names = [name for name in listed.stdout.splitlines() if name.endswith(".md")]
+        # frontmatter ids too: `notes.md` may say `id: EXP-007` (#590)
+        specs = [
+            f":(top,glob){'' if rel in ('', '.') else rel.rstrip('/') + '/'}**/*.md"
+            for rel in rels
+        ]
+        grep = self._git_run("grep", "-z", "-I", "-E", "^id:[[:space:]]", rev, "--", *specs)
+        ids = []
+        for line in grep.stdout.splitlines():
+            where, _, text = line.partition("\0")
+            found = re.match(r"id:\s*[\"']?([^\"'\s]+)", text)
+            if found:
+                ids.append((where.removeprefix(f"{rev}:"), found.group(1)))
+        return names, ids
 
     def _allocation_blob(self, base: str, prefix: str, current_id: str) -> dict[Path, str]:
         """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
@@ -2174,32 +2228,20 @@ class KanbanService:
         import json
 
         top = self._git_toplevel()
-        rels = [
-            rel.as_posix()
-            for p in self.config.get_work_paths()
-            if (rel := self._repo_relative(_under(self.repo_root, p), top)) is not None
-        ]
+        head = prefix + self._id_sep(prefix)
+        names, ids = self._ids_at(rev)
         max_num = 0
-        if rels:
-            listed = self._git_run("ls-tree", "-r", "--name-only", "--full-tree", rev, "--", *rels)
-            for name in listed.stdout.splitlines():
-                stem = Path(name).stem
-                if name.endswith(".md") and stem.startswith(prefix + "-"):
-                    match = re.match(r"(\d+)", stem[len(prefix) + 1:])
-                    if match:
-                        max_num = max(max_num, int(match.group(1)))
-            # frontmatter ids too: `notes.md` may say `id: EXP-007` (#590)
-            specs = [
-                f":(top,glob){'' if rel in ('', '.') else rel.rstrip('/') + '/'}**/*.md"
-                for rel in rels
-            ]
-            grep = self._git_run("grep", "-h", "-I", "-E", "^id:[[:space:]]", rev, "--", *specs)
-            for line in grep.stdout.splitlines():
-                found = re.match(r"id:\s*[\"']?([^\"'\s]+)", line)
-                if found and found.group(1).startswith(prefix + "-"):
-                    match = re.search(r"(\d+)$", found.group(1))
-                    if match:
-                        max_num = max(max_num, int(match.group(1)))
+        for name in names:
+            stem = Path(name).stem
+            if stem.startswith(head):
+                match = re.match(r"(\d+)", stem[len(head):])
+                if match:
+                    max_num = max(max_num, int(match.group(1)))
+        for _, found in ids:
+            if found.startswith(head):
+                match = re.search(r"(\d+)$", found)
+                if match:
+                    max_num = max(max_num, int(match.group(1)))
         lock_rel = self._repo_relative(self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top)
         if lock_rel is not None:
             shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}")
@@ -2293,8 +2335,8 @@ class KanbanService:
         }
         return prefixes.get(item_type, "ITEM")
 
-    @staticmethod
-    def _max_allocated(allocations: list[dict[str, Any]], prefix: str) -> int:
+    @classmethod
+    def _max_allocated(cls, allocations: list[dict[str, Any]], prefix: str) -> int:
         """Highest number `allocations` records in the `prefix-` id space."""
         max_num = 0
         for alloc in allocations:
@@ -2313,7 +2355,7 @@ class KanbanService:
             # can then only ever SKIP an id, never mint a duplicate.
             alloc_id = alloc.get("id")
             if alloc_id is not None and not str(alloc_id).startswith(
-                prefix + "-"
+                prefix + cls._id_sep(prefix)
             ):
                 continue
             max_num = max(max_num, alloc.get("number", 0))
@@ -2347,8 +2389,9 @@ class KanbanService:
         # Source 2: Check IDs from parsed items
         # Use regex to extract trailing number — handles multi-segment prefixes
         # like IDEA-R-003 where split("-")[1] would give "R" not "003"
+        head = prefix + self._id_sep(prefix)  # `H130.` has no dash (#634)
         for existing_id in self._items.keys():
-            if existing_id.startswith(prefix + "-"):
+            if existing_id.startswith(head):
                 match = re.search(r"(\d+)$", existing_id)
                 if match:
                     max_num = max(max_num, int(match.group(1)))
@@ -2359,9 +2402,9 @@ class KanbanService:
             if full_path.exists():
                 for md_file in full_path.rglob("*.md"):
                     filename = md_file.stem  # e.g., "EXP-608-Some-Title"
-                    if filename.startswith(prefix + "-"):
+                    if filename.startswith(head):
                         # Extract the number immediately after the prefix
-                        suffix = filename[len(prefix) + 1:]  # e.g., "608-Some-Title"
+                        suffix = filename[len(head):]  # e.g., "608-Some-Title"
                         match = re.match(r"(\d+)", suffix)
                         if match:
                             max_num = max(max_num, int(match.group(1)))
