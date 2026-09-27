@@ -21,7 +21,13 @@ from .. import __version__
 from .._logging import get_logger
 from ..config import KanbanConfig
 from ..inputs import resolve_actor
-from ..models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
+from ..models import (
+    PRIORITIES,
+    WorkItemStatus,
+    WorkItemType,
+    check_encodable,
+    unknown_priority_message,
+)
 from ..service import KanbanService
 
 logger = get_logger("yurtle-kanban-mcp")  # escapes control characters (#215)
@@ -575,8 +581,10 @@ class KanbanMCPServer:
         comment = args["comment"]
         # the same resolver as the CLI's --agent: no "agent" default (#580)
         author = resolve_actor(args.get("author"), cwd=self.repo_root)
-        # the text is checked before the rescan: a refusal scans nothing (#740, #755)
-        self.service._check_text(comment=comment, author=author)
+        # the text is checked before the rescan: a refusal scans nothing (#740, #755),
+        # with the public check the CLI uses (#767)
+        check_encodable("comment", comment)
+        check_encodable("author", author)
         self.service.scan()  # see duplicates as the files are now (#732, #742)
 
         item = self.service.add_comment(item_id, comment, author)
