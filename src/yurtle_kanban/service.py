@@ -421,6 +421,8 @@ class KanbanService:
         self.repo_root = Path(repo_root).absolute()
         # status-name lookups memoised per board until the next scan (#448, #454)
         self._status_names_cache: dict[str | None, Any] = {}
+        # board themes memoised per board within a scan scope (#665)
+        self._board_theme_cache: dict[str, dict | None] = {}
         self._scanning = False
         if getattr(config, "repo_root", None) is None:
             # a config with no repo_root (built directly, or from load for a missing
@@ -461,6 +463,14 @@ class KanbanService:
         from .config import _load_builtin_theme
 
         return _load_builtin_theme(board_config.preset, self.repo_root)
+
+    def _scan_board_theme(self, board: BoardConfig) -> dict | None:
+        """`board`'s theme, loaded once per board within a scan scope (#665)."""
+        if not self._scanning:
+            return self._load_board_theme(board)
+        if board.name not in self._board_theme_cache:
+            self._board_theme_cache[board.name] = self._load_board_theme(board)
+        return self._board_theme_cache[board.name]
 
     def _get_reverse_status_mapping(
         self, board_config: BoardConfig | None,
@@ -575,6 +585,7 @@ class KanbanService:
         outer = self._scanning
         if not outer:
             self._status_names_cache.clear()  # themes may have changed
+            self._board_theme_cache.clear()
         self._scanning = True
         try:
             yield
@@ -1136,7 +1147,8 @@ class KanbanService:
         self, type_str: str, file_path: Path | None = None
     ) -> WorkItemType | None:
         """Map theme-specific type to standard type, through the theme of the board
-        `file_path` is on (#652); the configured theme when that board is unknown."""
+        `file_path` is on (#652); with no board, the single board's theme, or every
+        board's, first wins, on multi-board (#665)."""
         # First try direct enum match (handles HDD types that are in the enum)
         try:
             return WorkItemType.from_string(type_str)
@@ -1146,9 +1158,14 @@ class KanbanService:
         board = None
         if self.config.is_multi_board and file_path is not None:
             board = self.config.get_board_for_path(file_path, self.repo_root)
-        theme = self._load_board_theme(board) if board else self.config.get_theme()
-        if theme and "item_types" in theme:
-            for type_id, type_def in theme["item_types"].items():
+        if board is not None:
+            themes = [self._scan_board_theme(board)]
+        elif self.config.is_multi_board:
+            themes = [self._scan_board_theme(b) for b in self.config.boards]
+        else:
+            themes = [self.config.get_theme()]
+        for theme in themes:
+            for type_id in (theme or {}).get("item_types") or {}:
                 if type_id == type_str.lower():
                     # Map common nautical types
                     mapping = {
@@ -1199,9 +1216,9 @@ class KanbanService:
         if key in cache:
             return cache[key]
         if board is not None:
-            themes = [self._load_board_theme(board)]
+            themes = [self._scan_board_theme(board)]
         elif self.config.is_multi_board:
-            themes = [self._load_board_theme(b) for b in self.config.boards]
+            themes = [self._scan_board_theme(b) for b in self.config.boards]
         else:
             themes = [self._single_board_theme()]
         names: dict[str, WorkItemStatus] = {}
@@ -1601,32 +1618,12 @@ class KanbanService:
         # Priority 1: Theme-defined path, kept where the board scans it (#102),
         # else its own folder under the board root (#113)
         if self.config.is_multi_board:
-            # Multi-board: the named board; else the default_board first, then the
-            # others in config order, taking the first whose theme defines the type (#114)
-            if board_name:
-                boards = [self.config.get_board(board_name)]
-            else:
-                default = self.config.get_default_board()
-                boards = ([default] if default else []) + [
-                    b for b in self.config.boards if b is not default
-                ]
-            for board in boards:
-                if board is None:
-                    continue
-                theme = board.get_theme(self.repo_root)
-                if theme and "item_types" in theme:
-                    type_def = theme["item_types"].get(item_type.value, {})
-                    if "path" in type_def:
-                        return self._scanned_type_dir(
-                            type_def["path"], [board.get_path()], board.path,
-                        )
-            # A type no board's theme defines goes to the named board, else the
-            # default_board (where unrouted work goes, #144), else the first board
-            board_root = (
-                (self.config.get_board(board_name) if board_name else None)
-                or (None if board_name else self.config.get_default_board())
-                or (self.config.boards[0] if self.config.boards else None)
-            )
+            board_root = self._landing_board(item_type, board_name)
+            type_def = self._board_type_def(board_root, item_type)
+            if board_root is not None and "path" in type_def:
+                return self._scanned_type_dir(
+                    type_def["path"], [board_root.get_path()], board_root.path,
+                )
             root = board_root.path if board_root else "work/"
         else:
             # inside a scan, the scan's memoised theme; otherwise the current one, so
@@ -1653,6 +1650,35 @@ class KanbanService:
 
         # Priority 4: the type's own named folder under the board root (#113)
         return _under(self.repo_root, root) / plural
+
+    def _landing_board(
+        self, item_type: WorkItemType, board_name: str | None = None
+    ) -> BoardConfig | None:
+        """Multi-board: the board a new item of `item_type` lands on. The named board;
+        else the default_board first, then the others in config order, taking the
+        first whose theme gives the type a path (#114); a type no board's theme gives
+        a path goes to the named board, else the default_board (where unrouted work
+        goes, #144), else the first board."""
+        if board_name:
+            boards = [self.config.get_board(board_name)]
+        else:
+            default = self.config.get_default_board()
+            boards = ([default] if default else []) + [
+                b for b in self.config.boards if b is not default
+            ]
+        for board in boards:
+            if board is not None and "path" in self._board_type_def(board, item_type):
+                return board
+        return (
+            (self.config.get_board(board_name) if board_name else None)
+            or (None if board_name else self.config.get_default_board())
+            or (self.config.boards[0] if self.config.boards else None)
+        )
+
+    def _board_type_def(self, board: BoardConfig | None, item_type: WorkItemType) -> dict:
+        """`board`'s theme's definition of `item_type` ({} when it has none)."""
+        theme = board.get_theme(self.repo_root) if board is not None else None
+        return ((theme or {}).get("item_types") or {}).get(item_type.value) or {}
 
     def _board_root(self) -> str:
         """The folder a single board's type folders live under (#113).
@@ -2405,8 +2431,13 @@ class KanbanService:
         return json.dumps(allocations[-100:], indent=2)
 
     def _get_type_prefix(self, item_type: WorkItemType) -> str:
-        """Get ID prefix for item type."""
-        theme = self.config.get_theme()
+        """Get ID prefix for item type: from the theme of the board a new item lands
+        on in multi-board mode (#665), else the configured theme."""
+        if self.config.is_multi_board:
+            board = self._landing_board(item_type)
+            theme = board.get_theme(self.repo_root) if board is not None else None
+        else:
+            theme = self.config.get_theme()
         if theme and "item_types" in theme:
             for type_id, type_def in theme["item_types"].items():
                 if type_id == item_type.value:
