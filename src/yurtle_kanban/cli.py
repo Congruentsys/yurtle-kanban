@@ -676,7 +676,7 @@ def move(
         if assign:
             console.print(f"  Assigned to: {escape(assign)}")
     except ValueError as e:
-        console.print(f"[red]Error: {safe(e)}[/red]")
+        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
         sys.exit(1)
 
     # Export board if requested
@@ -1059,7 +1059,7 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
             console.print(f"  Priority: {escape(str(item.priority))}")
         console.print(f"  Status: {safe(service.status_label(item))}")
     except ValueError as e:
-        console.print(f"[red]{safe(e)}[/red]")
+        console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
         sys.exit(1)
 
 
@@ -1156,7 +1156,7 @@ def comment(item_id: str, comment: str, author: str):
         item = service.add_comment(item_id.upper(), comment, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:
-        console.print(f"[red]Error: {safe(e)}[/red]")
+        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
         sys.exit(1)
 
 
@@ -1344,7 +1344,9 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             if not no_sync:
                 console.print("[dim]  (committed and pushed to remote)[/dim]")
         else:
-            console.print(f"[red]Failed to allocate ID: {safe(result['message'])}[/red]")
+            console.print(
+                f"[red]Failed to allocate ID: {safe(result['message'])}[/red]", soft_wrap=True
+            )
             sys.exit(1)
 
 

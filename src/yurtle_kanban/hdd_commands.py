@@ -84,6 +84,17 @@ def _update_parent(
         )
 
 
+def _commit_or_exit(service, path, message: str) -> None:
+    """Commit just `path`; a refused commit is an error: nothing is pushed (#584)."""
+    import sys
+
+    try:
+        service._commit_paths([path], message)
+    except ValueError as e:  # GitCommitError
+        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # hdd (top-level group for cross-type operations)
 # ---------------------------------------------------------------------------
@@ -272,19 +283,8 @@ def hdd_registry(output_path: str | None, push: bool):
     if push and service._outside_repo(out):
         push = False  # outside the repo: nothing to commit; it warned why (#174, #192)
     if push:
+        _commit_or_exit(service, out, "hdd: update research registry")
         try:
-            subprocess.run(
-                ["git", "add", str(out)],
-                cwd=str(service.repo_root),
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "hdd: update research registry"],
-                cwd=str(service.repo_root),
-                capture_output=True,
-                check=True,
-            )
             subprocess.run(
                 ["git", "push"],
                 cwd=str(service.repo_root),
@@ -1160,20 +1160,10 @@ def experiment_run(
     if push:
         import subprocess
 
+        _commit_or_exit(
+            service, run_path / "config.yaml", f"experiment run: {expr_id} ({run_path.name})"
+        )
         try:
-            config_path = run_path / "config.yaml"
-            subprocess.run(
-                ["git", "add", str(config_path)],
-                cwd=str(service.repo_root),
-                capture_output=True,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", f"experiment run: {expr_id} ({run_path.name})"],
-                cwd=str(service.repo_root),
-                capture_output=True,
-                check=True,
-            )
             subprocess.run(
                 ["git", "push"],
                 cwd=str(service.repo_root),
