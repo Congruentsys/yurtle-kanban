@@ -1711,7 +1711,7 @@ def validate(fix: bool, as_json: bool):
         elif issue["type"] == "unclosed_fence":
             console.print(
                 f"[yellow]UNCLOSED FENCE:[/yellow] {safe(issue['id'])}: the body's code "
-                f"fence on line {issue['line']} is never closed",
+                f"fence on line {safe(str(issue['line']))} is never closed",
                 soft_wrap=True,
             )
         elif issue["type"] == "dangling_dependency":
