@@ -2441,24 +2441,34 @@ class KanbanService:
 
     def _fetched_default(self) -> str | None:
         """The already-fetched `refs/remotes/origin/<default>`, when this clone has
-        one; read locally, never from the network (#641)."""
+        one; read locally, never from the network (#641). `origin/HEAD` names it
+        when set; a `git remote add` clone, or a clone of an empty remote, has none
+        (and an explicit-refspec fetch never makes one), so then `origin/main`,
+        `origin/master`, or the only branch fetched from origin."""
         known = self._git_run("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
         head = known.stdout.strip() if known.returncode == 0 else ""
-        ref = f"refs/remotes/{head}" if head.startswith("origin/") else "refs/remotes/origin/main"
-        found = self._git_run("rev-parse", "--verify", "--quiet", ref)
-        return ref if found.returncode == 0 else None
+        if head.startswith("origin/"):
+            return f"refs/remotes/{head}"
+        listed = self._git_run("for-each-ref", "--format=%(refname)", "refs/remotes/origin/")
+        refs = [r for r in listed.stdout.split() if r != "refs/remotes/origin/HEAD"]
+        for ref in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
+            if ref in refs:
+                return ref
+        return refs[0] if len(refs) == 1 else None
 
-    def _get_next_id_number(self, prefix: str) -> int:
-        """Next id number for `prefix`: past the scanned board and past the
-        already-fetched origin/<default> (when there is one), so a local create or
-        `next-id --no-sync` never re-issues an id already on origin (#641). No
-        network is used."""
+    def _get_next_id_number(self, prefix: str, base: str | None = None) -> int:
+        """Next id number for `prefix`: past the scanned board and past `base`, by
+        default the already-fetched origin/<default> (when there is one), so a
+        local create or `next-id --no-sync` never re-issues an id already on origin
+        (#641). No network is used; if git fails reading the base, the local scan
+        stands, with a warning."""
         num = self._scanned_next_id_number(prefix)
         try:
-            ref = self._fetched_default()
-        except (subprocess.TimeoutExpired, OSError):
-            ref = None
-        return num if ref is None else max(num, self._next_id_number_at(ref, prefix))
+            ref = base or self._fetched_default()
+            return num if ref is None else max(num, self._next_id_number_at(ref, prefix))
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logger.warning(f"Could not read the fetched default branch for {prefix}: {e}")
+            return num
 
     def _scanned_next_id_number(self, prefix: str) -> int:
         """Next id number for `prefix` as this checkout sees it.
@@ -3036,14 +3046,17 @@ class KanbanService:
         # Otherwise locally: the fetched default branch (refetched first when
         # syncing) only raises the floor; `--no-sync` reads what is already
         # fetched, with no network (#641)
+        fetched = None
         if sync_remote and self._has_remote():
             try:
-                self._fetch_default(self._default_branch())
+                branch = self._default_branch()
+                if self._fetch_default(branch).returncode == 0:
+                    fetched = f"refs/remotes/origin/{branch}"
             except (subprocess.TimeoutExpired, OSError) as e:
                 logger.warning(f"Git fetch failed: {e}")
         self._items.clear()
         self.scan()
-        next_num = self._get_next_id_number(prefix)
+        next_num = self._get_next_id_number(prefix, fetched)
         item_id = self._format_id(prefix, next_num)
 
         if commit_allocation:
