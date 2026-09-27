@@ -2773,12 +2773,27 @@ class KanbanService:
         return self._git_state(path) is not None
 
     def _git_state(self, path: Path) -> str | None:
-        """'untracked' (never committed: `??`, or added to the index as new `A`),
-        'changed', or None when git shows `path` clean (#674, #693, #705)."""
+        """'untracked' (never committed: `??`, added as new `A `/`AM`, or intent-to-add
+        ` A`), 'changed' (a committed file's edit, a staged rename included), or None
+        when git shows `path` clean (#674, #693, #705)."""
         shown = self._git_run("status", "--porcelain", "--", str(path))
         if shown.returncode != 0 or not shown.stdout.strip():
             return None
-        return "untracked" if shown.stdout.startswith(("??", "A")) else "changed"
+        code = shown.stdout[:2]
+        if code == "??":
+            return "untracked"
+        if "A" in code:
+            # `A` under a pathspec is also how a staged rename's new path shows
+            # (`git mv`): that file IS committed, under its old name (#705 review)
+            renames = self._git_run("diff", "--cached", "-M", "--name-status", "HEAD")
+            rel = self._repo_relative(path, self._git_toplevel())
+            if rel is not None and any(
+                ln.startswith("R") and ln.split("\t")[-1] == rel.as_posix()
+                for ln in renames.stdout.splitlines()
+            ):
+                return "changed"
+            return "untracked"
+        return "changed"
 
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str
