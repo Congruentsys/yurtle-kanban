@@ -203,13 +203,18 @@ def _do_create(title: str, priority: str, items: str | None, push: bool):
         )
 
     if push:
-        item = service.create_item_and_push(
+        # create_item_and_push returns {success, item, message}, not the item (#593)
+        result = service.create_item_and_push(
             item_type=item_type,
             title=title,
             priority=priority,
             content=content,
             item_id=item_id,
         )
+        if not result.get("success") or result.get("item") is None:
+            console.print(f"[red]Error:[/red] {safe(result.get('message', 'push failed'))}")
+            raise SystemExit(1)
+        item = result["item"]
     else:
         item = service.create_item(
             item_type=item_type,
