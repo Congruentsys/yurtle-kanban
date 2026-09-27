@@ -147,7 +147,8 @@ def _list_text(value: Any) -> list[Any] | dict[Any, Any]:
     """A frontmatter list field as text entries (#653): a comma-separated string
     is split, a single scalar is one entry, each entry is read as text
     (`2026` -> '2026', `yes` -> 'true' as #225 reads it, `2026-01-01` as
-    written), and null entries are dropped."""
+    written, a nested list or mapping as its YAML flow text), and null entries
+    are dropped. A mapping-valued field stays a mapping."""
     if value is None:
         return []
     if isinstance(value, str):
@@ -3836,11 +3837,18 @@ class KanbanService:
         fresh = "".join(f"\n{dash}{yaml_scalar(v)}" for v in items)
         entries: list[tuple[set[str], str, list[str]]] = []  # (texts, line, comments)
         pending: list[str] = []
+        indent: int | None = None
         for line in old_lines:
             item = re.match(r"[ \t]*-(?:[ \t]+(.*))?$", line)
             if not line.strip() or line.lstrip().startswith("#"):
                 pending.append(line)
             elif item:
+                # a bare `-`, or an item deeper or shallower than the others, is
+                # part of a nested block entry: no safe anchoring (#675)
+                here = len(line) - len(line.lstrip())
+                if not (item.group(1) or "").strip() or indent not in (None, here):
+                    return fresh
+                indent = here
                 text = cls._strip_line_comment(item.group(1) or "")
                 try:
                     parsed = yaml.load(f"k: {text}", Loader=cls._YAML_LOADER)["k"]
