@@ -2766,7 +2766,8 @@ class KanbanService:
 
         parent = self._current_item(parent_id)  # the file now (#638)
         if parent is None:
-            logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
+            # the CLI says it; no warning as well (#724)
+            logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
             return None
 
         if not parent.file_path.exists():
@@ -2861,7 +2862,8 @@ class KanbanService:
         there (#645). A parent that exists nowhere is skipped, as it is locally."""
         held = self._holder_at(base, parent_id)
         if held is None and self.get_item(parent_id) is None:
-            logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
+            # the CLI says it; no warning as well (#724)
+            logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
             return {}
         if held is None:
             branch = self._default_branch()

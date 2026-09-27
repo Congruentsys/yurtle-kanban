@@ -93,13 +93,15 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
 
 
 def _print_parent_missing(service, parent_id: str) -> None:
-    """Say so when the parent is on no board, so the link isn't silently skipped
-    (a parent moved out of every board path, say) (#718)."""
+    """Say why no link was written: the parent is on no board (moved out of every
+    board path, say) (#718), or it already has the link (#724)."""
     if service.get_item(parent_id) is None:
         console.print(
             f"  [yellow]{safe(parent_id)} is not on any board: "
             "no inverse reference written (not found)[/yellow]"
         )
+    else:  # on a board, but nothing to add: already linked, or no turtle block (#724)
+        console.print(f"  [dim]{safe(parent_id)} unchanged: it already has the link[/dim]")
 
 
 def _print_parent_linked(parent_id: str, result: dict | None = None) -> None:
