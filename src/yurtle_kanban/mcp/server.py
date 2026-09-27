@@ -36,6 +36,7 @@ class KanbanMCPServer:
 
         self.repo_root = repo_root
         self._service: KanbanService | None = None
+        self._names: frozenset[str] | None = None
 
     @property
     def service(self) -> KanbanService:
@@ -328,8 +329,31 @@ class KanbanMCPServer:
             },
         ]
 
-    def handle_tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _tool_names(self) -> frozenset[str]:
+        """The tool names `get_tools` offers, built once (#728)."""
+        if self._names is None:
+            self._names = frozenset(tool["name"] for tool in self.get_tools())
+        return self._names
+
+    def handle_tool_call(self, name: Any, arguments: Any) -> dict[str, Any]:
         """Handle a tool call and return the result."""
+        # an unknown (or non-string) tool first, then the arguments' shape (#728):
+        # never hash a list/dict `name`, which would crash out of the call
+        if not isinstance(name, str) or name not in self._tool_names():
+            return {"error": f"Unknown tool: {name}"}
+        # `"arguments": null` is no arguments; anything else must be an object
+        if arguments is None:
+            arguments = {}
+        elif not isinstance(arguments, dict):
+            return {"error": "arguments must be an object"}
+        # an explicit null for an optional boolean means "omitted" (#728)
+        arguments = {
+            k: v for k, v in arguments.items()
+            if not (k in ("allow_unknown", "sync_remote") and v is None)
+        }
+        for key in ("item_id", "prefix"):
+            if key in arguments and not isinstance(arguments[key], str):
+                return {"error": f"{key} must be a string"}
         try:
             if name == "kanban_list_items":
                 return self._list_items(arguments)
@@ -355,6 +379,10 @@ class KanbanMCPServer:
                 return self._next_id(arguments)
             else:
                 return {"error": f"Unknown tool: {name}"}
+        except ValueError as e:
+            # an expected refusal (bad input): one line, no traceback (#728)
+            logger.warning(f"Refused {name}: {e}")
+            return {"error": str(e)}
         except Exception as e:
             logger.exception(f"Error handling tool call {name}")
             return {"error": str(e)}
