@@ -152,6 +152,8 @@ def _list_text(value: Any) -> list[Any]:
         return []
     if isinstance(value, str):
         return [v.strip() for v in value.split(",")]
+    if isinstance(value, dict):
+        return value  # not a scalar: as it is (#675)
     if not isinstance(value, list):
         value = [value]  # `tags: 2026` is one entry (#653)
     return [_entry_text(v) for v in value if v is not None]
