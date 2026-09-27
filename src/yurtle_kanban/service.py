@@ -17,6 +17,7 @@ import re
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -2705,9 +2706,21 @@ class KanbanService:
 
         old_status = item.status
 
-        # Validate transition using workflow if available
+        # Rules, gates and WIP judge the PROPOSED item — a copy carrying the new
+        # status and assignee — so `--assign` can satisfy an assignee check; the
+        # cached item changes only once the file is written (#586).
+        changes: dict[str, Any] = {"status": new_status, "updated": datetime.now()}
+        if assignee:
+            changes["assignee"] = assignee
+        proposed = replace(item, **changes)
+
+        # Validate transition using workflow if available; the state machine
+        # reads the source state off item.status, so it gets the proposed item
+        # still at old_status
         if validate_workflow:
-            valid, error_msg = self._validate_transition(item, new_status)
+            valid, error_msg = self._validate_transition(
+                replace(proposed, status=old_status), new_status
+            )
             if not valid:
                 raise ValueError(error_msg)
 
@@ -2732,11 +2745,13 @@ class KanbanService:
                     if board.column_status(col.id) == new_status:
                         if col.type_wip_limits is not None:
                             # Per-type WIP check
-                            type_count = len(
-                                board.get_items_by_status_and_type(
+                            # the moving item never holds a slot against itself
+                            type_count = len([
+                                i for i in board.get_items_by_status_and_type(
                                     new_status, item.item_type
                                 )
-                            )
+                                if i.id != item.id
+                            ])
                             limit = col.get_wip_limit(item_type_str)
                             # 0 is "no limit", as on the board (#402, #411)
                             if limit and type_count >= limit:
@@ -2747,7 +2762,10 @@ class KanbanService:
                                 )
                         else:
                             # Aggregate WIP check — exclude exempt types from count
-                            items_in_status = board.get_items_by_status(new_status)
+                            items_in_status = [
+                                i for i in board.get_items_by_status(new_status)
+                                if i.id != item.id
+                            ]
                             if exempt_types:
                                 items_in_status = [
                                     i for i in items_in_status
@@ -2765,7 +2783,7 @@ class KanbanService:
         gates_skipped = False
         if not skip_gates:
             gate_results = self._evaluate_gates(
-                item, old_status, new_status, gate_context or {}
+                proposed, old_status, new_status, gate_context or {}
             )
             blocking = [
                 r for r in gate_results
@@ -2778,21 +2796,15 @@ class KanbanService:
             # Only record gates_skipped when gates actually exist
             gates_skipped = True
 
-        # Update item
-        item.status = new_status
-        item.updated = datetime.now()
-
-        # Update assignee if provided
-        if assignee:
-            item.assignee = assignee
-
-        # Update file with status history
+        # Update file with status history, then the cached item
         forced = not validate_workflow
         self._update_item_file_with_history(
-            item, old_status, new_status, assignee,
+            proposed, old_status, new_status, assignee,
             forced=forced, closed_by=closed_by,
             gates_skipped=gates_skipped,
         )
+        for name, value in changes.items():
+            setattr(item, name, value)
 
         # Git commit if requested
         if commit:
