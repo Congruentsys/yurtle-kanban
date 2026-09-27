@@ -3540,7 +3540,8 @@ class KanbanService:
         forced: bool = False,
         closed_by: str | None = None,
         gates_skipped: bool = False,
-        actor: str | None = None,
+        *,
+        actor: str,
     ) -> None:
         """Update file and append status change to yurtle knowledge block.
 
@@ -3560,7 +3561,8 @@ class KanbanService:
         When closed_by is set, a kb:closedBy triple records the triggering
         artifact (e.g., a PR URL), making closure provenance graph-queryable.
         When gates_skipped=True, a kb:gatesSkipped triple is recorded.
-        kb:by is the actor (who moved it), never the assignee (#580).
+        kb:by is the actor (who moved it), never the assignee (#580), resolved once
+        by the caller (#630).
         """
         content, eol = self._read_item_text(item.file_path)
 
@@ -3581,10 +3583,9 @@ class KanbanService:
 
         # Create TTL status change entry (use canonical name for RDF consistency)
         timestamp = datetime.now().isoformat(timespec="seconds")
-        agent = resolve_actor(actor, cwd=self.repo_root)
         ttl_entry = f'''    kb:status kb:{new_status.value} ;
     kb:at "{timestamp}"^^xsd:dateTime ;
-    kb:by "{_turtle_string(agent)}" ;'''
+    kb:by "{_turtle_string(actor)}" ;'''
         if forced:
             ttl_entry += '\n    kb:forcedMove "true"^^xsd:boolean ;'
         if gates_skipped:
