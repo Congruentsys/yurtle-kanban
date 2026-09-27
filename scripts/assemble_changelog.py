@@ -56,6 +56,13 @@ def read_fragments(directory: Path) -> list[tuple[int, str, str, Path]]:
             headings(rest, "\0", first_line=2)
         except ValueError as e:
             raise FragmentError(f"{path}: {e}") from None
+        if headings(rest, "<!-- section:", first_line=2):
+            # only line 1 names the section: a second one would be filed under the
+            # first as text (#673)
+            raise FragmentError(
+                f"{path}: one <!-- section: X --> line per fragment; put another "
+                f"section in its own {m.group(1)}-<slug>.md"
+            )
         found.append((int(m.group(1)), head.group(1), rest.rstrip(), path))
     # `12.md` before `12-b.md`: the plain fragment first, then the rest by name
     return sorted(found, key=lambda f: (f[0], f[3].name != f"{f[0]}.md", f[3].name))
