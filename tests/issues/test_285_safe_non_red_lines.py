@@ -185,7 +185,7 @@ def test_update_parent_line_is_escaped(
         def update_parent_turtle_block(self, *args: Any, **kwargs: Any) -> bool:
             return True
 
-    hdd_commands._update_parent(_Service(), EVIL, "literature", "LIT-001", push=False)
+    hdd_commands._update_parent(_Service(), EVIL, "literature", "LIT-001")
     _assert_all_escaped(buf.getvalue(), "Updated")
 
 
@@ -285,9 +285,10 @@ def test_hdd_create_push_file_line_is_escaped(
     _evil_type_dir(repo, monkeypatch)
 
     def push(self: KanbanService, **kwargs: Any) -> dict[str, Any]:
-        # `create_item` takes no `render`/`id_prefix` (#641): keep the local guess
+        # `create_item` takes no `render`/`id_prefix` (#641) or `parent` (#645)
         kwargs.pop("render", None)
         kwargs.pop("id_prefix", None)
+        kwargs.pop("parent", None)
         item = self.create_item(**kwargs)
         return {"success": True, "pushed": True, "id": item.id, "item": item}
 

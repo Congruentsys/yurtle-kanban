@@ -10,7 +10,6 @@ Commit paths covered (every ``git commit`` in src/):
   service._git_commit            <- move, comment, rank, update_item
   service.create_item_and_push   <- create --push (and the hdd ``<type> create --push``)
   service.allocate_next_id       <- next-id
-  service._commit_and_push_file  <- hdd parent link (hypothesis create --paper --push)
   hdd_commands.hdd_registry      <- hdd registry --push
   hdd_commands.experiment_run    <- experiment run --push
 
