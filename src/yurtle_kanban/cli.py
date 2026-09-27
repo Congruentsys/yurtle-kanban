@@ -1659,8 +1659,9 @@ def validate(fix: bool, as_json: bool):
                     "id": item.id,
                     "line": line,
                     "swallows": (what := service.swallowed_what(text, line)),
-                    "message": f"{item.id}: the body's code fence on line {line} is never "
-                    f"closed (it swallows {what})",
+                    # "runs over": refusal 2's fence is closed, but quotes the opener (#758)
+                    "message": f"{item.id}: the body's code fence on line {line} runs over "
+                    f"{what}: close it, or reword a quoted heading inside it",
                 }
             )
 
@@ -1716,8 +1717,8 @@ def validate(fix: bool, as_json: bool):
         elif issue["type"] == "unclosed_fence":
             console.print(
                 f"[yellow]UNCLOSED FENCE:[/yellow] {safe(issue['id'])}: the body's code "
-                f"fence on line {safe(str(issue['line']))} is never closed (it swallows "
-                f"{safe(issue['swallows'])})",
+                f"fence on line {safe(str(issue['line']))} runs over "
+                f"{safe(issue['swallows'])}: close it, or reword a quoted heading inside it",
                 soft_wrap=True,
             )
         elif issue["type"] == "dangling_dependency":
