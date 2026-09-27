@@ -9,8 +9,8 @@
 - **Free text** — every free-text `--X` has a `--X-file PATH|-` twin, and both
   are read by `read_text_option`, in the CLI layer, before any subprocess runs.
 
-Every refusal is a `ValueError` naming the flag or variable; the CLI prints it
-and exits 1.
+Every refusal is an `InputRefused` (a `ValueError`) naming the flag or variable;
+the CLI prints it and exits 1 (#666).
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from pathlib import Path
 
 import click
 
+from .models import InputRefused
+
 AGENT_ENV = "YURTLE_AGENT"
 
 
@@ -32,10 +34,10 @@ def check_identity(value: str, name: str) -> str:
     DEL, NEL…), which would break a `### author` heading or a TTL literal."""
     stripped = value.strip()
     if not stripped:
-        raise ValueError(f"{name} is empty: give a name")
+        raise InputRefused(f"{name} is empty: give a name")
     bad = next((ch for ch in stripped if unicodedata.category(ch) == "Cc"), None)
     if bad is not None:
-        raise ValueError(f"{name} contains a control character ({bad!r}): give a plain name")
+        raise InputRefused(f"{name} contains a control character ({bad!r}): give a plain name")
     return stripped
 
 
@@ -65,7 +67,7 @@ def resolve_actor(
     flag: str = "--agent",
 ) -> str:
     """Who is acting: `explicit` (the `--agent` flag), then `$YURTLE_AGENT`, then
-    git `user.name` (only when `allow_git_fallback`), else a `ValueError`.
+    git `user.name` (only when `allow_git_fallback`), else an `InputRefused`.
 
     `$YURTLE_AGENT` set but blank is an error, not "unset". Every session on one
     machine shares git `user.name`, so coordination verbs pass
@@ -80,10 +82,10 @@ def resolve_actor(
         name = _git_user_name(cwd)
         if name is not None:
             return check_identity(name, "git user.name")
-        raise ValueError(
+        raise InputRefused(
             f"No actor: set --agent or {AGENT_ENV} (git user.name is not set either)"
         )
-    raise ValueError(f"No actor: set --agent or {AGENT_ENV}")
+    raise InputRefused(f"No actor: set --agent or {AGENT_ENV}")
 
 
 def same_actor(a: str, b: str) -> bool:
@@ -96,7 +98,7 @@ def _read_source(file: str, name: str) -> bytes:
     if file == "-":
         stdin = sys.stdin
         if stdin is None or stdin.isatty():
-            raise ValueError(
+            raise InputRefused(
                 f"--{name}-file -: stdin is a terminal; pipe the text "
                 "(a quoted heredoc: <<'EOF') or pass a path"
             )
@@ -105,7 +107,7 @@ def _read_source(file: str, name: str) -> bytes:
     try:
         return Path(file).read_bytes()
     except OSError as e:
-        raise ValueError(f"--{name}-file: can't read {file}: {e.strerror or e}") from None
+        raise InputRefused(f"--{name}-file: can't read {file}: {e.strerror or e}") from None
 
 
 def read_text_option(
@@ -133,7 +135,7 @@ def read_text_option(
             text = raw.decode("utf-8")
         except UnicodeDecodeError as e:
             source = "stdin" if file == "-" else file
-            raise ValueError(
+            raise InputRefused(
                 f"--{name}-file: {source} is not valid UTF-8 (byte {e.start})"
             ) from None
         source_name = f"--{name}-file"
@@ -142,5 +144,5 @@ def read_text_option(
     assert text is not None
     text = text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
     if not text.strip():
-        raise ValueError(f"{source_name} is empty: give some text")
+        raise InputRefused(f"{source_name} is empty: give some text")
     return text

@@ -8,18 +8,19 @@ import click
 from rich.markup import escape
 
 from ._logging import escape_nonprintable
-from .models import InvalidText
+from .models import InputRefused
 
 
 class Group(click.Group):
-    """A `click.Group` whose commands turn `InvalidText` (text that can't be
-    written as UTF-8) into a clean `Error:` line. Any other exception keeps its
-    traceback, so a real bug still surfaces (#183)."""
+    """A `click.Group` whose commands turn a refused input (`InputRefused`: text
+    that can't be written as UTF-8, a forged `## Comments` line, ...) into a clean
+    `Error:` line (#239, #666). Any other exception keeps its traceback, so a real
+    bug still surfaces (#183)."""
 
     def invoke(self, ctx: click.Context) -> Any:
         try:
             return super().invoke(ctx)
-        except InvalidText as e:
+        except InputRefused as e:
             raise click.ClickException(str(e)) from None
 
 

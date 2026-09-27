@@ -16,7 +16,7 @@ import click
 from rich.console import Console
 
 from ._click import Group, pull_note, safe
-from .models import PRIORITIES, WorkItemType
+from .models import PRIORITIES, InputRefused, WorkItemType
 from .template_engine import TemplateEngine
 from .turtle_builder import InvalidTurtleName
 
@@ -1279,7 +1279,7 @@ def experiment_run(
             params=params,
             run_by=run_by,
         )
-    except ValueError as e:  # no actor, or a refused input (#620)
+    except InputRefused as e:  # no actor, or a refused input (#620, #666)
         console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
         raise SystemExit(1) from None
 

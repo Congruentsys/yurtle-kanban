@@ -53,6 +53,7 @@ from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure
 from .inputs import check_identity, read_text_option, resolve_actor
 from .models import (
     PRIORITIES,
+    InputRefused,
     WorkItemStatus,
     WorkItemType,
     check_encodable,
@@ -563,7 +564,7 @@ def create(
         check_encodable("description", description)
         check_encodable("assignee", assignee)
         check_encodable("tags", tag_list)
-    except ValueError as e:
+    except InputRefused as e:
         console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
         sys.exit(1)
 
@@ -577,7 +578,7 @@ def create(
                 description=description,
                 tags=tag_list,
             )
-        except ValueError as e:  # a forged `## Comments` section (#644)
+        except InputRefused as e:  # a refusal only; a bug keeps its traceback (#644, #666)
             _refuse(e)
         if result["success"]:
             item = result["item"]
@@ -617,7 +618,7 @@ def create(
                 description=description,
                 tags=tag_list,
             )
-        except ValueError as e:  # a forged `## Comments` section (#644)
+        except InputRefused as e:  # a refusal only; a bug keeps its traceback (#644, #666)
             _refuse(e)
         console.print(f"[green]Created {escape(item.id)}: {escape(item.title)}[/green]")
         console.print(f"  File: {escape(str(item.file_path))}")
