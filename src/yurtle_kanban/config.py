@@ -147,6 +147,24 @@ def _clean_transitions(transitions: Any, where: str) -> dict[str, list[str]] | N
     return cleaned
 
 
+def _clean_str_mapping(data: dict[str, Any], section: str, where: str) -> None:
+    """Drop every entry of the mapping `data[section]` whose key or value isn't a
+    string, each with one warning naming `where` and `<section>.<entry>`; the
+    rest survive. The canonical -> native map is built by hashing these values,
+    so a list or mapping there crashed `create` / `move` (#613)."""
+    entries = data.get(section)
+    if not isinstance(entries, dict):
+        return
+    for key in [k for k, v in entries.items() if not (isinstance(k, str) and isinstance(v, str))]:
+        value = entries.pop(key)
+        what = (
+            f"has a non-text name ({type(key).__name__})"
+            if not isinstance(key, str)
+            else f"is not a status name ({type(value).__name__})"
+        )
+        logger.warning(f"{where}: `{section}.{key}` {what}; ignored")
+
+
 def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
     """`data` without any section that isn't a mapping: it is ignored, with one
     warning, as if it were absent (a `null` one too), so board/init/move fall back
@@ -163,6 +181,7 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
     had_columns = bool(data.get("columns"))
     if "transitions" in data:
         data["transitions"] = _clean_transitions(data["transitions"], f"theme file {theme_path}")
+    _clean_str_mapping(data, "status_mappings", f"theme file {theme_path}")  # (#613)
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
         entries = data.get(section, {})
