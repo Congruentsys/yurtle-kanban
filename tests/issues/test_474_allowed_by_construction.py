@@ -14,7 +14,9 @@ check (``KanbanService._validate_transition``). The list keeps the theme's order
 the #461 / #467 order expectations stay green.
 
 1. The issue's repro, single-board and multi-board: both ``done`` and ``review`` are
-   offered, because ``move`` accepts both.
+   offered, because ``move`` accepts both. (#683 changed this: a transition name
+   resolves to its status as ``move`` resolves a typed name, canonical first, so
+   ``done`` means done only; the offer and ``move`` still agree.)
 2. A seeded random property: over ~200 small themes (collisions, natives that are
    also canonical values, unmapped and misspelt entries), for every item status and
    every target, offered <=> ``_validate_transition`` accepts.
@@ -68,9 +70,9 @@ def _repro_repo(tmp_path: Path, cfg: str) -> Path:
 
 class TestIssueRepro:
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_move_accepts_done_and_review(self, tmp_path: Path, cfg: str) -> None:
-        """Premise (probed): `move` takes `done` (native `done`, unmapped canonical)
-        and `review` (mapped to native `done`); nothing else."""
+    def test_move_accepts_done_only(self, tmp_path: Path, cfg: str) -> None:
+        """Probed: `done` resolves to the canonical done first, as `move` resolves a
+        typed `done` (#587, #683); review is not reached through it."""
         repo = _repro_repo(tmp_path, cfg)
 
         accepted = set()
@@ -80,7 +82,7 @@ class TestIssueRepro:
             _git(repo, "reset", "--hard", "-q")  # undo the probe
             _git(repo, "clean", "-fdq")
 
-        assert accepted == {"done", "review"}
+        assert accepted == {"done"}
 
     @pytest.mark.parametrize("cfg", CFGS)
     def test_done_offered(self, tmp_path: Path, cfg: str) -> None:
@@ -89,16 +91,16 @@ class TestIssueRepro:
         assert "done" in _allowed(repo, "IDEA-001")
 
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_review_still_offered(self, tmp_path: Path, cfg: str) -> None:
+    def test_review_not_offered(self, tmp_path: Path, cfg: str) -> None:
         repo = _repro_repo(tmp_path, cfg)
 
-        assert "review" in _allowed(repo, "IDEA-001")
+        assert "review" not in _allowed(repo, "IDEA-001")
 
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_offers_exactly_done_and_review(self, tmp_path: Path, cfg: str) -> None:
+    def test_offers_exactly_done(self, tmp_path: Path, cfg: str) -> None:
         repo = _repro_repo(tmp_path, cfg)
 
-        assert sorted(_allowed(repo, "IDEA-001")) == ["done", "review"]
+        assert _allowed(repo, "IDEA-001") == ["done"]
 
     @pytest.mark.parametrize("cfg", CFGS)
     def test_agrees_with_move(self, tmp_path: Path, cfg: str) -> None:

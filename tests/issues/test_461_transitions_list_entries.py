@@ -21,7 +21,8 @@ Decided behaviour:
    theme's targets alias the same canonical status (a repeated target, a native and
    its canonical spelling, two natives mapped to one canonical).
 3. An unmapped native written ``in-progress`` is not offered, because ``move``
-   refuses it: the two agree.
+   refuses it: the two agree. (#683 reversed this: ``in-progress`` now resolves to
+   in_progress, so it is offered and ``move`` accepts it; they still agree.)
 """
 
 from __future__ import annotations
@@ -259,30 +260,29 @@ def _unmapped(draft: list[str]) -> dict[str, Any]:
 
 class TestHyphenSpelling:
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_move_refuses_hyphen_spelling(
+    def test_move_accepts_hyphen_spelling(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         wide: io.StringIO,  # noqa: F811
         cfg: str,
     ) -> None:
-        """Probe: `move` compares exact strings, so `in-progress` never admits in_progress."""
+        """#683 reversed this: a transition name resolves to its status as `move`
+        folds it, so `in-progress` admits in_progress."""
         repo = _repo(tmp_path / "repo", cfg, _unmapped(["in-progress", "abandoned"]))
         _seed(repo, "IDEA-001", "backlog")
 
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "in_progress")
 
-        assert result.exit_code != 0, out
-        assert "Illegal move IDEA-001: draft → in_progress" in out, out
-        assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
-        assert not _move_ok(repo, "IDEA-001", WorkItemStatus.IN_PROGRESS)
+        assert result.exit_code == 0, out
+        assert _status(repo, "IDEA-001") == WorkItemStatus.IN_PROGRESS
 
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_hyphen_spelling_not_offered(self, tmp_path: Path, cfg: str) -> None:
+    def test_hyphen_spelling_offered(self, tmp_path: Path, cfg: str) -> None:
         repo = _repo(tmp_path / "repo", cfg, _unmapped(["in-progress", "abandoned"]))
         _seed(repo, "IDEA-001", "backlog")
 
-        assert _allowed(repo, "IDEA-001") == ["blocked"]
+        assert _allowed(repo, "IDEA-001") == ["in_progress", "blocked"]
 
     @pytest.mark.parametrize("cfg", CFGS)
     def test_hyphen_spelling_agrees_with_move(self, tmp_path: Path, cfg: str) -> None:

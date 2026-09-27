@@ -11,6 +11,9 @@ Decided behaviour: ``get_allowed_transitions`` offers a target only if ``move``
 would accept it (``reverse.get(value, value) == native``, what ``move`` checks), so
 the offer agrees with ``move`` for every candidate — single-board and multi-board.
 
+#683 reversed the premise: a transition name now resolves to its status first, so
+``[in_progress]`` means in_progress and both the offer and ``move`` accept it.
+
 Controls:
 
 - ``[active]`` still offers ``in_progress``, and ``move`` accepts it;
@@ -63,28 +66,27 @@ def _active_to(targets: list[str]) -> dict[str, Any]:
 
 class TestCanonicalSpellingOfMappedStatus:
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_move_refuses_canonical_spelling(
+    def test_move_accepts_canonical_spelling(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         wide: io.StringIO,  # noqa: F811
         cfg: str,
     ) -> None:
-        """Premise: `move` checks the native `active`, which `[in_progress]` lacks."""
+        """#683 reversed this: `[in_progress]` resolves to in_progress, whose
+        native is `active`, so `move` accepts it."""
         repo = _repo_with(tmp_path, cfg, _hdd_with(["in_progress"]))
 
         result, out = _move(repo, monkeypatch, wide, "IDEA-001", "in_progress")
 
-        assert result.exit_code != 0, out
-        assert "Illegal move" in out, out
-        assert _status(repo, "IDEA-001") == WorkItemStatus.BACKLOG
-        assert not _move_ok(repo, "IDEA-001", WorkItemStatus.IN_PROGRESS)
+        assert result.exit_code == 0, out
+        assert _status(repo, "IDEA-001") == WorkItemStatus.IN_PROGRESS
 
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_not_offered_alone(self, tmp_path: Path, cfg: str) -> None:
+    def test_offered_alone(self, tmp_path: Path, cfg: str) -> None:
         repo = _repo_with(tmp_path, cfg, _hdd_with(["in_progress"]))
 
-        assert _allowed(repo, "IDEA-001") == []
+        assert _allowed(repo, "IDEA-001") == ["in_progress"]
 
     @pytest.mark.parametrize("cfg", CFGS)
     def test_agrees_with_move_alone(self, tmp_path: Path, cfg: str) -> None:
@@ -93,19 +95,20 @@ class TestCanonicalSpellingOfMappedStatus:
         _assert_agrees(repo, "IDEA-001")
 
     @pytest.mark.parametrize("cfg", CFGS)
-    def test_not_offered_beside_valid_native(self, tmp_path: Path, cfg: str) -> None:
-        """`[in_progress, abandoned]`: only `abandoned` (-> blocked) is movable."""
+    def test_offered_beside_valid_native(self, tmp_path: Path, cfg: str) -> None:
+        """`[in_progress, abandoned]`: both are movable (#683)."""
         repo = _repo_with(tmp_path, cfg, _hdd_with(["in_progress", "abandoned"]))
 
-        assert _allowed(repo, "IDEA-001") == ["blocked"]
+        assert _allowed(repo, "IDEA-001") == ["in_progress", "blocked"]
         _assert_agrees(repo, "IDEA-001")
 
     @pytest.mark.parametrize("cfg", CFGS)
     def test_other_from_status(self, tmp_path: Path, cfg: str) -> None:
-        """Same rule from `active`: `[done, abandoned]` — `done`'s native is `complete`."""
+        """Same rule from `active`: `[done, abandoned]` — `done` resolves to done,
+        whose native is `complete` (#683)."""
         repo = _repo_with(tmp_path, cfg, _active_to(["done", "abandoned"]), status="active")
 
-        assert _allowed(repo, "IDEA-001") == ["blocked"]
+        assert _allowed(repo, "IDEA-001") == ["done", "blocked"]
         _assert_agrees(repo, "IDEA-001")
 
 
