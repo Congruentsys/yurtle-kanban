@@ -27,7 +27,7 @@ from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
 from ._graph_iri import set_self_iri
 from ._logging import get_logger
-from .config import KanbanConfig, _under
+from .config import KanbanConfig, _fold_status_name, _under
 from .hooks import HookContext, HookEngine, HookEvent
 from .inputs import resolve_actor
 
@@ -77,11 +77,6 @@ _LIT = Namespace(PREFIXES["lit"])
 
 # HDD type aliases for backfill (normalize variant names to canonical types)
 _TYPE_ALIASES: dict[str, str] = {"secondary-hypothesis": "hypothesis"}
-
-def _fold_status_name(name: str) -> str:
-    """A status name as `move` matches it: lower-case, `-` and spaces → `_` (#587)."""
-    return name.lower().replace("-", "_").replace(" ", "_")
-
 
 # HDD types eligible for turtle block backfill
 _BACKFILL_TYPES = frozenset({"idea", "literature", "paper", "hypothesis", "experiment", "measure"})

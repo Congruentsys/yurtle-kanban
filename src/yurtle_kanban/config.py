@@ -173,6 +173,31 @@ def _clean_str_mapping(data: dict[str, Any], section: str, where: str) -> None:
         logger.warning(f"{where}: `{section}.{key}` {what}; ignored")
 
 
+def _fold_status_name(name: str) -> str:
+    """A status name as `move` matches it: lower-case, `-` and spaces → `_` (#587)."""
+    return name.lower().replace("-", "_").replace(" ", "_")
+
+
+def _drop_folded_status_keys(data: dict[str, Any], where: str) -> None:
+    """Keep one `status_mappings` key per folded name: keys that fold together
+    (`on-hold` / `on hold`, `doing` / `Doing`) are one name, so the first in the
+    theme's order wins and each later one is dropped with one warning naming
+    `where`, the dropped key and the kept one. Reads and `move`'s writes then
+    agree on the kept key (#615)."""
+    entries = data.get("status_mappings")
+    if not isinstance(entries, dict):
+        return
+    kept: dict[str, str] = {}
+    for key in list(entries):
+        first = kept.setdefault(_fold_status_name(key), key)
+        if first != key:
+            entries.pop(key)
+            logger.warning(
+                f"{where}: `status_mappings.{key}` is the same name as "
+                f"`status_mappings.{first}`, which is kept; ignored"
+            )
+
+
 def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
     """`data` without any section that isn't a mapping: it is ignored, with one
     warning, as if it were absent (a `null` one too), so board/init/move fall back
@@ -190,6 +215,7 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
     if "transitions" in data:
         data["transitions"] = _clean_transitions(data["transitions"], f"theme file {theme_path}")
     _clean_str_mapping(data, "status_mappings", f"theme file {theme_path}")  # (#613)
+    _drop_folded_status_keys(data, f"theme file {theme_path}")  # (#615)
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
         entries = data.get(section, {})
