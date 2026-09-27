@@ -1444,6 +1444,37 @@ class KanbanService:
             self.scan()
         return self._items.get(item_id)
 
+    def _current_item(self, item_id: str) -> WorkItem | None:
+        """A writer's lookup: the item as its file says NOW (#638).
+
+        Plain reads may serve the cache, but a write is validated against the
+        file, so an edit made outside this service (by hand, a `git checkout`)
+        since the last scan is respected. Reads one file, not the board; an ID
+        the cache doesn't know is looked for with one rescan.
+        """
+        item = self.get_item(item_id)
+        if item is None:
+            self.scan()
+            return self._items.get(item_id)
+        return self._reread_item(item)
+
+    def _reread_item(self, item: WorkItem) -> WorkItem | None:
+        """Re-parse one item's file and put the result in the cache (#638).
+
+        Used before a write's checks and after the write, so the item returned
+        and every later read show what is in the file. A file that is gone, or
+        no longer holds this ID, falls back to a rescan.
+        """
+        fresh = None
+        if item.file_path.exists():
+            with self._scan_scope():
+                fresh = self._parse_file(item.file_path)
+        if fresh is None or fresh.id != item.id:
+            self.scan()
+            return self._items.get(item.id)
+        self._items[item.id] = fresh
+        return fresh
+
     def get_items(
         self,
         status: WorkItemStatus | None = None,
@@ -2417,7 +2448,7 @@ class KanbanService:
             logger.debug(f"No inverse relation defined for child type: {child_type}")
             return False
 
-        parent = self.get_item(parent_id)
+        parent = self._current_item(parent_id)  # the file now (#638)
         if parent is None:
             logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
             return False
@@ -2449,8 +2480,9 @@ class KanbanService:
         new_content = content[: match.start()] + new_block + content[match.end() :]
         self._write_item_text(parent.file_path, new_content, eol)
 
-        # Re-parse graph for the updated parent
+        # Re-parse graph for the updated parent, and refresh the cache (#638)
         parent.graph = self._parse_graph(new_content)
+        self._reread_item(parent)
 
         if push:
             self._commit_and_push_file(
@@ -2667,6 +2699,7 @@ class KanbanService:
                     new_content = self._insert_turtle_block(content, block)
                 self._write_item_text(item.file_path, new_content, eol)
                 item.graph = self._parse_graph(new_content) or Graph()
+                self._reread_item(item)  # the cache holds the file now (#638)
 
             results.append({
                 "path": str(item.file_path),
@@ -2929,7 +2962,7 @@ class KanbanService:
                 like ``{"self_reviewed": True}``)
         """
         self._check_text(assignee=assignee, message=message, closed_by=closed_by)  # (#239)
-        item = self.get_item(item_id)
+        item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
 
@@ -3034,6 +3067,7 @@ class KanbanService:
         )
         for name, value in changes.items():
             setattr(item, name, value)
+        item = self._reread_item(item) or item  # the cache holds the file now (#638)
 
         # Git commit if requested
         if commit:
@@ -3701,7 +3735,7 @@ class KanbanService:
     ) -> WorkItem:
         """Add a comment to a work item."""
         self._check_text(comment=content, author=author)
-        item = self.get_item(item_id)
+        item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
 
@@ -3711,6 +3745,7 @@ class KanbanService:
 
         # Update file (comments go in a special section)
         self._update_item_with_comment(item, comment)
+        item = self._reread_item(item) or item  # the cache holds the file now (#638)
 
         if commit:
             self._git_commit(
@@ -3938,7 +3973,7 @@ class KanbanService:
             message: Optional commit message
         """
         priority = self._normalize_priority(priority)
-        item = self.get_item(item_id)
+        item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
 
@@ -3988,6 +4023,7 @@ class KanbanService:
 
         item.updated = datetime.now()
         self._write_item_text(item.file_path, content, eol)
+        item = self._reread_item(item) or item  # the cache holds the file now (#638)
 
         # Git commit if requested
         if commit:
@@ -4144,7 +4180,7 @@ class KanbanService:
             raise ValueError(f"Rank must be >= 1, got {rank}")
         self._check_text(value_summary=value_summary)  # before any write (#219)
 
-        item = self.get_item(item_id)
+        item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
 
@@ -4161,6 +4197,7 @@ class KanbanService:
                 content, "value_summary", yaml_quote(value_summary)
             )
         self._write_item_text(item.file_path, content, eol)
+        item = self._reread_item(item) or item  # the cache holds the file now (#638)
 
         if commit:
             self._git_commit(
