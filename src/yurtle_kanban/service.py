@@ -2084,10 +2084,13 @@ class KanbanService:
                     f"{item.file_path} is outside the git repository at {self._git_toplevel()}"
                 )
             blobs = {item_rel: text, **self._allocation_blob(base, current_id, actor)}
-            linked = {} if parent is None else self._parent_link_blob(
+            linked, parent_state = ({}, None) if parent is None else self._parent_link_blob(
                 base, parent, item_type.value, current_id
             )
-            made.update(item=item, id=current_id, parent_linked=bool(linked), linked=linked)
+            made.update(
+                item=item, id=current_id, parent_linked=bool(linked), linked=linked,
+                parent_state=parent_state,
+            )
             return {**blobs, **linked}, f"Create {current_id}: {title}"
 
         def landed(branch: str, local: bool) -> dict[str, Any]:
@@ -2112,6 +2115,8 @@ class KanbanService:
                 "local": local,
                 "branch": branch,
                 "parent_linked": made["parent_linked"],
+                # why no link, from the copy it was built against (#724)
+                "parent_state": made.get("parent_state"),
                 "dirty_parent": dirty,
                 "message": message,
             }
@@ -2766,7 +2771,8 @@ class KanbanService:
 
         parent = self._current_item(parent_id)  # the file now (#638)
         if parent is None:
-            logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
+            # the CLI says it; no warning as well (#724)
+            logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
             return None
 
         if not parent.file_path.exists():
@@ -2820,6 +2826,22 @@ class KanbanService:
             return "untracked"
         return "changed"
 
+    def parent_link_state(self, parent_id: str, child_type: str, child_id: str) -> str:
+        """Why no inverse reference would be written for `child_id` on `parent_id`:
+        'missing' (on no board), 'no-relation' (the child type has none),
+        'no-block' (the parent has no turtle block), 'linked' (already there), or
+        'addable' (#724)."""
+        parent = self._current_item(parent_id)
+        if parent is None or not parent.file_path.exists():
+            return "missing"
+        if child_type not in self._INVERSE_RELATIONS:
+            return "no-relation"
+        content = parent.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        if not self._TURTLE_BLOCK_RE.search(content):
+            return "no-block"
+        text = self._linked_parent_text(content, parent_id, child_type, child_id)
+        return "linked" if text is None else "addable"
+
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str
     ) -> str | None:
@@ -2833,7 +2855,8 @@ class KanbanService:
 
         match = self._TURTLE_BLOCK_RE.search(content)
         if not match:
-            logger.warning(f"No turtle block in {parent_id} — skipping inverse reference")
+            # the CLI says it (parent_link_state), no warning as well (#724)
+            logger.debug(f"No turtle block in {parent_id} — skipping inverse reference")
             return None
 
         # Build rdflib URIs for the predicate and child object
@@ -2853,16 +2876,19 @@ class KanbanService:
 
     def _parent_link_blob(
         self, base: str, parent_id: str, child_type: str, child_id: str
-    ) -> dict[Path, str]:
+    ) -> tuple[dict[Path, str], str | None]:
         """The parent's file as commit `base` holds it, with the inverse reference to
         `child_id` added, keyed by its repo-relative path; empty when there is
         nothing to add. A parent this board has but `base` doesn't hold is refused:
         the link can only ride in the child's commit when the parent is already
-        there (#645). A parent that exists nowhere is skipped, as it is locally."""
+        there (#645). A parent that exists nowhere is skipped, as it is locally.
+        Also returns why nothing was added, read from `base`'s copy: 'missing',
+        'no-relation', 'no-block' or 'linked', else None (#724)."""
         held = self._holder_at(base, parent_id)
         if held is None and self.get_item(parent_id) is None:
-            logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
-            return {}
+            # the CLI says it; no warning as well (#724)
+            logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
+            return {}, "missing"
         if held is None:
             branch = self._default_branch()
             local = self.get_item(parent_id)
@@ -2902,7 +2928,11 @@ class KanbanService:
                 f"{held} on the default branch is not UTF-8 ({e}); nothing was created"
             ) from None
         new_content = self._linked_parent_text(content, parent_id, child_type, child_id)
-        return {} if new_content is None else {Path(held): eol.apply(new_content)}
+        if new_content is not None:
+            return {Path(held): eol.apply(new_content)}, None
+        if child_type not in self._INVERSE_RELATIONS:
+            return {}, "no-relation"
+        return {}, ("linked" if self._TURTLE_BLOCK_RE.search(content) else "no-block")
 
     def _modify_turtle_block(
         self,
