@@ -1950,6 +1950,13 @@ class KanbanService:
         )
         self._check_no_comments_heading(description)
         self._check_no_comments_heading(content, "The rendered content")  # templated (#666)
+        # a duplicated parent: which copy gets the link is ambiguous; refused before
+        # anything is written, on every path (#754)
+        if parent is not None and (held := self.get_item(parent)) is not None:
+            try:
+                self.refuse_duplicate(held, "a parent link")
+            except ValueError as e:
+                return self._push_failed(f"{e}; nothing was created")
         import json as json_mod
 
         # A board outside the git repository can't be committed or pushed (#174):
@@ -2406,21 +2413,28 @@ class KanbanService:
         its filename or its frontmatter `id:`, or None (#634). Ids are the same when
         the text before their number, separator included, and the number are:
         `EXP-3` is `EXP-003` (#641), but `EXP3` is not (#661)."""
+        holders = self._holders_at(rev, item_id)
+        return holders[0] if holders else None
+
+    def _holders_at(self, rev: str, item_id: str) -> list[str]:
+        """Every file under the work paths at commit `rev` that holds `item_id`, by
+        filename first, then by frontmatter `id:`, each once, as `_holder_at` judges
+        it; more than one is a duplicated ID there (#754)."""
         names, ids = self._ids_at(rev)
         key = self._id_key(item_id)
         folded = item_id.upper()  # `m-042` holds `M-042` (#732, #764)
+        found_in: list[str] = []
         for name in names:
             stem = Path(name).stem.upper()
             if stem == folded or stem.startswith(folded + "-") or (
                 key is not None and self._stem_holds(stem, key)
             ):
-                return name
-        return next(
-            (path for path, found in ids
-             if found.upper() == folded
-             or (key is not None and self._id_key(found) == key)),
-            None,
-        )
+                found_in.append(name)
+        found_in += [
+            path for path, found in ids
+            if found.upper() == folded or (key is not None and self._id_key(found) == key)
+        ]
+        return list(dict.fromkeys(found_in))
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
         """The `.md` files under the work paths at commit `rev`, and each `id:` in
@@ -2932,8 +2946,16 @@ class KanbanService:
         the link can only ride in the child's commit when the parent is already
         there (#645). A parent that exists nowhere is skipped, as it is locally.
         Also returns why nothing was added, read from `base`'s copy: 'missing',
-        'no-relation', 'no-block', 'unparseable' or 'linked', else None (#724, #737)."""
-        held = self._holder_at(base, parent_id)
+        'no-relation', 'no-block', 'unparseable' or 'linked', else None (#724, #737).
+        A parent `base` holds in more than one file is refused (#754)."""
+        holders = self._holders_at(base, parent_id)
+        if len(holders) > 1:
+            raise _CasRefusedError(
+                f"{parent_id} is on more than one board on origin/{self._default_branch()} "
+                f"({', '.join(holders)}): a parent link to it is ambiguous; fix the "
+                "duplicate ID first; nothing was created"
+            )
+        held = holders[0] if holders else None
         if held is None and self.get_item(parent_id) is None:
             # the CLI says it; no warning as well (#724)
             logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
