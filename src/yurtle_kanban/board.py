@@ -254,9 +254,18 @@ def render_item_detail(
         console.print()
         console.print("[bold]Comments[/bold]")
         for comment in item.comments:
-            timestamp = comment.created_at.strftime("%Y-%m-%d %H:%M")
-            console.print(f"  [dim]{timestamp}[/dim] [bold]{escape(str(comment.author))}[/bold]")
-            console.print(f"    {escape(str(comment.content))}")
+            # text before the first heading has no date or author (#644)
+            if comment.created_at is not None or comment.author:
+                timestamp = (
+                    comment.created_at.strftime("%Y-%m-%d %H:%M") if comment.created_at else ""
+                )
+                console.print(
+                    f"  [dim]{timestamp}[/dim] [bold]{escape(str(comment.author))}[/bold]"
+                )
+            # every line at the text column, not just the first (#644)
+            lines = str(comment.content).split("\n")
+            text = "\n".join(f"    {ln}" if ln.strip() else "" for ln in lines)
+            console.print(escape(text))
 
     console.print()
 

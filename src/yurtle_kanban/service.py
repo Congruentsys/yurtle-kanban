@@ -1056,12 +1056,14 @@ class KanbanService:
 
         Each starts at a `### author (YYYY-MM-DD HH:MM)` line outside fenced code
         and runs to the next one; its text is the lines between, without the
-        blank lines around them.
+        blank lines around them. Text before the first heading is never dropped:
+        it reads as a leading comment with author "" and no date (#644).
         """
         comments: list[Comment] = []
         pos = section.find("\n") + 1 if section else 0  # past the `## Comments` line
         if pos <= 0:
             return comments
+        first = pos
         starts: list[tuple[int, int, re.Match[str]]] = []  # (line start, text start, head)
         while (at := self._find_line_outside_fences(section, pos, self._COMMENT_HEAD_RE)) >= 0:
             eol = section.find("\n", at)
@@ -1070,24 +1072,30 @@ class KanbanService:
             if head:
                 starts.append((at, nxt, head))
             pos = nxt
+        preamble = self._comment_text(section[first : starts[0][0] if starts else len(section)])
+        if preamble:
+            comments.append(Comment(content=preamble, author="", created_at=None))
         for i, (_, text_start, head) in enumerate(starts):
             text_end = starts[i + 1][0] if i + 1 < len(starts) else len(section)
             try:
                 when = datetime.strptime(head.group(2), "%Y-%m-%d %H:%M")
             except ValueError:
                 continue  # not a real timestamp: not a comment heading
-            # a knowledge block (the kb:statusChange history a later `move`
-            # appends) is never comment text
-            text = self._KNOWLEDGE_BLOCK_RE.sub("", section[text_start:text_end])
-            lines = [self._unescape_comment_line(ln) for ln in text.split("\n")]
-            while lines and not lines[0].strip():
-                lines.pop(0)
-            while lines and not lines[-1].strip():
-                lines.pop()
-            comments.append(
-                Comment(content="\n".join(lines), author=head.group(1), created_at=when)
-            )
+            text = self._comment_text(section[text_start:text_end])
+            comments.append(Comment(content=text, author=head.group(1), created_at=when))
         return comments
+
+    def _comment_text(self, text: str) -> str:
+        """A comment's text as stored: unescaped, without the blank lines around it."""
+        # a knowledge block (the kb:statusChange history a later `move`
+        # appends) is never comment text
+        text = self._KNOWLEDGE_BLOCK_RE.sub("", text)
+        lines = [self._unescape_comment_line(ln) for ln in text.split("\n")]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+        return "\n".join(lines)
 
     def _extract_description(self, content: str) -> str | None:
         """Extract description from markdown content: the text after the frontmatter
@@ -1761,6 +1769,7 @@ class KanbanService:
         self._check_text(
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
+        self._check_no_comments_heading(description)
         # Generate or use provided ID
         if item_id is None:
             prefix = id_prefix or self._get_type_prefix(item_type)
@@ -1876,6 +1885,7 @@ class KanbanService:
         self._check_text(
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
+        self._check_no_comments_heading(description)
         import json as json_mod
 
         # A board outside the git repository can't be committed or pushed (#174):
@@ -3887,6 +3897,17 @@ class KanbanService:
         said = [t.strip() for t in (done.stderr, done.stdout) if t and t.strip()]
         return "\n".join(said) or f"git exited {done.returncode}"
 
+    def _check_no_comments_heading(self, description: str | None) -> None:
+        """Refuse a description with a `## Comments` line outside fenced code: it
+        would become the item's comments section (#605), on update or create (#644)."""
+        if description is not None and self._find_line_outside_fences(
+            description, 0, self._COMMENTS_RE
+        ) >= 0:
+            raise ValueError(
+                "A description can't contain a `## Comments` line outside a code block: "
+                "that heading starts the comments section. Use add_comment for comments."
+            )
+
     def add_comment(
         self,
         item_id: str,
@@ -3894,7 +3915,11 @@ class KanbanService:
         author: str,
         commit: bool = True,
     ) -> WorkItem:
-        """Add a comment to a work item."""
+        """Add a comment to a work item.
+
+        Like the description, a comment's text never holds knowledge: a ```yurtle
+        or ```turtle fence in it is stripped when the comment is read back (#644).
+        """
         self._check_text(comment=content, author=author)
         item = self._current_item(item_id)  # the file now (#638)
         if not item:
@@ -3926,7 +3951,7 @@ class KanbanService:
             content += "\n\n## Comments\n"
 
         # Add comment
-        timestamp = comment.created_at.strftime("%Y-%m-%d %H:%M")
+        timestamp = (comment.created_at or datetime.now()).strftime("%Y-%m-%d %H:%M")
         # a heading-shaped line in the text is escaped, so it can't read back as
         # a second comment; the parser unescapes it (#605)
         text = "\n".join(self._escape_comment_line(ln) for ln in comment.content.split("\n"))
@@ -4142,14 +4167,7 @@ class KanbanService:
             raise ValueError(f"Item not found: {item_id}")
 
         self._check_text(title=title, description=description, assignee=assignee, tags=tags)
-        if description is not None and self._find_line_outside_fences(
-            description, 0, self._COMMENTS_RE
-        ) >= 0:
-            # it would become the item's comments section (#605)
-            raise ValueError(
-                "A description can't contain a `## Comments` line outside a code block: "
-                "that heading starts the comments section. Use add_comment for comments."
-            )
+        self._check_no_comments_heading(description)
 
         # Field-level edits only, like rank_item (#583): every line the update
         # doesn't touch - unknown keys, the native status, the history block,
