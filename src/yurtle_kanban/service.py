@@ -2773,11 +2773,12 @@ class KanbanService:
         return self._git_state(path) is not None
 
     def _git_state(self, path: Path) -> str | None:
-        """'untracked', 'changed', or None when git shows `path` clean (#674, #693)."""
+        """'untracked' (never committed: `??`, or added to the index as new `A`),
+        'changed', or None when git shows `path` clean (#674, #693, #705)."""
         shown = self._git_run("status", "--porcelain", "--", str(path))
         if shown.returncode != 0 or not shown.stdout.strip():
             return None
-        return "untracked" if shown.stdout.startswith("??") else "changed"
+        return "untracked" if shown.stdout.startswith(("??", "A")) else "changed"
 
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str
