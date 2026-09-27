@@ -1493,7 +1493,7 @@ class TestMoveAssignMissingKey:
 
         fm = self._frontmatter(path)
         assert fm["assignee"] == "agent-x"
-        assert fm["status"] == "ready"
+        assert fm["status"] == "provisioning"  # nautical's name for ready (#604)
         assert fm["id"] == "EXP-001"
         svc.scan()
         assert [i.id for i in svc.get_items(assignee="agent-x")] == ["EXP-001"]
@@ -1511,7 +1511,7 @@ class TestMoveAssignMissingKey:
             "EXP-001", WorkItemStatus.READY, commit=False, validate_workflow=False,
         )
 
-        assert self._frontmatter(path)["status"] == "ready"
+        assert self._frontmatter(path)["status"] == "provisioning"  # ready (#604)
 
     def test_cli_create_then_move_assign_is_listed(
         self, temp_repo, nautical_config, monkeypatch,
@@ -1557,7 +1557,7 @@ class TestFrontmatterCloser:
 
         head, body = path.read_text().split(f"\n{closer}\n", 1)
         assert "\nassignee: agent-x" in head
-        assert "\nstatus: ready" in head
+        assert "\nstatus: provisioning" in head  # nautical's name for ready (#604)
         assert "assignee" not in body
 
 
