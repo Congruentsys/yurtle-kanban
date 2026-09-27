@@ -771,6 +771,7 @@ class KanbanService:
 
             # Extract description (content after frontmatter, before yurtle block)
             description = self._extract_description(content)
+            comments = self._parse_comments(self._split_comments(content)[1])
 
             # Parse priority rank and value summary
             priority_rank = frontmatter.get("priority_rank")
@@ -831,6 +832,7 @@ class KanbanService:
                 depends_on=depends_on,
                 related=related,
                 description=description,
+                comments=comments,
                 metadata=metadata,
                 resolution=resolution,
                 superseded_by=superseded_by,
@@ -1010,12 +1012,63 @@ class KanbanService:
             logger.debug(f"Failed to parse graph: {e}")
             return None
 
-    def _extract_description(self, content: str) -> str | None:
-        """Extract description from markdown content."""
-        # Remove frontmatter
+    def _split_comments(self, content: str) -> tuple[str, str]:
+        """Split an item's text after the frontmatter into (body, comments section).
+
+        The section starts at the first `## Comments` line outside fenced code
+        (#583) and runs to the end; it is "" when the item has none (#605).
+        """
         split = self._split_frontmatter(content)
         if split is not None:
             content = split[1]
+        cut = self._find_line_outside_fences(content, 0, self._COMMENTS_RE)
+        return (content, "") if cut < 0 else (content[:cut], content[cut:])
+
+    # `### author (YYYY-MM-DD HH:MM)`, as add_comment writes it
+    _COMMENT_HEAD_RE = re.compile(
+        r"### (.+) \((\d{4}-\d\d-\d\d \d\d:\d\d)\)[ \t]*$", re.MULTILINE
+    )
+
+    def _parse_comments(self, section: str) -> list[Comment]:
+        """The comments in a `## Comments` section, in file order (#605).
+
+        Each starts at a `### author (YYYY-MM-DD HH:MM)` line outside fenced code
+        and runs to the next one; its text is the lines between, without the
+        blank lines around them.
+        """
+        comments: list[Comment] = []
+        pos = section.find("\n") + 1 if section else 0  # past the `## Comments` line
+        if pos <= 0:
+            return comments
+        starts: list[tuple[int, int, re.Match[str]]] = []  # (line start, text start, head)
+        while (at := self._find_line_outside_fences(section, pos, self._COMMENT_HEAD_RE)) >= 0:
+            eol = section.find("\n", at)
+            nxt = len(section) if eol < 0 else eol + 1
+            head = self._COMMENT_HEAD_RE.match(section, at)
+            if head:
+                starts.append((at, nxt, head))
+            pos = nxt
+        for i, (_, text_start, head) in enumerate(starts):
+            text_end = starts[i + 1][0] if i + 1 < len(starts) else len(section)
+            try:
+                when = datetime.strptime(head.group(2), "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue  # not a real timestamp: not a comment heading
+            lines = section[text_start:text_end].split("\n")
+            while lines and not lines[0].strip():
+                lines.pop(0)
+            while lines and not lines[-1].strip():
+                lines.pop()
+            comments.append(
+                Comment(content="\n".join(lines), author=head.group(1), created_at=when)
+            )
+        return comments
+
+    def _extract_description(self, content: str) -> str | None:
+        """Extract description from markdown content: the text after the frontmatter
+        and before the `## Comments` section, without knowledge blocks or the H1.
+        Comments are their own field (`item.comments`), never part of it (#605)."""
+        content, _ = self._split_comments(content)
 
         # Remove yurtle and turtle knowledge blocks
         content = re.sub(r"```(?:yurtle|turtle).*?```", "", content, flags=re.DOTALL)
@@ -4002,18 +4055,6 @@ class KanbanService:
         """
         if description.strip() == (self._extract_description(content) or ""):
             return content
-        # The parsed description ends with the comments section (`show` and MCP
-        # `get_item` display comments through it), but the span stops before it:
-        # an edited description sent back with that section still attached must
-        # not write the comments into the body a second time.
-        cut = self._find_line_outside_fences(content, 0, self._COMMENTS_RE)
-        if cut >= 0:
-            comments = re.sub(
-                r"```(?:yurtle|turtle).*?```", "", content[cut:], flags=re.DOTALL
-            ).strip()
-            trimmed = description.rstrip()
-            if comments and trimmed.endswith(comments):
-                description = trimmed[: -len(comments)]
         h1 = self._h1_span(content)
         start = self._leading_knowledge_end(content)
         if h1:

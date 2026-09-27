@@ -294,9 +294,12 @@ class EmbeddingIndex:
 
     def add_item(self, item: WorkItem) -> None:
         """Add a work item to the index."""
-        text = item.title
+        parts = [item.title]
         if item.description:
-            text = f"{item.title}\n{item.description}"
+            parts.append(item.description)
+        # comments are their own field now (#605); search still sees them
+        parts.extend(c.content for c in item.comments)
+        text = "\n".join(parts)
         self._ids.append(item.id)
         self._texts.append(text)
         self._items[item.id] = item
