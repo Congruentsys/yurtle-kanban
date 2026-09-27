@@ -1305,10 +1305,10 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
     """Allocate the next available ID for a prefix.
 
     This command prevents duplicate IDs when multiple agents create work items
-    concurrently by:
-    1. Fetching latest changes from remote
-    2. Scanning all files to find the highest ID
-    3. Committing and pushing an allocation lock file
+    concurrently: it fetches the remote's default branch, takes the next id past
+    what that branch and this checkout hold, and commits the allocation record
+    onto the default branch with a compare-and-swap push (a lost race retries
+    with a new id). Your branch, index and working tree are not touched.
 
     Examples:
         yurtle-kanban next-id EXP       # Allocate next expedition ID
@@ -1325,6 +1325,8 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
 
     if as_json:
         click.echo(json.dumps(result, indent=2))
+        if not result["success"]:
+            sys.exit(1)  # a failed allocation is a failure in JSON too (#590)
     else:
         if result["success"]:
             console.print(f"[green]Allocated: {escape(str(result['id']))}[/green]")

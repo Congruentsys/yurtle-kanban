@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import replace
 from datetime import date, datetime
@@ -59,6 +59,11 @@ class GitCommitError(ValueError):
     """Git refused a kanban commit (#584), e.g. a pre-commit hook said no. The
     message carries git's (or the hook's) own output. A ValueError, so every CLI
     command's existing error path reports it and exits non-zero."""
+
+
+class _CasRefusedError(Exception):
+    """A compare-and-swap commit (#585, #590) that can't be built; its message is
+    the failure the caller reports."""
 
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
 _HYP = Namespace(PREFIXES["hyp"])
@@ -1625,6 +1630,8 @@ class KanbanService:
         tags: list[str] | None = None,
         content: str | None = None,
         item_id: str | None = None,
+        render: Callable[[str], str] | None = None,
+        id_prefix: str | None = None,
     ) -> WorkItem:
         """Create a new work item.
 
@@ -1632,6 +1639,9 @@ class KanbanService:
             content: Pre-rendered file content (e.g., from TemplateEngine).
                      When provided, writes this instead of item.to_markdown().
             item_id: Explicit ID to use instead of auto-allocating.
+            render, id_prefix: as for `create_item_and_push`; used only when
+                     `item_id` is None (the id is allocated in `id_prefix` and
+                     `render` makes the content for it).
                      Useful for HDD types with non-standard ID formats
                      (e.g., H130.1, EXPR-130, PAPER-130).
         """
@@ -1641,9 +1651,12 @@ class KanbanService:
         )
         # Generate or use provided ID
         if item_id is None:
-            prefix = self._get_type_prefix(item_type)
+            prefix = id_prefix or self._get_type_prefix(item_type)
             next_num = self._get_next_id_number(prefix)
             item_id = f"{prefix}-{next_num:03d}"
+            if render is not None:
+                content = render(item_id)
+                self._check_text(content=content)
 
         # Determine file path
         if path is None:
@@ -1710,6 +1723,8 @@ class KanbanService:
         max_retries: int = 3,
         content: str | None = None,
         item_id: str | None = None,
+        render: Callable[[str], str] | None = None,
+        id_prefix: str | None = None,
     ) -> dict[str, Any]:
         """Atomically create a work item, commit, and push to remote.
 
@@ -1728,11 +1743,24 @@ class KanbanService:
             content: Pre-rendered file content (e.g., from TemplateEngine).
             item_id: Explicit ID (bypasses auto-allocation). For HDD types
                      with non-standard formats (H130.1, EXPR-130, PAPER-130).
+            render: Renders the file content for an allocated id. When given,
+                    `item_id` (if any) is only the local scan's guess: with a
+                    remote the id is allocated again against each fetched base,
+                    and the content rendered for it (#590).
+            id_prefix: The id prefix to allocate in, when it is not the type's own
+                       (IDEA-R, IDEA-F).
 
         Returns:
             dict with 'success', 'item', 'id', 'pushed', and 'message' keys
         """
         priority = self._normalize_priority(priority) or "medium"
+        prefix = id_prefix or self._get_type_prefix(item_type)
+        item_id_local = item_id
+        if render is not None:
+            # rendered for the id the local scan picks; with a remote, again per base
+            item_id_local = item_id or f"{prefix}-{self._get_next_id_number(prefix):03d}"
+            content = render(item_id_local)
+            item_id = None
         self._check_text(
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
@@ -1749,7 +1777,7 @@ class KanbanService:
                 description=description,
                 tags=tags,
                 content=content,
-                item_id=item_id,
+                item_id=item_id_local,
             )
             return {
                 "success": True,
@@ -1774,12 +1802,16 @@ class KanbanService:
                 max_retries=max_retries,
                 content=content,
                 item_id=item_id,
+                render=render,
+                id_prefix=id_prefix,
             )
 
         # No remote: allocate, create and commit locally (no push, no retry needed)
         self._items.clear()
         self.scan()
-        current_id = item_id or self._next_item_id(item_type, 0)
+        current_id = item_id or f"{prefix}-{self._get_next_id_number(prefix):03d}"
+        if render is not None and current_id != item_id_local:
+            content = render(current_id)
         item, text = self._new_item(
             item_type, title, current_id, priority, assignee, description, tags, content
         )
@@ -1795,7 +1827,7 @@ class KanbanService:
                 allocations = json_mod.loads(lock_file.read_text())
             except Exception:
                 allocations = []
-        lock_file.write_text(self._with_allocation(allocations, item_type, current_id))
+        lock_file.write_text(self._with_allocation(allocations, prefix, current_id))
 
         try:
             self._commit_paths([file_path, lock_file], f"Create {current_id}: {title}")
@@ -1823,6 +1855,8 @@ class KanbanService:
         max_retries: int,
         content: str | None,
         item_id: str | None,
+        render: Callable[[str], str] | None = None,
+        id_prefix: str | None = None,
     ) -> dict[str, Any]:
         """`create --push` with a remote (#585): fetch and push ONE explicit ref, the
         remote's default branch. The commit is built on the freshly fetched
@@ -1830,20 +1864,76 @@ class KanbanService:
         branch are never touched while it races; a lost race refetches and retries
         with a new id, and a failure of any kind leaves nothing behind. Only when the
         push has landed, and HEAD is on the default branch, is the checkout
-        fast-forwarded to it."""
+        fast-forwarded to it. Unless `item_id` is explicit, the id is allocated
+        against each fetched base (#590), and `render` (when given) renders the
+        item's text for that id."""
+        prefix = id_prefix or self._get_type_prefix(item_type)
+        made: dict[str, Any] = {}
+
+        def build(base: str) -> tuple[dict[Path, str], str]:
+            current_id = item_id or self._next_id_at(base, prefix)
+            text_in = render(current_id) if render is not None else content
+            item, text = self._new_item(
+                item_type, title, current_id, priority, assignee, description, tags, text_in
+            )
+            item_rel = self._repo_relative(item.file_path, self._git_toplevel())
+            if item_rel is None:
+                raise _CasRefusedError(
+                    f"{item.file_path} is outside the git repository at {self._git_toplevel()}"
+                )
+            made.update(item=item, id=current_id)
+            return (
+                {item_rel: text, **self._allocation_blob(base, prefix, current_id)},
+                f"Create {current_id}: {title}",
+            )
+
+        def landed(branch: str, local: bool) -> dict[str, Any]:
+            item, current_id = made["item"], made["id"]
+            if local:
+                self._items[current_id] = item
+            self._fire_create_hook(item)
+            note = "" if local else f" (not in this checkout yet: pull {branch} to see it)"
+            return {
+                "success": True,
+                "item": item,
+                "id": current_id,
+                "pushed": True,
+                "local": local,
+                "branch": branch,
+                "message": f"Created and pushed {current_id} to origin/{branch}: {title}{note}",
+            }
+
+        return self._cas_on_default_branch(build, landed, max_retries, "item")
+
+    def _cas_on_default_branch(
+        self,
+        build: Callable[[str], tuple[dict[Path, str], str]],
+        landed: Callable[[str, bool], dict[str, Any]],
+        max_retries: int,
+        what: str,
+    ) -> dict[str, Any]:
+        """Compare-and-swap one commit onto the remote's default branch (#585, #590).
+
+        Each attempt fetches `origin/<default>`, calls `build(base)` for the files to
+        write (repo-relative path -> text) and the commit message, commits them on
+        `base` in a temporary index (the user's worktree, index and branch are never
+        touched) and pushes `<sha>:refs/heads/<default>`. Only a lost race (a
+        non-fast-forward rejection) is retried, on a fresh base; any other refusal,
+        an unreachable remote or a timeout fails at once with git's own words and
+        leaves nothing behind. Once the push lands, a checkout on the default branch
+        is fast-forwarded and `landed(branch, local)` makes the result."""
         failed = self._push_failed
         branch = "main"
         try:
             branch = self._default_branch()
-            return self._race_to_branch(
-                branch, item_type, title, priority, assignee, description, tags,
-                max_retries, content, item_id,
-            )
+            return self._race_to_branch(branch, build, landed, max_retries, what)
+        except _CasRefusedError as e:
+            return failed(str(e))
         except subprocess.TimeoutExpired as e:
             if "push" in [str(a) for a in (e.cmd or [])]:
                 return failed(
                     f"Timed out pushing to origin/{branch}: the push may have landed. "
-                    f"Check origin/{branch} (git fetch origin, then look for the item) "
+                    f"Check origin/{branch} (git fetch origin, then look for the {what}) "
                     "before creating it again"
                 )
             return failed(
@@ -1872,36 +1962,28 @@ class KanbanService:
         match = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", asked.stdout, re.M)
         return match.group(1) if match else "main"
 
+    def _fetch_default(self, branch: str) -> subprocess.CompletedProcess[str]:
+        """Fetch exactly `origin/<branch>` (#585)."""
+        return self._git_run(
+            "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+        )
+
     def _race_to_branch(
         self,
         branch: str,
-        item_type: WorkItemType,
-        title: str,
-        priority: str,
-        assignee: str | None,
-        description: str | None,
-        tags: list[str] | None,
+        build: Callable[[str], tuple[dict[Path, str], str]],
+        landed: Callable[[str, bool], dict[str, Any]],
         max_retries: int,
-        content: str | None,
-        item_id: str | None,
+        what: str,
     ) -> dict[str, Any]:
-        """The fetch / build / push loop of `_create_on_default_branch`. Only a lost
-        race (a non-fast-forward rejection) is retried; any other refusal fails at
-        once with the remote's own words."""
-        import json
+        """The fetch / build / push loop of `_cas_on_default_branch`."""
         import tempfile
 
         failed = self._push_failed
-        top = self._git_toplevel()
-        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
-        lock_rel = self._repo_relative(lock_file, top)
-
         attempts = max(1, max_retries)
         last_err = ""
         for attempt in range(attempts):
-            fetch = self._git_run(
-                "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-            )
+            fetch = self._fetch_default(branch)
             if fetch.returncode != 0:
                 return failed(
                     f"Could not fetch origin/{branch} from the remote: "
@@ -1911,25 +1993,7 @@ class KanbanService:
 
             self._items.clear()
             self.scan()
-            current_id = item_id or self._next_item_id(
-                item_type, self._next_id_number_at(base, self._get_type_prefix(item_type))
-            )
-            item, text = self._new_item(
-                item_type, title, current_id, priority, assignee, description, tags, content
-            )
-            item_rel = self._repo_relative(item.file_path, top)
-            if item_rel is None or lock_rel is None:
-                return failed(f"{item.file_path} is outside the git repository at {top}")
-
-            shown = self._git_run("show", f"{base}:{lock_rel.as_posix()}")
-            try:
-                allocations = json.loads(shown.stdout) if shown.returncode == 0 else []
-            except Exception:
-                allocations = []
-            blobs = {
-                item_rel: text,
-                lock_rel: self._with_allocation(allocations, item_type, current_id),
-            }
+            blobs, message = build(base)
 
             # Build the commit on `base` without touching the worktree or the index
             with tempfile.TemporaryDirectory() as tmp:
@@ -1954,8 +2018,7 @@ class KanbanService:
                             f"{self._git_output(hook)} (nothing was created)"
                         )
                 commit = self._git_run(
-                    "commit-tree", tree.stdout.strip(), "-p", base,
-                    "-m", f"Create {current_id}: {title}",
+                    "commit-tree", tree.stdout.strip(), "-p", base, "-m", message
                 )
                 steps.append(commit)
             bad = next((s for s in steps if s.returncode != 0), None)
@@ -1978,7 +2041,7 @@ class KanbanService:
                 )
                 continue
 
-            # The item has landed: from here on nothing may turn this into a failure
+            # It has landed: from here on nothing may turn this into a failure
             # (#603) — a checkout that can't be fast-forwarded just isn't updated
             try:
                 head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
@@ -1986,32 +2049,41 @@ class KanbanService:
                     self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
                 )
             except (subprocess.TimeoutExpired, OSError) as e:
-                logger.warning(f"Pushed {current_id}, but the local checkout was not updated: {e}")
+                logger.warning(f"Pushed {sha[:12]}, but the local checkout was not updated: {e}")
                 local = False
-            if local:
-                self._items[current_id] = item
-            self._fire_create_hook(item)
-            note = "" if local else f" (not in this checkout yet: pull {branch} to see it)"
-            return {
-                "success": True,
-                "item": item,
-                "id": current_id,
-                "pushed": True,
-                "local": local,
-                "branch": branch,
-                "message": f"Created and pushed {current_id} to origin/{branch}: {title}{note}",
-            }
+            return landed(branch, local)
 
         # Best effort: leave origin/<default> showing the commits that beat us
         with suppress(subprocess.TimeoutExpired, OSError):
-            self._git_run(
-                "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-            )
+            self._fetch_default(branch)
         return failed(
-            f"Failed to create item: the push to origin/{branch} was rejected "
+            f"Failed to create the {what}: the push to origin/{branch} was rejected "
             f"{attempts} time(s) (lost the race to another writer each attempt); "
             f"nothing was left behind — retry. Last rejection: {last_err}"
         )
+
+    def _next_id_at(self, base: str, prefix: str) -> str:
+        """The next `prefix-NNN` id: past the scanned board and past what commit
+        `base` holds (#590)."""
+        num = max(self._get_next_id_number(prefix), self._next_id_number_at(base, prefix))
+        return f"{prefix}-{num:03d}"
+
+    def _allocation_blob(self, base: str, prefix: str, current_id: str) -> dict[Path, str]:
+        """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
+        `current_id`, keyed by its repo-relative path."""
+        import json
+
+        lock_rel = self._repo_relative(
+            self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", self._git_toplevel()
+        )
+        if lock_rel is None:
+            raise _CasRefusedError(f"{self.repo_root} is outside the git repository")
+        shown = self._git_run("show", f"{base}:{lock_rel.as_posix()}")
+        try:
+            allocations = json.loads(shown.stdout) if shown.returncode == 0 else []
+        except Exception:
+            allocations = []
+        return {lock_rel: self._with_allocation(allocations, prefix, current_id)}
 
     def _git_run(
         self,
@@ -2038,14 +2110,10 @@ class KanbanService:
             **extra,
         )
 
-    def _next_item_id(self, item_type: WorkItemType, floor: int) -> str:
-        """The next id for `item_type`: past the scanned board and past `floor`."""
-        prefix = self._get_type_prefix(item_type)
-        return f"{prefix}-{max(self._get_next_id_number(prefix), floor):03d}"
-
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
-        """Next id number for `prefix` as commit `rev` sees it: item filenames under
-        the work paths plus the allocation records committed there (#585)."""
+        """Next id number for `prefix` as commit `rev` sees it: item filenames and
+        frontmatter ids under the work paths, plus the allocation records committed
+        there (#585, #590)."""
         import json
 
         top = self._git_toplevel()
@@ -2061,6 +2129,18 @@ class KanbanService:
                 stem = Path(name).stem
                 if name.endswith(".md") and stem.startswith(prefix + "-"):
                     match = re.match(r"(\d+)", stem[len(prefix) + 1:])
+                    if match:
+                        max_num = max(max_num, int(match.group(1)))
+            # frontmatter ids too: `notes.md` may say `id: EXP-007` (#590)
+            specs = [
+                f":(top,glob){'' if rel in ('', '.') else rel.rstrip('/') + '/'}**/*.md"
+                for rel in rels
+            ]
+            grep = self._git_run("grep", "-h", "-I", "-E", "^id:[[:space:]]", rev, "--", *specs)
+            for line in grep.stdout.splitlines():
+                found = re.match(r"id:\s*[\"']?([^\"'\s]+)", line)
+                if found and found.group(1).startswith(prefix + "-"):
+                    match = re.search(r"(\d+)$", found.group(1))
                     if match:
                         max_num = max(max_num, int(match.group(1)))
         lock_rel = self._repo_relative(self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top)
@@ -2105,7 +2185,7 @@ class KanbanService:
         return item, item.to_markdown()
 
     def _with_allocation(
-        self, allocations: list[dict[str, Any]], item_type: WorkItemType, current_id: str
+        self, allocations: list[dict[str, Any]], prefix: str, current_id: str
     ) -> str:
         """`allocations` plus a record for `current_id` (last 100), as JSON text."""
         import json
@@ -2116,7 +2196,7 @@ class KanbanService:
             *allocations,
             {
                 "id": current_id,
-                "prefix": self._get_type_prefix(item_type),
+                "prefix": prefix,
                 "number": int(num_match.group(1)) if num_match else 0,
                 "allocated_at": datetime.now().isoformat(),
                 "allocated_by": self._get_git_user(),
@@ -2740,11 +2820,10 @@ class KanbanService:
         """Allocate the next available ID for a prefix with git synchronization.
 
         This method prevents duplicate IDs when multiple agents create work items
-        concurrently by:
-        1. Fetching latest changes from remote (if sync_remote=True)
-        2. Scanning all files to find the highest ID
-        3. Writing an allocation lock file and committing it
-        4. Returning the allocated ID
+        concurrently. With a remote (and sync_remote and commit_allocation), the
+        allocation record is committed onto the fetched default branch and pushed
+        as a compare-and-swap; a lost race retries with a new id (#590). Otherwise
+        the record is committed locally.
 
         Args:
             prefix: The ID prefix (e.g., "EXP", "FEAT", "BUG")
@@ -2755,83 +2834,69 @@ class KanbanService:
             dict with 'id', 'prefix', 'number', and 'success' keys
         """
         import json
-        from datetime import datetime
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
         prefix = prefix.upper()
 
-        # Step 1: Fetch latest from remote
-        if sync_remote:
-            try:
-                result = subprocess.run(
-                    ["git", "fetch", "origin"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode != 0:
-                    logger.warning(f"Git fetch failed: {result.stderr}")
-            except subprocess.TimeoutExpired:
-                logger.warning("Git fetch timed out")
-            except Exception as e:
-                logger.warning(f"Git fetch error: {e}")
+        # With a remote, claim the id by compare-and-swap on the default branch, as
+        # `create --push` does (#590): never the checked-out branch, index or tree
+        if sync_remote and commit_allocation and self._has_remote():
+            made: dict[str, Any] = {}
 
-        # Step 2: Re-scan to get latest items
+            def build(base: str) -> tuple[dict[Path, str], str]:
+                made["id"] = self._next_id_at(base, prefix)
+                return (
+                    self._allocation_blob(base, prefix, made["id"]),
+                    f"Allocate ID: {made['id']}",
+                )
+
+            def landed(branch: str, local: bool) -> dict[str, Any]:
+                num = int(made["id"].rsplit("-", 1)[1])
+                return {
+                    "success": True,
+                    "id": made["id"],
+                    "prefix": prefix,
+                    "number": num,
+                    "message": f"Allocated {made['id']} on origin/{branch}",
+                }
+
+            result = self._cas_on_default_branch(build, landed, 3, "allocation")
+            if not result["success"]:
+                return {"success": False, "id": None, "prefix": prefix, "number": None,
+                        "message": result["message"]}
+            return result
+
+        # Otherwise locally: the fetched default branch (when there is one) only
+        # raises the floor
         self._items.clear()
         self.scan()
-
-        # Step 3: Find next available number
         next_num = self._get_next_id_number(prefix)
+        if sync_remote and self._has_remote():
+            try:
+                branch = self._default_branch()
+                if self._fetch_default(branch).returncode == 0:
+                    next_num = max(
+                        next_num,
+                        self._next_id_number_at(f"refs/remotes/origin/{branch}", prefix),
+                    )
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.warning(f"Git fetch failed: {e}")
         item_id = f"{prefix}-{next_num:03d}"
 
-        # Step 4: Write allocation lock file (only if committing)
         if commit_allocation:
             lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
             lock_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Load existing allocations
             allocations = []
             if lock_file.exists():
                 try:
                     allocations = json.loads(lock_file.read_text())
                 except (json.JSONDecodeError, Exception):
                     allocations = []
-
-            # Add new allocation
-            allocation = {
-                "id": item_id,
-                "prefix": prefix,
-                "number": next_num,
-                "allocated_at": datetime.now().isoformat(),
-                "allocated_by": self._get_git_user(),
-            }
-            allocations.append(allocation)
-
-            # Keep only recent allocations (last 100)
-            allocations = allocations[-100:]
-            lock_file.write_text(json.dumps(allocations, indent=2))
-
-        # Step 5: Commit the allocation
-        if commit_allocation:
+            lock_file.write_text(self._with_allocation(allocations, prefix, item_id))
             try:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
-                # Push to remote to claim the ID
-                if sync_remote:
-                    push_result = subprocess.run(
-                        ["git", "push"],
-                        cwd=self.repo_root,
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    if push_result.returncode != 0:
-                        # Push failed - likely another agent allocated an ID
-                        # Pull and retry
-                        logger.warning(f"Push failed, will retry: {push_result.stderr}")
-                        return self._retry_allocation(prefix)
             except GitCommitError as e:
-                # a refused commit is an error, and nothing is pushed (#584)
+                # a refused commit is an error (#584)
                 return {"success": False, "id": None, "prefix": prefix, "message": str(e)}
 
         return {
@@ -2840,31 +2905,6 @@ class KanbanService:
             "prefix": prefix,
             "number": next_num,
             "message": f"Allocated {item_id}",
-        }
-
-    def _retry_allocation(self, prefix: str, max_retries: int = 3) -> dict[str, Any]:
-        """Retry allocation after a conflict."""
-        for attempt in range(max_retries):
-            try:
-                # Pull latest
-                subprocess.run(
-                    ["git", "pull", "--rebase"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    check=True,
-                    timeout=30,
-                )
-                # Try allocation again
-                return self.allocate_next_id(prefix, sync_remote=False, commit_allocation=True)
-            except Exception as e:
-                logger.warning(f"Retry {attempt + 1} failed: {e}")
-
-        return {
-            "success": False,
-            "id": None,
-            "prefix": prefix,
-            "number": None,
-            "message": "Failed to allocate ID after retries",
         }
 
     def _get_git_user(self) -> str:
