@@ -274,8 +274,9 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
     if "transitions" in data:
         data["transitions"] = _clean_transitions(data["transitions"], f"theme file {theme_path}")
     _clean_str_mapping(data, "status_mappings", f"theme file {theme_path}")  # (#613)
-    _drop_folded_status_keys(data, f"theme file {theme_path}")  # (#615)
+    # trap keys first, so the fold dedupe only chooses among usable keys (#712)
     _drop_canonical_trap_keys(data, f"theme file {theme_path}")  # (#701)
+    _drop_folded_status_keys(data, f"theme file {theme_path}")  # (#615)
     _warn_unresolvable_transition_names(data, f"theme file {theme_path}")  # (#683)
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
