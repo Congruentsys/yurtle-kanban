@@ -2383,8 +2383,9 @@ class KanbanService:
         its text, then its number, then no more of an id (`EXP-003-Title` and
         `EXP-003.v2` hold (`EXP-`, 3); `H1.2-Title`, a paper-scoped id, does not hold
         (`H`, 1)) (#661, #685)."""
-        text, num = key  # `_id_key` folds the text; the stem is folded too (#764)
-        rest = stem[len(text):] if stem.upper().startswith(text) else None
+        text, num = key  # `_id_key` folds the text; the stem's head is folded (#764)
+        # the stem's own head slice: an upper-cased stem may be longer (#765, #775)
+        rest = stem[len(text):] if stem[: len(text)].upper() == text else None
         match = re.match(r"(\d+)(?!\d|\.\d)", rest) if rest is not None else None
         return match is not None and int(match.group(1)) == num
 
