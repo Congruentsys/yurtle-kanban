@@ -2825,6 +2825,7 @@ class KanbanService:
             # the CLI says it; no warning as well (#724)
             logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
             return None, "missing"
+        self.refuse_duplicate(parent, "a parent link")  # which copy? (#754)
 
         content, eol = self._read_item_text(parent.file_path)
         new_content, state = self._linked_parent_text(

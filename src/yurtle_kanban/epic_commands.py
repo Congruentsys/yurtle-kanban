@@ -108,6 +108,11 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     if item is None:
         console.print(f"[yellow]Warning: Item {safe(item_id)} not found[/yellow]")
         return False
+    try:  # which copy would get the link is ambiguous (#742, #754)
+        service.refuse_duplicate(item, "a link")
+    except ValueError as e:
+        console.print(f"[yellow]Warning: {safe(e)}[/yellow]", soft_wrap=True)
+        return False
 
     # keep the item file's own line endings (#151)
     content, eol = KanbanService._read_item_text(item.file_path)
@@ -344,6 +349,11 @@ def _do_add(epic_id: str, item_id: str):
     # Verify epic exists
     if epic_id not in service._items:
         raise click.ClickException(f"{epic_id} not found")
+    if (item := service.get_item(item_id)) is not None:
+        try:  # refused, exit 1, before anything is written (#754)
+            service.refuse_duplicate(item, "a link")
+        except ValueError as e:
+            raise click.ClickException(str(e)) from None
 
     if _update_item_related(service, item_id, epic_id):
         console.print(f"Linked [bold]{escape(item_id)}[/bold] → [bold]{escape(epic_id)}[/bold]")
