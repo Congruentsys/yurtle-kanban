@@ -34,8 +34,6 @@ def pull_note(result: dict[str, Any]) -> str:
     """The one line every `--push` create prints when the item landed on the
     remote's default branch but not in this checkout (a feature branch, detached
     HEAD, diverged main): where it is, and to pull (#585, #625)."""
-    branch = result.get("branch") or "main"
-    return (
-        f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
-        f"pull {safe(branch)} to see it[/yellow]"
-    )
+    from .service import pull_note_text
+
+    return f"[yellow]  {safe(pull_note_text(result.get('branch') or 'main'))}[/yellow]"
