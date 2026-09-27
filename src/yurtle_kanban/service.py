@@ -4001,11 +4001,18 @@ class KanbanService:
             if items:
                 # a block list (`key:` then `- item` lines) stays a block list
                 head = m.group("head")[: len(m.group("head")) - len(comment)].strip()
-                # the dash of the list's first item line, a bare `-` included, so a
-                # fresh write keeps the key's own item indent (#695)
-                dash = re.search(r"^([ \t]*)-(?:[ \t]|$)", m.group("rest"), re.MULTILINE)
+                # the dash of the value's FIRST item line (a bare `-` included), with
+                # its own spacing, so a fresh write keeps the key's indent; only when
+                # that first non-blank, non-comment line is an item (#695)
+                first = next(
+                    (ln for ln in m.group("rest").split("\n")
+                     if ln.strip() and not ln.lstrip().startswith("#")),
+                    "",
+                )
+                dash = re.match(r"([ \t]*-)(?:([ \t]+)(?=\S)|[ \t]*$)", first)
                 if not head and dash:
-                    lines = self._block_list_lines(m.group("rest"), f"{dash.group(1)}- ", items)
+                    spaced = dash.group(1) + (dash.group(2) or " ")
+                    lines = self._block_list_lines(m.group("rest"), spaced, items)
                     return f"{m.group('key')}:{comment}{lines}"
             return f"{m.group('key')}: {value}{comment}"
 
