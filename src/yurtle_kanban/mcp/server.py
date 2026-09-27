@@ -361,9 +361,11 @@ class KanbanMCPServer:
             k: v for k, v in arguments.items()
             if not (k in ("allow_unknown", "sync_remote") and v is None)
         }
-        # a missing (or null) required argument is named, not a KeyError (#735)
+        # a missing (or null) required argument is named, not a KeyError (#735);
+        # so is a blank one, `""` or whitespace (#768)
         for key in self._required_args(name):
-            if arguments.get(key) is None:
+            value = arguments.get(key)
+            if value is None or (isinstance(value, str) and not value.strip()):
                 return {"error": f"{key} is required"}
         for key in ("item_id", "prefix"):
             if key in arguments and not isinstance(arguments[key], str):
