@@ -186,22 +186,32 @@ class UnifiedGraph:
         triples: list[tuple[Any, Any, Any]], dropped: list[tuple[Any, Any, Any]]
     ) -> set[BNode]:
         """Blank nodes reachable only through dropped triples (a forged
-        `kb:comment`'s author/text): skipped too, so they don't merge as orphans
-        (#726). A blank node any kept triple points at stays."""
+        `kb:comment`'s author/text, nested nodes, self-loops and cycles included):
+        skipped too, so they don't merge as orphans. A blank node that a kept triple
+        from outside that set points at stays, with everything under it (#726)."""
+        children: dict[Any, list[BNode]] = {}
+        for s, _, o in triples:
+            if isinstance(o, BNode):
+                children.setdefault(s, []).append(o)
+
+        def closure(seeds: list[BNode]) -> set[BNode]:
+            seen: set[BNode] = set()
+            todo = list(seeds)
+            while todo:
+                node = todo.pop()
+                if node not in seen:
+                    seen.add(node)
+                    todo.extend(children.get(node, ()))
+            return seen
+
         dropped_set = set(dropped)
-        kept_refs = {t[2] for t in triples if t not in dropped_set and isinstance(t[2], BNode)}
-        todo = [o for _, _, o in dropped if isinstance(o, BNode) and o not in kept_refs]
-        orphans: set[BNode] = set()
-        while todo:
-            node = todo.pop()
-            if node in orphans:
-                continue
-            orphans.add(node)
-            todo.extend(
-                o for s, _, o in triples
-                if s == node and isinstance(o, BNode) and o not in orphans
-            )
-        return orphans
+        cand = closure([o for _, _, o in dropped if isinstance(o, BNode)])
+        safe = closure([
+            o for t in triples
+            if t not in dropped_set and t[0] not in cand
+            for o in (t[2],) if isinstance(o, BNode)
+        ])
+        return cand - safe
 
     def add_items(self, items: list[WorkItem]) -> None:
         """Add multiple work items."""
