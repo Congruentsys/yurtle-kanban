@@ -2392,8 +2392,10 @@ class KanbanService:
     def _stem_id(cls, stem: str, prefix: str) -> int | None:
         """The id number a filename stem starts with in `prefix`'s space
         (`EXP-608-Some-Title` -> 608), or None; case folded, `exp-608-…` too (#752)."""
-        head = (prefix + cls._id_sep(prefix)).upper()
-        match = re.match(r"(\d+)", stem[len(head):]) if stem.upper().startswith(head) else None
+        head = prefix + cls._id_sep(prefix)
+        # the stem's own head slice, folded: an upper-cased stem may be longer (#765)
+        held = stem[: len(head)].upper() == head.upper()
+        match = re.match(r"(\d+)", stem[len(head):]) if held else None
         return int(match.group(1)) if match else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
@@ -2504,16 +2506,12 @@ class KanbanService:
         import json
 
         top = self._git_toplevel()
-        head = prefix + self._id_sep(prefix)
         names, ids = self._ids_at(rev)
         max_num = 0
         for name in names:
             max_num = max(max_num, self._stem_id(Path(name).stem, prefix) or 0)
         for _, found in ids:
-            if found.upper().startswith(head.upper()):  # `exp-12` too (#752)
-                match = re.search(r"(\d+)$", found)
-                if match:
-                    max_num = max(max_num, int(match.group(1)))
+            max_num = max(max_num, self._number_in_space(found, prefix))  # (#752, #765)
         lock_rel = self._repo_relative(self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top)
         if lock_rel is not None:
             shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}")
@@ -2620,6 +2618,14 @@ class KanbanService:
         return prefixes.get(item_type, "ITEM")
 
     @classmethod
+    def _number_in_space(cls, item_id: str, prefix: str) -> int:
+        """`item_id`'s number when it is in `prefix`'s id space, judged as
+        `_id_space` judges it, case folded (`idea-r-3` is in `IDEA-R`, not `IDEA`;
+        `H130.2` is in `H130.`, not `H`), else 0 (#752, #765)."""
+        found = cls._id_space(item_id)
+        return found[1] if found is not None and found[0].upper() == prefix.upper() else 0
+
+    @classmethod
     def _max_allocated(cls, allocations: list[dict[str, Any]], prefix: str) -> int:
         """Highest number `allocations` records in `prefix`'s id space, judged by
         each record's id alone (#641): `H130.7` counts in `H130.`, never in the
@@ -2687,15 +2693,9 @@ class KanbanService:
             except (json.JSONDecodeError, Exception):
                 pass
 
-        # Source 2: Check IDs from parsed items
-        # Use regex to extract trailing number — handles multi-segment prefixes
-        # like IDEA-R-003 where split("-")[1] would give "R" not "003"
-        head = prefix + self._id_sep(prefix)  # `H130.` has no dash (#634)
+        # Source 2: IDs from parsed items, in prefix's own id space (#765)
         for existing_id in self._items.keys():
-            if existing_id.upper().startswith(head.upper()):  # `exp-12` too (#752)
-                match = re.search(r"(\d+)$", existing_id)
-                if match:
-                    max_num = max(max_num, int(match.group(1)))
+            max_num = max(max_num, self._number_in_space(existing_id, prefix))  # (#765)
 
         # Source 3: Scan filenames directly to catch files without frontmatter
         for scan_path in self.config.get_work_paths():
