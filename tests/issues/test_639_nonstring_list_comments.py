@@ -21,10 +21,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.issues.test_596_frontmatter_keys_layout import (  # noqa: F401  (fixture)
     FM_TAIL,
     ITEM_ID,
+    _fm_lines,
     _service,
     _write,
     repo,
@@ -161,3 +163,28 @@ def test_no_comment_line_items_keep_comment_and_spelling(
 ) -> None:
     old, new = _edit(repo, BARE, tags=tags)
     assert new == old.replace(BARE, expected), f"item comment/spelling lost:\n{new}"
+
+
+# ---------------------------------------------------------------------------
+# 5. a new value with literal quotes doesn't match an old quoted item (PR #649)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("old_item", "new_tag"),
+    [
+        pytest.param('"a b"', '"a b"', id="double-quoted"),
+        pytest.param("'k: v'", "'k: v'", id="single-quoted"),
+    ],
+)
+@pytest.mark.parametrize("comment_line", ["", "  # c\n"], ids=["no-comment-line", "comment-line"])
+def test_literal_quoted_value_round_trips(
+    repo: Path, old_item: str, new_tag: str, comment_line: str
+) -> None:
+    block = f"tags:\n{comment_line}  - {old_item} # q\n  - z\n"
+    tags = [new_tag, "z"]
+    _, new = _edit(repo, block, tags=tags)
+    parsed = yaml.safe_load("\n".join(_fm_lines(new)))
+    assert parsed["tags"] == tags, f"literal-quoted value changed:\n{new}"
+    item = _service(repo).get_item(ITEM_ID)
+    assert item is not None and item.tags == tags, item and item.tags
