@@ -1477,7 +1477,7 @@ class TestMoveAssignMissingKey:
         assert self._frontmatter(item.file_path)["assignee"] is None
 
     def test_move_adds_assignee_when_key_absent(self, temp_repo, nautical_config):
-        """A hand-written file with no assignee: key gains one on move -a."""
+        """A hand-written file with no assignee: key gains one on move --assign."""
         svc = KanbanService(nautical_config, temp_repo)
         path = temp_repo / "kanban-work" / "expeditions" / "EXP-001-probe.md"
         path.write_text(
@@ -1516,14 +1516,14 @@ class TestMoveAssignMissingKey:
     def test_cli_create_then_move_assign_is_listed(
         self, temp_repo, nautical_config, monkeypatch,
     ):
-        """The issue's repro: create → move -a → list --assignee finds the item."""
+        """The issue's repro: create → move --assign → list --assignee finds the item."""
         runner = CliRunner()
         monkeypatch.chdir(temp_repo)
 
         for args in (
             ["create", "expedition", "probe"],
             ["move", "EXP-001", "ready", "--no-commit"],
-            ["move", "EXP-001", "in_progress", "-a", "agent-x", "--no-commit"],
+            ["move", "EXP-001", "in_progress", "--assign", "agent-x", "--no-commit"],
         ):
             result = runner.invoke(main, args, catch_exceptions=False)
             assert result.exit_code == 0, result.output
@@ -2095,11 +2095,11 @@ class TestFrontmatterValuesRoundTrip:
     def test_move_assign_special_value_round_trips(
         self, temp_repo, software_config, monkeypatch, value,
     ):
-        """`move FEAT-001 ready -a <value>` reads back exactly <value>."""
+        """`move FEAT-001 ready --assign <value>` reads back exactly <value>."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         self._run(runner, ["create", "feature", "probe"])
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", value, "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", value, "--no-commit"])
 
         self._assert_reads_back(runner, temp_repo, value)
 
@@ -2109,10 +2109,10 @@ class TestFrontmatterValuesRoundTrip:
     def test_create_assignee_special_value_round_trips(
         self, temp_repo, software_config, monkeypatch, value,
     ):
-        """`create feature probe --assignee <value>` reads back exactly <value>."""
+        """`create feature probe --assign <value>` reads back exactly <value>."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
-        self._run(runner, ["create", "feature", "probe", "--assignee", value])
+        self._run(runner, ["create", "feature", "probe", "--assign", value])
 
         self._assert_reads_back(runner, temp_repo, value)
 
@@ -2126,7 +2126,7 @@ class TestFrontmatterValuesRoundTrip:
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         self._run(runner, ["create", "feature", "probe"])
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", value, "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", value, "--no-commit"])
 
         front = self._frontmatter_text(self._item_file(temp_repo, "FEAT-001"))
         assert f"\nassignee: {value}\n" in f"\n{front}\n"
@@ -2142,7 +2142,7 @@ class TestFrontmatterValuesRoundTrip:
         runner = CliRunner()
         self._run(
             runner,
-            ["create", "feature", "probe", "--assignee", value, "--priority", "high"],
+            ["create", "feature", "probe", "--assign", value, "--priority", "high"],
         )
 
         front = self._frontmatter_text(self._item_file(temp_repo, "FEAT-001"))
@@ -2257,7 +2257,7 @@ class TestFrontmatterEditReplacesWholeValue:
     def test_move_assign_replaces_block_list_assignee(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """`move -a carol` over `assignee:\\n  - alice\\n  - bob` yields exactly carol."""
+        """`move --assign carol` over `assignee:\\n  - alice\\n  - bob` yields exactly carol."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         path = self._setup(
@@ -2265,7 +2265,7 @@ class TestFrontmatterEditReplacesWholeValue:
             "status: backlog\npriority: medium\nassignee:\n  - alice\n  - bob\n",
         )
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         assert self._show(runner)["assignee"] == "carol"
         assert self._listed_for(runner, "carol") == ["FEAT-001"]
@@ -2289,7 +2289,7 @@ class TestFrontmatterEditReplacesWholeValue:
         )
         assert self._frontmatter(path)["assignee"] == "carol smith"
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "dave", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "dave", "--no-commit"])
 
         assert self._show(runner)["assignee"] == "dave"
         assert self._listed_for(runner, "dave") == ["FEAT-001"]
@@ -2392,7 +2392,7 @@ class TestFrontmatterEditReplacesWholeValue:
             "status: backlog\npriority: medium\nassignee: alice\n",
         )
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         front, _ = self._split(path)
         assert front == (
@@ -2423,7 +2423,7 @@ class TestFrontmatterEditReplacesWholeValue:
             "assignee_note: keep me\n",
         )
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         front, _ = self._split(path)
         assert "\nassignee: carol\nassignee_note: keep me\n" in f"\n{front}\n"
@@ -2497,7 +2497,7 @@ class TestFrontmatterEditReplacesWholeValue:
     def test_move_assign_replaces_literal_block_with_paragraph_break(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """`move -a carol` over a two-paragraph `assignee: |` yields exactly carol."""
+        """`move --assign carol` over a two-paragraph `assignee: |` yields exactly carol."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         path = self._setup(
@@ -2506,7 +2506,7 @@ class TestFrontmatterEditReplacesWholeValue:
             "assignee: |\n  alice\n\n  bob\n",
         )
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         assert self._show(runner)["assignee"] == "carol"
         assert self._listed_for(runner, "carol") == ["FEAT-001"]
@@ -2529,7 +2529,7 @@ class TestFrontmatterEditReplacesWholeValue:
         )
         assert self._frontmatter(path)["assignee"] == ["alice", "bob"]
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         assert self._show(runner)["assignee"] == "carol"
         assert self._listed_for(runner, "carol") == ["FEAT-001"]
@@ -2551,7 +2551,7 @@ class TestFrontmatterEditReplacesWholeValue:
             "status: backlog\npriority: medium\nassignee: alice\n\n",
         )
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         front, _ = self._split(path)
         assert "\nassignee: carol\n\ncreated: 2026-09-24\n" in f"\n{front}\n"
@@ -2579,7 +2579,7 @@ class TestFrontmatterEditReplacesWholeValue:
             "---\n" + self._BODY
         )
 
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         front, body = self._split(path)
         assert front.endswith("\nassignee: carol\n"), repr(front)
@@ -2657,7 +2657,7 @@ class TestFrontmatterEditEdgeCases:
     def test_move_assign_consumes_comment_inside_block_list(
         self, temp_repo, software_config, monkeypatch, assignee_block,
     ):
-        """`move -a carol` over a block list with a comment line inside it yields carol."""
+        """`move --assign carol` over a block list with a comment line inside it yields carol."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         path = self._w._setup(
@@ -2665,7 +2665,7 @@ class TestFrontmatterEditEdgeCases:
         )
         assert self._w._frontmatter(path)["assignee"] == ["a", "b"]
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         fm = self._w._frontmatter(path)
         assert fm["assignee"] == "carol"
@@ -2696,7 +2696,7 @@ class TestFrontmatterEditEdgeCases:
             f"status: backlog\npriority: medium\n{assignee_block}# about created\n",
         )
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         front, _ = self._w._split(path)
         assert "\nassignee: carol\n# about created\ncreated: 2026-09-24\n" in (
@@ -2710,14 +2710,14 @@ class TestFrontmatterEditEdgeCases:
     def test_crlf_move_updates_status_and_assignee(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """`move ready -a carol` on a CRLF file replaces both values; no bare LF appears."""
+        """`move ready --assign carol` on a CRLF file replaces both values; no bare LF appears."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         path = self._setup_crlf(
             temp_repo, runner, "status: backlog\npriority: medium\nassignee: alice\n",
         )
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         self._assert_all_crlf(path)
         fm = self._w._frontmatter(path)
@@ -2738,7 +2738,7 @@ class TestFrontmatterEditEdgeCases:
             "status: backlog\npriority: medium\nassignee:\n  - alice\n  - bob\n",
         )
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         self._assert_all_crlf(path)
         fm = self._w._frontmatter(path)
@@ -2750,12 +2750,12 @@ class TestFrontmatterEditEdgeCases:
     def test_crlf_move_appends_missing_assignee(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """`move -a carol` on a CRLF file with no `assignee:` appends it with CRLF."""
+        """`move --assign carol` on a CRLF file with no `assignee:` appends it with CRLF."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         path = self._setup_crlf(temp_repo, runner, "status: backlog\npriority: medium\n")
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         self._assert_all_crlf(path)
         fm = self._w._frontmatter(path)
@@ -2822,7 +2822,7 @@ class TestFrontmatterEditEdgeCases:
         assert fm["priority"] == "high"
         assert self._w._show(runner)["priority"] == "high"
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         fm = self._w._frontmatter(path)
         assert fm["assignee"] == "carol"
@@ -2871,14 +2871,14 @@ class TestFrontmatterEditEdgeCases:
     def test_control_lf_move_introduces_no_cr(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """On an LF file, `move -a` writes no CR anywhere and keeps the frontmatter exact."""
+        """On an LF file, `move --assign` writes no CR anywhere and keeps the frontmatter exact."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         path = self._w._setup(
             temp_repo, runner, "status: backlog\npriority: medium\nassignee: alice\n",
         )
 
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         data = path.read_bytes()
         assert b"\r" not in data
@@ -3262,7 +3262,7 @@ class TestFrontmatterOpeningLineComment:
         monkeypatch.chdir(temp_repo)
         path = self._write(temp_repo, opener)
         runner = CliRunner()
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
 
         first, front, body = self._split(path)
         assert first == opener, path.read_text()
@@ -3287,7 +3287,7 @@ class TestFrontmatterOpeningLineComment:
         path = self._write(temp_repo, "--- # generated", closer="--- # end")
         runner = CliRunner()
         assert [i["id"] for i in self._list(runner)] == ["FEAT-001"]
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
         first, front, body = self._split(path, closer="--- # end")
         assert first == "--- # generated"
         fm = yaml.safe_load(front)
@@ -3377,7 +3377,7 @@ class TestFrontmatterOpeningLineComment:
         ]
         data = json.loads(self._run(runner, ["show", "FEAT-001", "--json"]).output)
         assert data["id"] == "FEAT-001"
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
         first, front, body = self._split(path)
         assert first == "---"
         fm = yaml.safe_load(front)
@@ -3390,7 +3390,7 @@ class TestFrontmatterOpeningLineComment:
         """A `---` rule in the body is body text, not a frontmatter boundary."""
         monkeypatch.chdir(temp_repo)
         path = self._write(temp_repo, "---")
-        self._run(CliRunner(), ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(CliRunner(), ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
         _, front, body = self._split(path)
         assert "assignee: carol" in front
         assert "assignee" not in body
@@ -3405,7 +3405,7 @@ class TestFrontmatterOpeningLineComment:
         path = self._write(temp_repo, "---", closer="--- # end")
         runner = CliRunner()
         assert [i["id"] for i in self._list(runner)] == ["FEAT-001"]
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
         _, front, body = self._split(path, closer="--- # end")
         fm = yaml.safe_load(front)
         assert (fm["status"], fm["assignee"]) == ("ready", "carol")
@@ -3486,11 +3486,17 @@ class TestStatusChangeTurtleEscaping:
         return values
 
     def _two_moves(self, runner: CliRunner, agent: str) -> None:
+        # #580: kb:by is the ACTOR (`--agent`), not the assignee; pass both so the
+        # frontmatter assignee (#104) and kb:by (#120) each see `agent`.
         self._run(runner, ["create", "feature", "probe"])
-        self._run(runner, ["move", "FEAT-001", "ready", "-a", agent, "--no-commit"])
         self._run(
             runner,
-            ["move", "FEAT-001", "in_progress", "-a", agent, "--no-commit", "--force"],
+            ["move", "FEAT-001", "ready", "--assign", agent, "--agent", agent, "--no-commit"],
+        )
+        self._run(
+            runner,
+            ["move", "FEAT-001", "in_progress", "--assign", agent, "--agent", agent,
+             "--no-commit", "--force"],
         )
 
     # -- the bug: special agent names ----------------------------------------
@@ -3501,14 +3507,14 @@ class TestStatusChangeTurtleEscaping:
             pytest.param('x"y', id="double-quote"),
             pytest.param("a\\b", id="backslash"),
             pytest.param('say "hi"\\', id="quote-and-trailing-backslash"),
-            pytest.param("x\ny", id="newline"),
-            pytest.param("x\ry", id="carriage-return"),
+            # newline / CR agents: refused at the CLI since #580, see
+            # test_newline_injection_is_refused_at_the_cli
         ],
     )
     def test_special_agent_block_parses_and_kb_by_exact(
         self, temp_repo, software_config, monkeypatch, agent,
     ):
-        """After two `move -a <agent>`, the block parses and both kb:by == agent."""
+        """After two `move --agent <agent>`, the block parses and both kb:by == agent."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         self._two_moves(runner, agent)
@@ -3535,22 +3541,26 @@ class TestStatusChangeTurtleEscaping:
         assert (None, status, URIRef(self.KB + "done")) not in g
         assert self._by_values(path) == [agent, agent]
 
-    def test_newline_injection_adds_no_triples(
-        self, temp_repo, software_config, monkeypatch,
+    @pytest.mark.parametrize("flag", ["--agent", "--assign"])
+    def test_newline_injection_is_refused_at_the_cli(
+        self, temp_repo, software_config, monkeypatch, flag,
     ):
-        """A newline-bearing agent can't smuggle a new statement into the graph."""
-        from rdflib import URIRef
+        """A newline-bearing agent can't smuggle a new statement into the graph.
 
+        #580: identity inputs holding a control character are refused (exit 1)
+        before anything is written, so the item gains no status change at all.
+        """
         agent = 'x" ;\n] .\n<> kb:status kb:done .\n<> kb:statusChange [\n kb:by "y'
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
-        self._two_moves(runner, agent)
-
-        path = self._item_file(temp_repo)
-        g, nodes = self._changes(path)
-        assert len(nodes) == 2, nodes
-        assert (None, URIRef(self.KB + "status"), URIRef(self.KB + "done")) not in g
-        assert self._by_values(path) == [agent, agent]
+        self._run(runner, ["create", "feature", "probe"])
+        result = runner.invoke(
+            main, ["move", "FEAT-001", "ready", flag, agent, "--no-commit"],
+        )
+        assert result.exit_code == 1, result.output
+        text = self._item_file(temp_repo).read_text()
+        assert "kb:statusChange" not in text
+        assert "kb:done" not in text
 
     @pytest.mark.parametrize(
         "agent",
@@ -3582,7 +3592,7 @@ class TestStatusChangeTurtleEscaping:
     def test_git_user_name_with_quote_is_escaped(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """With no -a, kb:by is the git user.name — escaped just the same."""
+        """With no --agent (and no YURTLE_AGENT), kb:by is the git user.name — escaped just the same."""
         import subprocess
 
         name = 'Ann "Nan" O\\Brien'
@@ -3603,7 +3613,7 @@ class TestStatusChangeTurtleEscaping:
         [
             pytest.param('x"y', id="double-quote"),
             pytest.param("a\\b", id="backslash"),
-            pytest.param("x\ny", id="newline"),
+            # "x\ny" (#580): a newline agent is refused now, not stored
             pytest.param("Claude-M5", id="plain-control"),
         ],
     )
@@ -3640,7 +3650,7 @@ class TestStatusChangeTurtleEscaping:
     def test_control_plain_git_user_written_textually_unchanged(
         self, temp_repo, software_config, monkeypatch,
     ):
-        """With no -a, the fixture's git user `Test` is written plain."""
+        """With no --agent (and no YURTLE_AGENT), the fixture's git user `Test` is written plain."""
         monkeypatch.chdir(temp_repo)
         runner = CliRunner()
         self._run(runner, ["create", "feature", "probe"])
@@ -4954,7 +4964,7 @@ class TestMixedLineEndingsKeepUntouchedLinesIssue151:
             assert not new.endswith(b"\r\r\n"), new
 
     def _move_and_check(self, runner: CliRunner, path: Path) -> None:
-        self._w._run(runner, ["move", "FEAT-001", "ready", "-a", "carol", "--no-commit"])
+        self._w._run(runner, ["move", "FEAT-001", "ready", "--assign", "carol", "--no-commit"])
         fm = self._w._frontmatter(path)
         assert fm["status"] == "ready"
         assert fm["assignee"] == "carol"
