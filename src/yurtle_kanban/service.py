@@ -83,6 +83,12 @@ _THEME_STATUS_NAMES: dict[str, dict[str, WorkItemStatus]] = {
     },
 }
 
+
+def _fold_status_name(name: str) -> str:
+    """A status name as `move` matches it: lower-case, `-` and spaces → `_` (#587)."""
+    return name.lower().replace("-", "_").replace(" ", "_")
+
+
 # HDD types eligible for turtle block backfill
 _BACKFILL_TYPES = frozenset({"idea", "literature", "paper", "hypothesis", "experiment", "measure"})
 
@@ -468,18 +474,21 @@ class KanbanService:
         board_config, theme = self._item_theme(item)
         theme_name = board_config.preset if board_config else self.config.theme
         names = {s.value: s for s in WorkItemStatus}
-        names.update(_THEME_STATUS_NAMES.get(theme_name, {}))
+        for native, status in _THEME_STATUS_NAMES.get(theme_name, {}).items():
+            names[_fold_status_name(native)] = status
         for native, canonical in ((theme or {}).get("status_mappings") or {}).items():
             try:
-                names.setdefault(str(native).lower(), WorkItemStatus.from_string(str(canonical)))
+                status = WorkItemStatus.from_string(str(canonical))
             except ValueError:
                 continue
+            # keys folded like the input, so `on-hold`/`In Review` match (#587)
+            names.setdefault(_fold_status_name(str(native)), status)
         return names
 
     def resolve_status_name(self, item: WorkItem, name: str) -> WorkItemStatus | None:
         """`name` as a status of `item`'s theme (case-insensitive, `-`/space → `_`),
         or None when the item's theme has no such name (#587)."""
-        return self.legal_status_names(item).get(name.lower().replace("-", "_").replace(" ", "_"))
+        return self.legal_status_names(item).get(_fold_status_name(name))
 
     def status_label(self, item: WorkItem) -> str:
         """The item's status as its theme names it (hdd `draft` for backlog), for
