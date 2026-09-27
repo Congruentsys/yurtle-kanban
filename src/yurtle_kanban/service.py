@@ -64,6 +64,25 @@ _LIT = Namespace(PREFIXES["lit"])
 # HDD type aliases for backfill (normalize variant names to canonical types)
 _TYPE_ALIASES: dict[str, str] = {"secondary-hypothesis": "hypothesis"}
 
+# status names hardcoded per theme, accepted by `move` for that theme's items only
+# (#587): nautical.yaml has no `status_mappings`; spec's names sit under a key the
+# service doesn't read yet (#588)
+_THEME_STATUS_NAMES: dict[str, dict[str, WorkItemStatus]] = {
+    "nautical": {
+        "harbor": WorkItemStatus.BACKLOG,
+        "provisioning": WorkItemStatus.READY,
+        "underway": WorkItemStatus.IN_PROGRESS,
+        "approaching": WorkItemStatus.REVIEW,
+        "arrived": WorkItemStatus.DONE,
+    },
+    "spec": {
+        "draft": WorkItemStatus.BACKLOG,
+        "proposed": WorkItemStatus.READY,
+        "implementing": WorkItemStatus.IN_PROGRESS,
+        "accepted": WorkItemStatus.DONE,
+    },
+}
+
 # HDD types eligible for turtle block backfill
 _BACKFILL_TYPES = frozenset({"idea", "literature", "paper", "hypothesis", "experiment", "measure"})
 
@@ -442,6 +461,25 @@ class KanbanService:
         or on a single board the configured theme (#439)."""
         board_config, theme = self._item_theme(item)
         return self._get_reverse_status_mapping(board_config, theme)
+
+    def legal_status_names(self, item: WorkItem) -> dict[str, WorkItemStatus]:
+        """Every status name `move` accepts for `item` → its status: the six
+        canonical names plus the item's own theme's names, no other theme's (#587)."""
+        board_config, theme = self._item_theme(item)
+        theme_name = board_config.preset if board_config else self.config.theme
+        names = {s.value: s for s in WorkItemStatus}
+        names.update(_THEME_STATUS_NAMES.get(theme_name, {}))
+        for native, canonical in ((theme or {}).get("status_mappings") or {}).items():
+            try:
+                names.setdefault(str(native).lower(), WorkItemStatus.from_string(str(canonical)))
+            except ValueError:
+                continue
+        return names
+
+    def resolve_status_name(self, item: WorkItem, name: str) -> WorkItemStatus | None:
+        """`name` as a status of `item`'s theme (case-insensitive, `-`/space → `_`),
+        or None when the item's theme has no such name (#587)."""
+        return self.legal_status_names(item).get(name.lower().replace("-", "_").replace(" ", "_"))
 
     def status_label(self, item: WorkItem) -> str:
         """The item's status as its theme names it (hdd `draft` for backlog), for
@@ -1340,17 +1378,9 @@ class KanbanService:
             "review": WorkItemStatus.REVIEW,
             "done": WorkItemStatus.DONE,
             "blocked": WorkItemStatus.BLOCKED,
-            # Nautical theme
-            "harbor": WorkItemStatus.BACKLOG,
-            "provisioning": WorkItemStatus.READY,
-            "underway": WorkItemStatus.IN_PROGRESS,
-            "approaching": WorkItemStatus.REVIEW,
-            "arrived": WorkItemStatus.DONE,
-            # Spec theme
-            "draft": WorkItemStatus.BACKLOG,
-            "proposed": WorkItemStatus.READY,
-            "implementing": WorkItemStatus.IN_PROGRESS,
-            "accepted": WorkItemStatus.DONE,
+            # Nautical and spec themes
+            **_THEME_STATUS_NAMES["nautical"],
+            **_THEME_STATUS_NAMES["spec"],
             # HDD theme (Hypothesis-Driven Development)
             "active": WorkItemStatus.IN_PROGRESS,
             "complete": WorkItemStatus.DONE,
