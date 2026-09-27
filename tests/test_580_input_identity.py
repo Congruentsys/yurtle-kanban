@@ -843,7 +843,7 @@ class TestGitStdinDevnull:
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "_git_run"
             )
-        assert literal >= 5, f"found only {literal} literal git calls — is the scan broken?"
+        assert literal >= 4, f"found only {literal} literal git calls — is the scan broken?"
         assert literal + runner >= 20, (
             f"found only {literal} literal + {runner} _git_run calls — is the scan broken?"
         )

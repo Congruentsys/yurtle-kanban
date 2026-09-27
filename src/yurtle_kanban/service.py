@@ -1917,6 +1917,12 @@ class KanbanService:
                 ),
             }
 
+        # the allocation record names who allocated: no actor, nothing is written (#620)
+        try:
+            actor = resolve_actor(None, cwd=self.repo_root)
+        except ValueError as e:
+            return self._push_failed(str(e))
+
         if self._has_remote():
             return self._create_on_default_branch(
                 item_type,
@@ -1928,6 +1934,7 @@ class KanbanService:
                 max_retries=max_retries,
                 content=content,
                 item_id=item_id,
+                actor=actor,
                 render=render,
                 id_prefix=id_prefix,
                 parent=parent,
@@ -1955,7 +1962,7 @@ class KanbanService:
                 allocations = json_mod.loads(lock_file.read_text())
             except Exception:
                 allocations = []
-        lock_file.write_text(self._with_allocation(allocations, current_id))
+        lock_file.write_text(self._with_allocation(allocations, current_id, actor))
 
         paths = [file_path, lock_file]
         linked = parent is not None and self.update_parent_turtle_block(
@@ -1990,6 +1997,7 @@ class KanbanService:
         max_retries: int,
         content: str | None,
         item_id: str | None,
+        actor: str,
         render: Callable[[str], str] | None = None,
         id_prefix: str | None = None,
         parent: str | None = None,
@@ -2031,7 +2039,7 @@ class KanbanService:
                 raise _CasRefusedError(
                     f"{item.file_path} is outside the git repository at {self._git_toplevel()}"
                 )
-            blobs = {item_rel: text, **self._allocation_blob(base, current_id)}
+            blobs = {item_rel: text, **self._allocation_blob(base, current_id, actor)}
             linked = {} if parent is None else self._parent_link_blob(
                 base, parent, item_type.value, current_id
             )
@@ -2314,9 +2322,9 @@ class KanbanService:
                 ids.append((path, found.group(1)))
         return names, ids
 
-    def _allocation_blob(self, base: str, current_id: str) -> dict[Path, str]:
+    def _allocation_blob(self, base: str, current_id: str, actor: str) -> dict[Path, str]:
         """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
-        `current_id`, keyed by its repo-relative path."""
+        `current_id` allocated by `actor`, keyed by its repo-relative path."""
         import json
 
         lock_rel = self._repo_relative(
@@ -2329,7 +2337,7 @@ class KanbanService:
             allocations = json.loads(shown.stdout) if shown.returncode == 0 else []
         except Exception:
             allocations = []
-        return {lock_rel: self._with_allocation(allocations, current_id)}
+        return {lock_rel: self._with_allocation(allocations, current_id, actor)}
 
     def _git_run(
         self,
@@ -2411,8 +2419,11 @@ class KanbanService:
             return item, self._apply_priority(content, priority)
         return item, item.to_markdown()
 
-    def _with_allocation(self, allocations: list[dict[str, Any]], current_id: str) -> str:
-        """`allocations` plus a record for `current_id` (last 100), as JSON text.
+    def _with_allocation(
+        self, allocations: list[dict[str, Any]], current_id: str, actor: str
+    ) -> str:
+        """`allocations` plus a record for `current_id` (last 100), as JSON text,
+        `allocated_by` the resolved `actor` (#620).
         The record's `prefix` is the id space it was allocated in: the id minus its
         number (`EXP`, `IDEA-R`, `H130.`), for explicit and auto ids alike (#641)."""
         import json
@@ -2425,7 +2436,7 @@ class KanbanService:
                 "prefix": space,
                 "number": number,
                 "allocated_at": datetime.now().isoformat(),
-                "allocated_by": self._get_git_user(),
+                "allocated_by": actor,
             },
         ]
         return json.dumps(allocations[-100:], indent=2)
@@ -3064,6 +3075,14 @@ class KanbanService:
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
         prefix = prefix.upper()
+        actor = ""
+        if commit_allocation:
+            # the record names who allocated: no actor, nothing is written (#620)
+            try:
+                actor = resolve_actor(None, cwd=self.repo_root)
+            except ValueError as e:
+                return {"success": False, "id": None, "prefix": prefix, "number": None,
+                        "message": str(e)}
 
         # With a remote, claim the id by compare-and-swap on the default branch, as
         # `create --push` does (#590): never the checked-out branch, index or tree
@@ -3073,7 +3092,7 @@ class KanbanService:
             def build(base: str) -> tuple[dict[Path, str], str]:
                 made["id"] = self._next_id_at(base, prefix)
                 return (
-                    self._allocation_blob(base, made["id"]),
+                    self._allocation_blob(base, made["id"], actor),
                     f"Allocate ID: {made['id']}",
                 )
 
@@ -3118,7 +3137,7 @@ class KanbanService:
                     allocations = json.loads(lock_file.read_text())
                 except (json.JSONDecodeError, Exception):
                     allocations = []
-            lock_file.write_text(self._with_allocation(allocations, item_id))
+            lock_file.write_text(self._with_allocation(allocations, item_id, actor))
             try:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
             except GitCommitError as e:
@@ -3132,13 +3151,6 @@ class KanbanService:
             "number": next_num,
             "message": f"Allocated {item_id}",
         }
-
-    def _get_git_user(self) -> str:
-        """Get current git user name."""
-        try:
-            return self._git_run("config", "user.name").stdout.strip() or "unknown"
-        except Exception:
-            return "unknown"
 
     def move_item(
         self,
@@ -4475,7 +4487,8 @@ class KanbanService:
             expr_id: Experiment ID (e.g., EXPR-130)
             being: Being name/version (e.g., santiago-toddler-v12.4)
             params: Optional key=value parameters
-            run_by: Who started the run (default: git user.name)
+            run_by: Who started the run (`resolve_actor`: explicit, then
+                $YURTLE_AGENT, then git user.name; none is a ValueError)
 
         Returns:
             Path to the created run folder.
@@ -4493,20 +4506,9 @@ class KanbanService:
         for key, val in (params or {}).items():
             self._check_text(**{"params key": key, f"params[{key!r}]": val})
 
-        # Resolve run_by from git config if not provided
-        if run_by is None:
-            try:
-                result = subprocess.run(
-                    ["git", "config", "user.name"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    stdin=subprocess.DEVNULL,
-                )
-                run_by = result.stdout.strip() or "unknown"
-            except subprocess.CalledProcessError:
-                run_by = "unknown"
+        # who started the run: --agent, then $YURTLE_AGENT, then git user.name; no
+        # actor is refused before the run folder exists (#620)
+        run_by = resolve_actor(run_by, cwd=self.repo_root)
 
         # Look up the experiment to get hypothesis link
         item = self.get_item(expr_id)
