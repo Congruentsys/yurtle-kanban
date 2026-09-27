@@ -37,6 +37,7 @@ class KanbanMCPServer:
         self.repo_root = repo_root
         self._service: KanbanService | None = None
         self._names: frozenset[str] | None = None
+        self._required: dict[str, tuple[str, ...]] | None = None
 
     @property
     def service(self) -> KanbanService:
@@ -335,6 +336,15 @@ class KanbanMCPServer:
             self._names = frozenset(tool["name"] for tool in self.get_tools())
         return self._names
 
+    def _required_args(self, name: str) -> tuple[str, ...]:
+        """The arguments tool `name`'s schema requires, read once (#735)."""
+        if self._required is None:
+            self._required = {
+                tool["name"]: tuple(tool.get("inputSchema", {}).get("required", ()))
+                for tool in self.get_tools()
+            }
+        return self._required.get(name, ())
+
     def handle_tool_call(self, name: Any, arguments: Any) -> dict[str, Any]:
         """Handle a tool call and return the result."""
         # an unknown (or non-string) tool first, then the arguments' shape (#728):
@@ -351,6 +361,10 @@ class KanbanMCPServer:
             k: v for k, v in arguments.items()
             if not (k in ("allow_unknown", "sync_remote") and v is None)
         }
+        # a missing (or null) required argument is named, not a KeyError (#735)
+        for key in self._required_args(name):
+            if arguments.get(key) is None:
+                return {"error": f"{key} is required"}
         for key in ("item_id", "prefix"):
             if key in arguments and not isinstance(arguments[key], str):
                 return {"error": f"{key} must be a string"}
