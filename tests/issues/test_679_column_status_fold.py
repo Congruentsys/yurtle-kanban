@@ -3,9 +3,11 @@ keys (#633), so a mapped column whose id isn't already folded keeps its status."
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from yurtle_kanban.models import Board, WorkItemStatus
+from yurtle_kanban.models import Board, Column, WorkItem, WorkItemStatus, WorkItemType
 
 # the service keys the map by the folded theme name (#615, #633)
 FOLDED_MAP = {"on_hold": WorkItemStatus.BLOCKED, "code_review": WorkItemStatus.REVIEW}
@@ -33,10 +35,6 @@ def test_unmapped_unknown_column_has_no_status():
 def test_folded_column_places_its_items():
     """Placement (the drawn cards and the header count) follows `column_status`
     for a column id that isn't already folded (#692)."""
-    from pathlib import Path
-
-    from yurtle_kanban.models import Column, WorkItem, WorkItemType
-
     held = WorkItem(
         id="T-1", title="t", item_type=WorkItemType.TASK,
         status=WorkItemStatus.BLOCKED, file_path=Path("t.md"),
