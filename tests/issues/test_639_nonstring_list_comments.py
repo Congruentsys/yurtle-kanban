@@ -132,3 +132,32 @@ def test_block_list_lines_invalid_date_does_not_raise(rest: str) -> None:
     out = KanbanService._block_list_lines(rest, "  - ", ["a"])
     assert out.endswith("\n  - a"), out
     assert "2026-02-30" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# 4. a list with no full-line comment keeps its items' trailing comments too
+# ---------------------------------------------------------------------------
+
+BARE = "tags:\n  - a # s\n  - b\n  - 2026 # year\n"
+
+
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        pytest.param(
+            ["a", "b", "2026", "x"],
+            BARE + "  - x\n",
+            id="add-item",
+        ),
+        pytest.param(
+            ["a", "2026"],
+            "tags:\n  - a # s\n  - 2026 # year\n",
+            id="remove-b",
+        ),
+    ],
+)
+def test_no_comment_line_items_keep_comment_and_spelling(
+    repo: Path, tags: list[str], expected: str
+) -> None:
+    old, new = _edit(repo, BARE, tags=tags)
+    assert new == old.replace(BARE, expected), f"item comment/spelling lost:\n{new}"
