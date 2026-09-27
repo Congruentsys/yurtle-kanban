@@ -2631,8 +2631,9 @@ class KanbanService:
     @classmethod
     def _max_allocated(cls, allocations: list[dict[str, Any]], prefix: str) -> int:
         """Highest number `allocations` records in `prefix`'s id space, judged by
-        each record's id alone (#641): `H130.7` counts in `H130.`, never in the
-        dashed `H` space, whatever its `prefix` field says."""
+        each record's id alone (#641) through `_number_in_space`: `H130.7` counts in
+        `H130.`, never in the dashed `H` space, whatever its `prefix` field says, and
+        a dashless `EXP003` counts in no dashed space (#776)."""
         return max(
             (cls._number_in_space(str(alloc.get("id", "")), prefix) for alloc in allocations),
             default=0,
