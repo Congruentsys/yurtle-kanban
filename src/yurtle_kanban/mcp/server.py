@@ -544,6 +544,8 @@ class KanbanMCPServer:
             return error
         if error := self._check_string_lists(args, "tags", "depends_on", "related"):
             return error
+        # a long-lived server: see duplicates as the files are now (#732)
+        self.service.scan()
         if error := self._check_booleans(args, "allow_unknown"):
             return error
         item_id = args["item_id"].upper()

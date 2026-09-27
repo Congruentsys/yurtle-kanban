@@ -455,7 +455,8 @@ class KanbanService:
         self._items: dict[str, WorkItem] = {}
         # IDs the last scan found in more than one file, with every file; `_items`
         # keeps only one of them, so this is recorded before the merge (#576)
-        self.duplicate_ids: dict[str, list[Path]] = {}
+        self.duplicate_ids: dict[str, list[Path]] = {}  # keyed upper-case (#732)
+        self._folded_items: dict[str, WorkItem] = {}
         # Files that look like items (start with `---`) but don't parse, with a
         # reason; the CLI reports them instead of dropping them silently (#139)
         self.parse_warnings: list[tuple[Path, str]] = []
@@ -612,17 +613,21 @@ class KanbanService:
 
     def _index_item(self, item: WorkItem) -> None:
         """Put a scanned item in `_items`, recording its ID in `duplicate_ids` when
-        another file already holds it (#576): the dict keeps one, silently."""
-        prior = self._items.get(item.id)
+        another file already holds it (#576), IDs compared upper-cased so `exp-5`
+        and `EXP-5` are one ID (#732): the dict keeps one, silently."""
+        key = item.id.upper()
+        prior = self._folded_items.get(key)
         if prior is not None and prior.file_path.resolve() != item.file_path.resolve():
-            files = self.duplicate_ids.setdefault(item.id, [prior.file_path])
+            files = self.duplicate_ids.setdefault(key, [prior.file_path])
             if item.file_path not in files:
                 files.append(item.file_path)
+        self._folded_items[key] = item
         self._items[item.id] = item
 
     def _scan(self) -> list[WorkItem]:
         self._items.clear()
         self.duplicate_ids = {}
+        self._folded_items = {}
         self.parse_warnings = []
 
         if self.config.is_multi_board:
@@ -4550,8 +4555,10 @@ class KanbanService:
         item = self._current_item(item_id)  # the file now (#638)
         if not item:
             raise ValueError(f"Item not found: {item_id}")
-        if item.id in self.duplicate_ids:
-            where = ", ".join(self._display_path(f) for f in self.duplicate_ids[item.id])
+        if item.id.upper() in self.duplicate_ids:
+            where = ", ".join(
+                self._display_path(f) for f in self.duplicate_ids[item.id.upper()]
+            )
             raise ValueError(
                 f"{item.id} is on more than one board ({where}): an update to it is "
                 "ambiguous; fix the duplicate ID first"
