@@ -727,7 +727,7 @@ class KanbanService:
                 item_type = WorkItemType.from_string(item_type_str)
             except ValueError:
                 # Try theme mapping
-                item_type = self._map_theme_type(item_type_str)
+                item_type = self._map_theme_type(item_type_str, file_path)
                 if not item_type:
                     return None
 
@@ -1116,15 +1116,21 @@ class KanbanService:
         description = "\n".join(lines).strip()
         return description if description else None
 
-    def _map_theme_type(self, type_str: str) -> WorkItemType | None:
-        """Map theme-specific type to standard type."""
+    def _map_theme_type(
+        self, type_str: str, file_path: Path | None = None
+    ) -> WorkItemType | None:
+        """Map theme-specific type to standard type, through the theme of the board
+        `file_path` is on (#652); the configured theme when that board is unknown."""
         # First try direct enum match (handles HDD types that are in the enum)
         try:
             return WorkItemType.from_string(type_str)
         except ValueError:
             pass
 
-        theme = self.config.get_theme()
+        board = None
+        if self.config.is_multi_board and file_path is not None:
+            board = self.config.get_board_for_path(file_path, self.repo_root)
+        theme = self._load_board_theme(board) if board else self.config.get_theme()
         if theme and "item_types" in theme:
             for type_id, type_def in theme["item_types"].items():
                 if type_id == type_str.lower():
