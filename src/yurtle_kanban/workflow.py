@@ -12,8 +12,8 @@ Usage:
     parser = WorkflowParser(Path(".kanban"))
     workflow = parser.load_workflow("feature")
 
-    # Validate a transition
-    valid, message = parser.validate_transition(item, new_status)
+    # Whether a move is legal is KanbanService.legal_next's call (#589, #651);
+    # the parser supplies the workflow graph and its content rules (check_rules).
 """
 
 import re
@@ -130,13 +130,6 @@ class WorkflowConfig:
     def get_terminal_states(self) -> list[StateConfig]:
         """Get states where items end."""
         return [s for s in self.states if s.is_terminal]
-
-    def get_allowed_transitions(self, from_state: str) -> list[str]:
-        """Get list of states that can be transitioned to from given state."""
-        state = self.get_state(from_state)
-        if state:
-            return state.allowed_transitions
-        return []
 
     def to_mermaid(self) -> str:
         """Generate Mermaid diagram of the workflow."""
@@ -381,54 +374,6 @@ class WorkflowParser:
             )
             for status, targets in DEFAULT_TRANSITIONS.items()
         ]
-
-    def validate_transition(
-        self, item: WorkItem, new_status: WorkItemStatus, workflow: WorkflowConfig | None = None
-    ) -> tuple[bool, str]:
-        """
-        Validate a status transition against workflow rules.
-
-        Args:
-            item: The work item being transitioned
-            new_status: The target status
-            workflow: Optional workflow config (loaded if not provided)
-
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        # Load workflow if not provided
-        if workflow is None:
-            item_type = (
-                item.item_type.value if hasattr(item.item_type, "value") else str(item.item_type)
-            )
-            workflow = self.load_workflow(item_type)
-
-        if workflow is None:
-            # No workflow defined = allow all transitions
-            return True, ""
-
-        # Get current and target states
-        current_status = item.status.value if hasattr(item.status, "value") else str(item.status)
-        target_status = new_status.value if hasattr(new_status, "value") else str(new_status)
-
-        current_state = workflow.get_state(current_status)
-        target_state = workflow.get_state(target_status)
-
-        if current_state is None:
-            # an unknown current state has no legal next: fail closed (#589)
-            return False, f"Unknown current state: {current_status}"
-
-        if target_state is None:
-            return False, f"Unknown target state: {target_status}"
-
-        # Check if transition is allowed
-        if not current_state.can_transition_to(target_state.id):
-            return False, (
-                f"Cannot transition from '{current_state.name}' to '{target_state.name}'. "
-                f"Allowed: {', '.join(current_state.allowed_transitions) or 'none'}"
-            )
-
-        return self.check_rules(item, new_status, workflow)
 
     def check_rules(
         self, item: WorkItem, new_status: WorkItemStatus, workflow: WorkflowConfig

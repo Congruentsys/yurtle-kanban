@@ -98,20 +98,6 @@ class TestWorkflowConfig:
         assert len(terminal) == 1
         assert terminal[0].id == "done"
 
-    def test_get_allowed_transitions(self):
-        """Test getting allowed transitions."""
-        workflow = WorkflowConfig(
-            id="test",
-            states=[
-                StateConfig(id="ready", name="Ready",
-                           allowed_transitions=["in_progress", "blocked"]),
-            ]
-        )
-
-        transitions = workflow.get_allowed_transitions("ready")
-        assert "in_progress" in transitions
-        assert "blocked" in transitions
-
     def test_to_mermaid(self):
         """Test Mermaid diagram generation."""
         workflow = WorkflowConfig(
@@ -166,65 +152,6 @@ class TestWorkflowParser:
         assert "ready" in state_ids
         assert "in_progress" in state_ids
         assert "done" in state_ids
-
-    def test_validate_transition_valid(self):
-        """Test validating a valid transition."""
-        parser = WorkflowParser()
-        workflow = get_default_workflow()
-
-        item = WorkItem(
-            id="FEAT-001",
-            title="Test Feature",
-            item_type=WorkItemType.FEATURE,
-            status=WorkItemStatus.READY,
-            file_path=Path("test.md"),
-        )
-
-        valid, error = parser.validate_transition(
-            item, WorkItemStatus.IN_PROGRESS, workflow
-        )
-
-        assert valid is True
-        assert error == ""
-
-    def test_validate_transition_invalid(self):
-        """Test validating an invalid transition."""
-        parser = WorkflowParser()
-        workflow = get_default_workflow()
-
-        item = WorkItem(
-            id="FEAT-001",
-            title="Test Feature",
-            item_type=WorkItemType.FEATURE,
-            status=WorkItemStatus.BACKLOG,
-            file_path=Path("test.md"),
-        )
-
-        # Backlog can only go to ready, not directly to done
-        valid, error = parser.validate_transition(
-            item, WorkItemStatus.DONE, workflow
-        )
-
-        assert valid is False
-        assert "Cannot transition" in error
-
-    def test_validate_transition_no_workflow(self):
-        """Test transition validation without workflow (allows all)."""
-        parser = WorkflowParser()
-
-        item = WorkItem(
-            id="FEAT-001",
-            title="Test Feature",
-            item_type=WorkItemType.FEATURE,
-            status=WorkItemStatus.BACKLOG,
-            file_path=Path("test.md"),
-        )
-
-        # Without a workflow, all transitions are allowed
-        valid, error = parser.validate_transition(item, WorkItemStatus.DONE)
-
-        assert valid is True
-
 
 class TestRuleEvaluation:
     """Tests for _evaluate_rule_condition (fail-closed enforcement)."""
