@@ -45,3 +45,21 @@ def test_validate_reports_the_unclosed_fence(repo: Repo) -> None:
     _legacy(repo)
     result = invoke(["validate"])
     assert "EXP-2" in result.output and "fence" in result.output.lower(), result.output
+
+
+def test_body_edit_that_would_swallow_comments_is_refused(repo: Repo) -> None:
+    """#727 review: an item with comments but no history yet (never moved) — an
+    unclosed fence above `## Comments` must not let a body edit delete them."""
+    said = invoke(["comment", "EXP-3", "--body", "precious comment", "--agent", "a"])
+    assert said.exit_code == 0, said.output
+    path = repo.path("EXP-3")
+    text = path.read_text()
+    at = text.index("## Comments")
+    path.write_text(text[:at] + "```python\nunclosed\n\n" + text[at:])
+    repo.commit("legacy unclosed fence above comments")
+    before = repo.snapshot()
+    result = invoke(["update", "EXP-3", "--body", "repaired"])
+    assert result.exit_code == 1, result.output
+    assert repo.snapshot() == before
+    reported = invoke(["validate"])
+    assert "EXP-3" in reported.output and "fence" in reported.output.lower(), reported.output
