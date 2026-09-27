@@ -24,9 +24,11 @@ Ambiguities resolved here (test partner's reading; the driver may challenge):
    workflows); a module-level `service.legal_next` is accepted too. It is called
    with the item type as a string (`item.item_type.value`), as `states --type T` has it.
 2. "native name" = what `service.status_label` shows for an item at that status
-   (#448's convention: the reverse of the theme's `status_mappings`). hdd `active`,
-   spec `implementing`; nautical has no `status_mappings`, so its native == canonical
-   in `states` (its harbor/underway names are still ACCEPTED by `move`, #587).
+   (#448's convention: the reverse of the theme's `status_mappings`), derived at
+   test time, never pinned: hdd `active`, spec `implementing`; nautical's labels
+   follow whatever its `status_mappings` hold (none before #604, harbor/underway/...
+   after), so these tests pass either side of #604. Lifecycles are pinned in
+   canonical terms only.
 3. `states` lists at least every status the theme names natively (hdd: draft,
    active, complete, abandoned); a status it does not list has no legal next.
    `terminal` == "no legal next". Canonical values are unique per board entry.
@@ -45,9 +47,12 @@ Ambiguities resolved here (test partner's reading; the driver may challenge):
 7. In the refusal, the legal-target list is compared after stripping any
    ` (canonical)` suffix; its order is not pinned. The first sentence is pinned as
    the issue writes it: `Illegal move <ID>: <from native> → <to native>`.
-8. The `WorkflowParser._get_default_states` list (used only without rdflib) is not
-   counted as a "default table"; the one-table check covers dict tables keyed by the
-   six statuses.
+8. The default lifecycle has ONE copy in the source, and that includes
+   `WorkflowParser._get_default_states` / `get_default_workflow` in workflow.py
+   (today a third, disagreeing table). workflow.py may import the one table; it may
+   not keep its own. The check counts dict tables keyed by the six statuses AND
+   literal lists of `StateConfig(id=..., allowed_transitions=[...])` covering them,
+   and the default workflow's graph must equal the default table.
 
 The big equivalence (Acceptance 1) uses the service API (`resolve_status_name` then
 `move_item(validate_workflow=True, skip_gates=True, skip_wip_check=True)`, as the
@@ -165,14 +170,11 @@ NATIVE_NAMES: dict[str, dict[str, str]] = {
     "custom": dict(CUSTOM_MAPPINGS),
 }
 
-# native labels (`status_label`, ambiguity 2): canonical -> native, where it differs
-LABELS: dict[str, dict[str, str]] = {
-    "software": {},
-    "nautical": {},
-    "spec": {v: k for k, v in NATIVE_NAMES["spec"].items()},
-    "hdd": {v: k for k, v in NATIVE_NAMES["hdd"].items()},
-    "custom": {v: k for k, v in CUSTOM_MAPPINGS.items()},
-}
+# Native LABELS are NOT pinned here: they are derived at test time from the
+# theme's `status_mappings` as the service loads it (== `status_label`), so the
+# tests hold before and after #604 moves nautical's names into `status_mappings`.
+# NATIVE_NAMES above is only the minimum `move` must accept; the theme's loaded
+# `status_mappings` are added to it at test time (`_theme_mappings`).
 
 
 @dataclasses.dataclass(frozen=True)
@@ -209,10 +211,13 @@ def _fold(name: str) -> str:
     return name.lower().replace("-", "_").replace(" ", "_")
 
 
-def _expected_resolve(kind: Kind, name: str) -> str | None:
-    """`name` as a status of `kind`'s theme (canonical value), or None."""
+def _expected_resolve(kind: Kind, name: str, mappings: dict[str, str]) -> str | None:
+    """`name` as a status of `kind`'s theme (canonical value), or None. `mappings` is
+    the theme's loaded `status_mappings` (`_theme_mappings`)."""
     legal = {c: c for c in CANONICAL}
     legal.update({_fold(n): c for n, c in NATIVE_NAMES[kind.theme].items()})
+    for native, canonical in mappings.items():
+        legal.setdefault(_fold(native), canonical)
     return legal.get(_fold(name))
 
 
@@ -220,8 +225,33 @@ def _item_id(kind: Kind, status: str) -> str:
     return f"{kind.prefix}-{CANONICAL.index(status) + 101}"
 
 
-def _label(kind: Kind, status: str) -> str:
-    return LABELS[kind.theme].get(status, status)
+_MAPPINGS_CACHE: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def _theme_mappings(root: Path, kind: Kind) -> dict[str, str]:
+    """The `status_mappings` (native -> canonical) of the theme `kind`'s items use,
+    as the service loads it (memoised per repo: the repos don't change themes)."""
+    key = (str(root), kind.name)
+    if key not in _MAPPINGS_CACHE:
+        _MAPPINGS_CACHE[key] = _load_mappings(root, kind)
+    return dict(_MAPPINGS_CACHE[key])
+
+
+def _load_mappings(root: Path, kind: Kind) -> dict[str, str]:
+    service = _service(root)
+    _, theme = service._item_theme(_item(service, _item_id(kind, "backlog")))
+    raw = (theme or {}).get("status_mappings") or {}
+    return {str(k): str(v) for k, v in raw.items() if str(v) in CANONICAL}
+
+
+def _labels(root: Path, kind: Kind) -> dict[str, str]:
+    """canonical -> native label, derived at test time: the reverse of the theme's
+    `status_mappings`, checked against `status_label` in the premise test."""
+    return {c: n for n, c in _theme_mappings(root, kind).items()}
+
+
+def _label(root: Path, kind: Kind, status: str) -> str:
+    return _labels(root, kind).get(status, status)
 
 
 # ---------------------------------------------------------------------------
@@ -486,13 +516,25 @@ def test_premise_tables_match_theme_files() -> None:
 
 
 def test_premise_every_kind_seeds_and_labels(repos: dict[str, Path]) -> None:
-    """Each repo parses to one item per canonical status, labelled as LABELS says."""
+    """Each repo parses to one item per canonical status; the derived labels are
+    what `status_label` shows; the pinned themes' labels are as the YAML says."""
     for kind in KINDS.values():
-        service = _service(repos[kind.name])
+        root = repos[kind.name]
+        service = _service(root)
         for status in CANONICAL:
             item = _item(service, _item_id(kind, status))
             assert item.status.value == status, (kind.name, item)
-            assert service.status_label(item) == _label(kind, status), (kind.name, status)
+            assert service.status_label(item) == _label(root, kind, status), (kind.name, status)
+    assert _labels(repos["hdd"], KINDS["hdd"]) == {
+        v: k for k, v in NATIVE_NAMES["hdd"].items()
+    }
+    assert _labels(repos["spec"], KINDS["spec"]) == {
+        v: k for k, v in NATIVE_NAMES["spec"].items()
+    }
+    assert _labels(repos["custom"], KINDS["custom"]) == {
+        v: k for k, v in CUSTOM_MAPPINGS.items()
+    }
+    assert _labels(repos["software"], KINDS["software"]) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -566,14 +608,49 @@ def _is_status_table(node: ast.Dict) -> bool:
     )
 
 
+def _is_state_config_table(node: ast.List | ast.Tuple) -> bool:
+    """A literal list of `StateConfig(id="<status>", allowed_transitions=[...])` calls
+    covering the six statuses (workflow.py's `_get_default_states` shape)."""
+    ids = set()
+    for elt in node.elts:
+        if not isinstance(elt, ast.Call):
+            return False
+        kw = {k.arg: k.value for k in elt.keywords if k.arg}
+        state_id = kw.get("id")
+        if not (
+            isinstance(state_id, ast.Constant) and isinstance(state_id.value, str)
+            and "allowed_transitions" in kw
+        ):
+            return False
+        ids.add(state_id.value.lower())
+    return ids == set(CANONICAL)
+
+
 def test_only_one_default_table_in_source() -> None:
+    """One copy of the default lifecycle in src/, workflow.py included: it may import
+    the one table, not keep its own (#589)."""
     found = []
     for path in sorted(SRC_DIR.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if isinstance(node, ast.Dict) and _is_status_table(node):
+            if (isinstance(node, ast.Dict) and _is_status_table(node)) or (
+                isinstance(node, ast.List | ast.Tuple) and _is_state_config_table(node)
+            ):
                 found.append(f"{path.relative_to(ROOT)}:{node.lineno}")
     assert len(found) == 1, f"default transition tables: {found}"
+
+
+def test_default_workflow_is_the_default_table() -> None:
+    """workflow.py's default workflow (used without rdflib) is the same lifecycle."""
+    from yurtle_kanban.workflow import WorkflowParser, get_default_workflow
+
+    for workflow in (get_default_workflow(), WorkflowParser().get_default_workflow()):
+        graph = {s.id: list(s.allowed_transitions) for s in workflow.states}
+        assert graph == DEFAULT_TABLE, graph
+        terminal = {s.id for s in workflow.states if s.is_terminal}
+        assert terminal == {k for k, v in DEFAULT_TABLE.items() if not v}, terminal
+    states = {s.id: s for s in WorkflowParser()._get_default_states()}
+    assert {k: list(v.allowed_transitions) for k, v in states.items()} == DEFAULT_TABLE
 
 
 # ---------------------------------------------------------------------------
@@ -595,10 +672,12 @@ def test_move_succeeds_iff_states_lists_it(
     item = _item(service, _item_id(kind, status))
     assert item.file_path is not None
     original = item.file_path.read_bytes()
+    mappings = _theme_mappings(root, kind)
+    candidates = sorted(set(CANDIDATES) | set(mappings))
 
     bad = []
     try:
-        for name in CANDIDATES:
+        for name in candidates:
             resolved = service.resolve_status_name(item, name)
             moved = False
             if resolved is not None:
@@ -613,7 +692,7 @@ def test_move_succeeds_iff_states_lists_it(
                 finally:
                     item.file_path.write_bytes(original)
                     item.status = WorkItemStatus(status)
-            want_resolved = _expected_resolve(kind, name)
+            want_resolved = _expected_resolve(kind, name, mappings)
             expected = want_resolved is not None and want_resolved in listed
             if moved != expected:
                 bad.append(
@@ -660,6 +739,7 @@ def test_cli_move_sample_matches_states(repos: dict[str, Path], kind_name: str) 
     kind = KINDS[kind_name]
     root = repos[kind.name]
     entry = _kind_entry(repos, kind)
+    mappings = _theme_mappings(root, kind)
     bad = []
     for status in ("backlog", "in_progress", "blocked"):
         item_id = _item_id(kind, status)
@@ -671,7 +751,7 @@ def test_cli_move_sample_matches_states(repos: dict[str, Path], kind_name: str) 
                 result, text = _cli(root, ["move", item_id, name, "--skip-gates", "--no-commit"])
             finally:
                 path.write_bytes(original)
-            want = _expected_resolve(kind, name)
+            want = _expected_resolve(kind, name, mappings)
             expected = want is not None and want in listed
             if (result.exit_code == 0) != expected:
                 bad.append(f"from {status}, {name!r}: exit {result.exit_code}, next={listed}")
@@ -797,7 +877,8 @@ def test_illegal_move_lists_legal_targets(
 @pytest.mark.parametrize("kind_name", list(KINDS))
 def test_states_json_shape(repos: dict[str, Path], kind_name: str) -> None:
     kind = KINDS[kind_name]
-    data = _states_json(repos[kind.name])
+    root = repos[kind.name]
+    data = _states_json(root)
     entry = _entry(data, type_=None)
     assert set(entry) >= {"board", "theme", "type", "states"}, entry
     assert entry["theme"] == kind.theme
@@ -805,16 +886,16 @@ def test_states_json_shape(repos: dict[str, Path], kind_name: str) -> None:
     canonicals = [s["canonical"] for s in entry["states"]]
     assert len(canonicals) == len(set(canonicals)), canonicals
     # every status the theme names natively is listed (ambiguity 3)
-    assert set(LABELS[kind.theme]) <= set(canonicals), canonicals
+    assert set(_labels(root, kind)) <= set(canonicals), canonicals
     for state in entry["states"]:
         assert set(state) >= {"name", "canonical", "terminal", "next"}, state
         assert state["canonical"] in CANONICAL, state
-        assert state["name"] == _label(kind, state["canonical"]), state
+        assert state["name"] == _label(root, kind, state["canonical"]), state
         assert state["terminal"] is (not state["next"]), state
         for nxt in state["next"]:
             assert set(nxt) >= {"name", "canonical", "gates"}, nxt
             assert nxt["canonical"] in CANONICAL, nxt
-            assert nxt["name"] == _label(kind, nxt["canonical"]), nxt
+            assert nxt["name"] == _label(root, kind, nxt["canonical"]), nxt
             assert nxt["gates"] == [], nxt  # no gates configured here
 
 
@@ -1012,7 +1093,7 @@ def test_show_json_labels_parallel(repos: dict[str, Path], kind_name: str) -> No
         assert data["status"] == status
         want = kind.table.get(status, [])
         assert data.get("next_statuses") == want, (status, data)
-        assert data.get("next_status_labels") == [_label(kind, s) for s in want], (status, data)
+        assert data.get("next_status_labels") == [_label(repos[kind.name], kind, s) for s in want], (status, data)
 
 
 def _can_move_to(text: str) -> list[str] | None:
