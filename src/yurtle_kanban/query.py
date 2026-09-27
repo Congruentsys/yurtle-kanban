@@ -188,7 +188,8 @@ class UnifiedGraph:
         """Blank nodes reachable only through dropped triples (a forged
         `kb:comment`'s author/text, nested nodes, self-loops and cycles included):
         skipped too, so they don't merge as orphans. A blank node that a kept triple
-        from outside that set points at stays, with everything under it (#726)."""
+        about an IRI reaches, directly or through nested blank nodes, stays with
+        everything under it (#726); a free-floating blank node anchors nothing (#744)."""
         children: dict[Any, list[BNode]] = {}
         for s, _, o in triples:
             if isinstance(o, BNode):
@@ -208,7 +209,7 @@ class UnifiedGraph:
         cand = closure([o for _, _, o in dropped if isinstance(o, BNode)])
         safe = closure([
             o for t in triples
-            if t not in dropped_set and t[0] not in cand
+            if t not in dropped_set and not isinstance(t[0], BNode)
             for o in (t[2],) if isinstance(o, BNode)
         ])
         return cand - safe
