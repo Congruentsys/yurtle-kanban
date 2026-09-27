@@ -77,3 +77,37 @@ def test_parent_moved_off_the_board_says_it_was_skipped(world, monkeypatch) -> N
     result = invoke(world, monkeypatch, HYP.argv)
     out = flat(result)
     assert "PAPER-130" in out and "not found" in out.lower(), out
+
+
+def test_already_linked_parent_says_unchanged(world, monkeypatch) -> None:  # noqa: F811
+    """#724: a second create linking the same parent/child pair would find the
+    link already there; the output says the parent is unchanged."""
+    from yurtle_kanban.service import KanbanService
+
+    seed_on_origin(world, monkeypatch, HYP)
+    drop_remote(world)
+    monkeypatch.setattr(KanbanService, "_linked_parent_text", lambda self, *a, **k: None)
+    result = invoke(world, monkeypatch, HYP.argv)
+    out = flat(result)
+    assert result.exit_code == 0, out
+    assert "PAPER-130" in out and "unchanged" in out, out
+
+
+def test_missing_parent_is_said_once(world, monkeypatch, caplog) -> None:  # noqa: F811
+    """#724: the CLI line says it; the service no longer warns as well."""
+    import logging
+
+    logging.getLogger("yurtle-kanban").addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING)
+    seed_on_origin(world, monkeypatch, HYP)
+    drop_remote(world)
+    elsewhere = "notes/PAPER-130-A-paper.md"
+    (world.a / "notes").mkdir(exist_ok=True)
+    git(world.a, "mv", PAPER, elsewhere)
+    git(world.a, "commit", "-q", "-m", "move the paper off the board")
+    result = invoke(world, monkeypatch, HYP.argv)
+    out = flat(result)
+    assert out.lower().count("not found") == 1, out
+    logging.getLogger("yurtle-kanban").removeHandler(caplog.handler)
+    warned = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not [w for w in warned if "not found" in w], warned
