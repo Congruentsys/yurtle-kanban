@@ -11,6 +11,10 @@ keyed by transition strings like ``"in_progress -> review"`` or
 
 Check expressions use safe dot-path evaluation (no eval/exec).
 Unknown expressions fail closed.
+
+Checks see the *proposed* item: ``item.status`` is the target status and
+``item.assignee`` includes a ``move --assign``; the transition itself comes as
+from/to (#586, #598).
 """
 
 from __future__ import annotations
