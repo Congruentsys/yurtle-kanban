@@ -237,8 +237,8 @@ def _do_create(title: str, priority: str, items: str | None, push: bool, group: 
 
     if push and item_ids:
         console.print(
-            "[yellow]Warning: --push committed only the epic; the item links below "
-            "are local changes. Commit and push them yourself.[/yellow]"
+            f"[yellow]Warning: --push committed only the {type_label.lower()}; the item "
+            "links below are local changes. Commit and push them yourself.[/yellow]"
         )
 
     # Link items if provided

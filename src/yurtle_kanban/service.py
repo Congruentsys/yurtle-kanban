@@ -371,6 +371,13 @@ class LineEndings:
             n = back[n]
         return run[::-1]
 
+def pull_note_text(branch: str) -> str:
+    """Where a `--push` create landed when it isn't in this checkout (a feature
+    branch, detached HEAD, diverged main), and to pull: the one wording the CLI
+    line and the service message share (#625, #637)."""
+    return f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
+
+
 class KanbanService:
     """Service for managing kanban work items.
 
@@ -1986,7 +1993,7 @@ class KanbanService:
             if local:
                 self._items[current_id] = item
             self._fire_create_hook(item)
-            note = "" if local else f" (not in this checkout yet: pull {branch} to see it)"
+            message = f"Created and pushed {current_id} to origin/{branch}: {title}"
             return {
                 "success": True,
                 "item": item,
@@ -1994,7 +2001,7 @@ class KanbanService:
                 "pushed": True,
                 "local": local,
                 "branch": branch,
-                "message": f"Created and pushed {current_id} to origin/{branch}: {title}{note}",
+                "message": message if local else f"{message}. {pull_note_text(branch)}",
             }
 
         return self._cas_on_default_branch(build, landed, max_retries, "item")
