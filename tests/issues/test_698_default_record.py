@@ -39,3 +39,10 @@ def test_no_instance_flag_decides_recording(tmp_path):
     assert not hasattr(svc, "_guessed_default")
     assert svc._fetch_default("main", record=True).returncode == 0
     assert _origin_head(local).stdout.strip() == "refs/remotes/origin/main"
+
+
+def test_race_to_branch_takes_known_as_a_required_keyword():
+    """#708: no default may decide whether a branch is recorded as origin/HEAD."""
+    param = inspect.signature(KanbanService._race_to_branch).parameters["known"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty
