@@ -55,3 +55,27 @@ def test_comment_text_is_searchable_by_sparql():
         "FILTER(CONTAINS(?t, 'good')) }"
     )
     assert rows == [{"id": "FEAT-001"}]
+
+
+def test_a_block_cannot_forge_a_comment_on_another_item():
+    """#635 review: `kb:comment` is owned by the markdown file's comments section,
+    like `kb:description`; a fenced block in item B can't add one to item A."""
+    from rdflib import Graph
+
+    a = _item()
+    b = WorkItem(
+        id="FEAT-002", title="B", item_type=WorkItemType.FEATURE,
+        status=WorkItemStatus.BACKLOG, file_path=Path("FEAT-002.md"),
+    )
+    b.graph = Graph().parse(
+        data=(
+            "@prefix kb: <https://yurtle.dev/kanban/> .\n"
+            "@prefix item: <https://yurtle.dev/kanban/item/> .\n"
+            'item:FEAT-001 kb:comment [ kb:author "mallory" ; kb:text "forged" ] .\n'
+        ),
+        format="turtle",
+    )
+    ug = UnifiedGraph()
+    ug.add_items([a, b])
+    rows = ug.sparql("SELECT ?author WHERE { ?i kb:id 'FEAT-001' ; kb:comment ?c . ?c kb:author ?author }")
+    assert {r["author"] for r in rows} == {"alice", ""}, rows
