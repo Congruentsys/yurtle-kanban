@@ -150,6 +150,8 @@ def test_mcp_update_and_comment_then_get_item(monkeypatch, repo):
     item = out[4]["item"]
     assert item["status"] == "ready"
     assert item["priority"] == "high"
+    # the comment is a field of its own since #605, current in the same session
+    assert [(c["author"], c["content"]) for c in item["comments"]] == [("t", "noted")]
 
 
 def _move(svc: KanbanService, status: str) -> None:
@@ -182,10 +184,12 @@ def test_service_interleaved_writes_every_read_is_current(repo):
     _move(svc, "in_progress")
     _assert_current(svc, repo, "move in_progress")
 
-    svc.add_comment(ITEM, "first note", "t")
+    returned = svc.add_comment(ITEM, "first note", "t")
+    assert [(c.author, c.content) for c in returned.comments] == [("t", "first note")]
     snap = _assert_current(svc, repo, "add_comment")
     assert snap["status"] == "in_progress"
-    # comments are not parsed back from the file, so pin the file itself
+    # the returned, cached and on-disk item all carry the comment (#605 + #638)
+    assert [(c.author, c.content) for c in svc.get_item(ITEM).comments] == [("t", "first note")]
     assert "first note" in _item_file(repo).read_text()
 
     svc.rank_item(ITEM, 3)
