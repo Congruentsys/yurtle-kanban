@@ -33,7 +33,9 @@ def safe(value: object) -> str:
 def pull_note(result: dict[str, Any]) -> str:
     """The one line every `--push` create prints when the item landed on the
     remote's default branch but not in this checkout (a feature branch, detached
-    HEAD, diverged main): where it is, and to pull (#585, #625)."""
+    HEAD, diverged main): where it is, and to pull; first, when a parent's
+    uncommitted edit would block that pull, to commit or stash it (#585, #625, #674)."""
     from .service import pull_note_text
 
-    return f"[yellow]  {safe(pull_note_text(result.get('branch') or 'main'))}[/yellow]"
+    note = pull_note_text(result.get("branch") or "main", result.get("dirty_parent"))
+    return f"[yellow]  {safe(note)}[/yellow]"

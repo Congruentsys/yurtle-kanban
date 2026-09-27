@@ -393,21 +393,27 @@ class LineEndings:
         return run[::-1]
 
 
-def pull_note_text(branch: str) -> str:
+def pull_note_text(branch: str, dirty: str | None = None) -> str:
     """Where a `--push` create landed when it isn't in this checkout (a feature
     branch, detached HEAD, diverged main), and to pull: the one wording the CLI
-    line and the service message share (#625, #637)."""
-    return f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
+    line and the service message share (#625, #637). `dirty` names a file the
+    pull would overwrite, whose uncommitted edit must be dealt with first (#674)."""
+    note = f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
+    if dirty is None:
+        return note
+    return f"{note}; commit or stash your edit to {dirty} before pulling"
 
 
-def _created_and_pushed_message(item_id: str, branch: str, title: str, *, local: bool) -> str:
+def _created_and_pushed_message(
+    item_id: str, branch: str, title: str, *, local: bool, dirty: str | None = None
+) -> str:
     """The service result message for a `--push` create: where it landed, and the
     pull note when this checkout doesn't have it yet (#637), without doubling a
     title's own closing period (#660)."""
     message = f"Created and pushed {item_id} to origin/{branch}: {title}"
     if local:
         return message
-    return f"{message.removesuffix('.')}. {pull_note_text(branch)}"
+    return f"{message.removesuffix('.')}. {pull_note_text(branch, dirty)}"
 
 
 class KanbanService:
@@ -1960,6 +1966,17 @@ class KanbanService:
         item, text = self._new_item(
             item_type, title, current_id, priority, assignee, description, tags, content
         )
+        # the parent's link, worked out before anything is written (#674)
+        edit = None if parent is None else self._parent_link_edit(
+            parent, item_type.value, current_id
+        )
+        in_commit = edit is not None and not self._outside_repo(edit[0].file_path)
+        if in_commit and self._uncommitted(edit[0].file_path):
+            shown = self._repo_relative(edit[0].file_path, self._git_toplevel())
+            return self._push_failed(
+                f"{parent} has uncommitted edits: commit or stash your edit to {shown} "
+                "first, so the link's commit holds only the link; nothing was created"
+            )
         file_path = item.file_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(text)
@@ -1975,11 +1992,11 @@ class KanbanService:
         lock_file.write_text(self._with_allocation(allocations, current_id, actor))
 
         paths = [file_path, lock_file]
-        linked = parent is not None and self.update_parent_turtle_block(
-            parent, item_type.value, current_id
-        )
-        if linked and (held := self.get_item(parent)) and not self._outside_repo(held.file_path):
-            paths.append(held.file_path)  # the link in the item's own commit (#645)
+        linked = edit is not None
+        if edit is not None:
+            self._apply_parent_link(*edit)
+            if in_commit:
+                paths.append(edit[0].file_path)  # the link in the item's own commit (#645)
         try:
             self._commit_paths(paths, f"Create {current_id}: {title}")
         except GitCommitError as e:
@@ -2053,7 +2070,7 @@ class KanbanService:
             linked = {} if parent is None else self._parent_link_blob(
                 base, parent, item_type.value, current_id
             )
-            made.update(item=item, id=current_id, parent_linked=bool(linked))
+            made.update(item=item, id=current_id, parent_linked=bool(linked), linked=linked)
             return {**blobs, **linked}, f"Create {current_id}: {title}"
 
         def landed(branch: str, local: bool) -> dict[str, Any]:
@@ -2061,7 +2078,15 @@ class KanbanService:
             if local:
                 self._items[current_id] = item
             self._fire_create_hook(item)
-            message = _created_and_pushed_message(current_id, branch, title, local=local)
+            # a parent edited here blocks the pull that brings its link (#674)
+            top = self._git_toplevel()
+            dirty = None if local else next(
+                (rel.as_posix() for rel in made["linked"] if self._uncommitted(top / rel)),
+                None,
+            )
+            message = _created_and_pushed_message(
+                current_id, branch, title, local=local, dirty=dirty
+            )
             return {
                 "success": True,
                 "item": item,
@@ -2070,6 +2095,7 @@ class KanbanService:
                 "local": local,
                 "branch": branch,
                 "parent_linked": made["parent_linked"],
+                "dirty_parent": dirty,
                 "message": message,
             }
 
@@ -2687,30 +2713,46 @@ class KanbanService:
         Returns:
             True if the parent was updated, False otherwise.
         """
+        edit = self._parent_link_edit(parent_id, child_type, child_id)
+        if edit is None:
+            return False
+        self._apply_parent_link(*edit)
+        return True
+
+    def _parent_link_edit(
+        self, parent_id: str, child_type: str, child_id: str
+    ) -> tuple[WorkItem, str, LineEndings] | None:
+        """The parent item, its file's text with the inverse reference to `child_id`
+        added, and its line endings, without writing anything; None when there is
+        nothing to add (#674)."""
         self._check_text(child_id=child_id)  # before the parent is rewritten (#239)
         if child_type not in self._INVERSE_RELATIONS:
             logger.debug(f"No inverse relation defined for child type: {child_type}")
-            return False
+            return None
 
         parent = self._current_item(parent_id)  # the file now (#638)
         if parent is None:
             logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
-            return False
+            return None
 
         if not parent.file_path.exists():
             logger.warning(f"Parent file {parent.file_path} missing — skipping")
-            return False
+            return None
 
         content, eol = self._read_item_text(parent.file_path)
         new_content = self._linked_parent_text(content, parent_id, child_type, child_id)
-        if new_content is None:
-            return False
-        self._write_item_text(parent.file_path, new_content, eol)
+        return None if new_content is None else (parent, new_content, eol)
 
-        # Re-parse graph for the updated parent, and refresh the cache (#638)
+    def _apply_parent_link(self, parent: WorkItem, new_content: str, eol: LineEndings) -> None:
+        """Write a `_parent_link_edit`, and refresh the parent's graph and cache (#638)."""
+        self._write_item_text(parent.file_path, new_content, eol)
         parent.graph = self._parse_graph(new_content)
         self._reread_item(parent)
-        return True
+
+    def _uncommitted(self, path: Path) -> bool:
+        """True when git shows `path` as changed from HEAD or untracked (#674)."""
+        shown = self._git_run("status", "--porcelain", "--", str(path))
+        return shown.returncode == 0 and shown.stdout.strip() != ""
 
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str
@@ -2756,8 +2798,20 @@ class KanbanService:
             logger.warning(f"Parent {parent_id} not found — skipping inverse reference")
             return {}
         if held is None:
+            branch = self._default_branch()
+            local = self.get_item(parent_id)
+            rel = None if local is None else self._repo_relative(
+                local.file_path, self._git_toplevel()
+            )
+            if rel is not None and self._git_run(
+                "log", "-1", "--format=%H", base, "--", f":(top){rel.as_posix()}"
+            ).stdout.strip():
+                raise _CasRefusedError(
+                    f"{parent_id} is not on origin/{branch} (it was removed there); "
+                    "nothing was created"
+                )
             raise _CasRefusedError(
-                f"{parent_id} is not on origin/{self._default_branch()}, so {child_type} "
+                f"{parent_id} is not on origin/{branch}, so {child_type} "
                 f"{child_id} can't be linked to it there: push {parent_id} first; "
                 "nothing was created"
             )
