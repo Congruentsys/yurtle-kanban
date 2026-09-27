@@ -834,13 +834,13 @@ def states(board_name: str | None, item_type: str | None, as_json: bool):
         heading = f"Board {entry['board']} ({entry['theme']})"
         if item_type:
             heading += f", type {item_type}"
-        console.print(f"[bold]{escape(heading)}[/bold]")
+        console.print(f"[bold]{escape(heading)}[/bold]", soft_wrap=True)
         for state in entry["states"]:
             nexts = ", ".join(
                 _status_display(n["canonical"], n["name"]) for n in state["next"]
             ) or "(terminal)"
             name = _status_display(state["canonical"], state["name"])
-            console.print(f"  {escape(name)} → {escape(nexts)}", highlight=False)
+            console.print(f"  {escape(name)} → {escape(nexts)}", highlight=False, soft_wrap=True)
         console.print()
 
 
