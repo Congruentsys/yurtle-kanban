@@ -336,3 +336,62 @@ def test_control_shipped_theme_loads_without_fold_warning(
     assert theme is not None, name
     keys = [str(k) for k in (theme.get("status_mappings") or {})]
     assert not _fold_warnings(_warnings(warnings_log), keys), _warnings(warnings_log)
+
+
+# ---------------------------------------------------------------------------
+# round 2 (PR #669 review): every spelling of a kept key reads back from a file.
+# Once `on hold` / `on_hold` are dropped at load, the scan path must fold the
+# file's status as `move` does, else `status: on_hold` (what `move X blocked`
+# wrote before #615) reads as backlog.
+# ---------------------------------------------------------------------------
+
+
+def _set_file_status(repo: Path, item_id: str, status: str) -> None:
+    """Rewrite the item file's frontmatter `status:` line by hand."""
+    files = list((repo / "work").rglob(f"{item_id}-*.md"))
+    assert len(files) == 1, files
+    text = files[0].read_text()
+    new, n = re.subn(r"(?m)^status:.*$", f"status: {status}", text, count=1)
+    assert n == 1, text
+    files[0].write_text(new)
+    assert _file_status(repo, item_id) == status
+
+
+def _read_back(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, item_id: str
+) -> tuple[str, str]:
+    """(status in `list --json`, status in `show --json`) for `item_id`."""
+    result, _ = _run(repo, monkeypatch, caplog, ["list", "--json"])
+    listed = {i["id"]: i["status"] for i in json.loads(result.output)}
+    assert item_id in listed, listed
+    return str(listed[item_id]), _show_status(repo, monkeypatch, caplog, item_id)
+
+
+@pytest.mark.parametrize("spelling", ["on_hold", "on hold", "On Hold", "ON-HOLD", "on-hold"])
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+def test_hold_file_spelling_reads_back_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    warnings_log: pytest.LogCaptureFixture,
+    layout: str,
+    spelling: str,
+) -> None:
+    repo = _repo(tmp_path / "repo", LAYOUTS[layout], _theme(HOLD_MAPPINGS))
+    result, _ = _run(repo, monkeypatch, warnings_log, ["create", "task", "hi"])
+    item_id = _created_id(result)
+    _set_file_status(repo, item_id, spelling)
+    assert _read_back(repo, monkeypatch, warnings_log, item_id) == ("blocked", "blocked")
+
+
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+def test_case_collision_file_Doing_reads_back_in_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    warnings_log: pytest.LogCaptureFixture,
+    layout: str,
+) -> None:
+    repo = _repo(tmp_path / "repo", LAYOUTS[layout], _theme(CASE_MAPPINGS))
+    result, _ = _run(repo, monkeypatch, warnings_log, ["create", "task", "hi"])
+    item_id = _created_id(result)
+    _set_file_status(repo, item_id, "Doing")
+    assert _read_back(repo, monkeypatch, warnings_log, item_id) == ("in_progress", "in_progress")
