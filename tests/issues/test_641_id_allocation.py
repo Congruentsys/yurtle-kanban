@@ -356,3 +356,139 @@ def test_cli_unpadded_measure_id_is_refused_against_padded(world, monkeypatch, t
     assert "M-001-rival.md" in out, out
     assert list(remote_ids(world, "research/measures/")) == ["research/measures/M-001-rival.md"]
     assert_untouched(world, feat)
+
+
+# --- round 2 (review of PR #657): a default branch that is not `main` ------------------------
+#
+# A clone made by `git remote add`, or by cloning an empty remote, has no origin/HEAD,
+# and an explicit-refspec fetch never creates one. The floor must still be the
+# fetched `refs/remotes/origin/<default>` (here `master`), never only `origin/main`.
+
+_EXP_005 = {
+    f"{EXP_DIR}/EXP-005-rival.md":
+        '---\nid: EXP-005\ntitle: "Rival"\ntype: expedition\nstatus: backlog\n---\n'
+}
+
+
+def b_push_to(world: World, files: dict[str, str], alloc: list[dict] | None = None) -> None:
+    """`b_push`, onto the world's default branch (which may be `master`)."""
+    branch = world.default
+    git(world.b, "fetch", "origin")
+    git(world.b, "reset", "--hard", f"origin/{branch}")
+    for rel, text in files.items():
+        path = world.b / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    if alloc:
+        lock = world.b / ALLOC
+        records = json.loads(lock.read_text()) if lock.exists() else []
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(json.dumps(records + alloc, indent=2))
+    git(world.b, "add", "-A")
+    git(world.b, "commit", "-m", "rival")
+    git(world.b, "push", "origin", f"HEAD:refs/heads/{branch}")
+
+
+MASTER_WORLDS = {"remote_add": True, "empty_clone": False}
+
+
+@pytest.fixture(params=list(MASTER_WORLDS))
+def master_world(request, tmp_path, monkeypatch: pytest.MonkeyPatch) -> World:
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    w = World(tmp_path, default="master", remote_add=MASTER_WORLDS[request.param])
+    assert git(w.a, "symbolic-ref", "-q", "refs/remotes/origin/HEAD", check=False) == ""
+    return w
+
+
+def test_synced_no_commit_next_id_floors_at_master(master_world) -> None:
+    b_push_to(master_world, _EXP_005, [{"id": "EXP-005", "prefix": "EXP", "number": 5}])
+    result = service(master_world).allocate_next_id(
+        "EXP", sync_remote=True, commit_allocation=False
+    )
+    assert result["success"] is True, result
+    assert result["id"] == "EXP-006", f"re-issued an id already on origin/master: {result}"
+
+
+@pytest.fixture
+def master_after_push(tmp_path, monkeypatch: pytest.MonkeyPatch) -> World:
+    """remote_add clone, default master: B pushed EXP-005, then A's own `create --push`
+    from a feature branch landed EXP-006 on origin/master (not in A's checkout). Then
+    the remote goes away."""
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    w = World(tmp_path, default="master", remote_add=True)
+    to_feature_branch(w)
+    b_push_to(w, _EXP_005, [{"id": "EXP-005", "prefix": "EXP", "number": 5}])
+    result = invoke(w, monkeypatch, ["create", "expedition", "First From A", "--push"])
+    out = output_of(result)
+    assert result.exit_code == 0, out
+    assert "EXP-006" in out, out
+    assert git(w.a, "rev-parse", "--abbrev-ref", "HEAD").strip() == FEATURE
+    assert "EXP-006" in git(w.a, "show", f"refs/remotes/origin/master:{ALLOC}")
+    assert not list((w.a / EXP_DIR).glob("EXP-00*.md"))
+    git(w.a, "remote", "set-url", "origin", str(w.a.parent / "missing.git"))
+    return w
+
+
+def test_no_sync_next_id_floors_at_fetched_master(master_after_push, monkeypatch) -> None:
+    spy = NetworkSpy()
+    monkeypatch.setattr(subprocess, "run", spy)
+    result = invoke(master_after_push, monkeypatch, ["next-id", "EXP", "--no-sync", "--json"])
+    out = output_of(result)
+
+    assert result.exit_code == 0, out
+    assert spy.calls == [], f"--no-sync talked to the remote: {spy.calls}"
+    assert allocated(out) == "EXP-007", f"re-issued an id already on origin/master: {out}"
+
+
+def test_local_create_floors_at_fetched_master(master_after_push, monkeypatch) -> None:
+    spy = NetworkSpy()
+    monkeypatch.setattr(subprocess, "run", spy)
+    result = invoke(master_after_push, monkeypatch, ["create", "expedition", TITLE_A])
+    out = output_of(result)
+
+    assert result.exit_code == 0, out
+    assert spy.calls == [], f"a local create talked to the remote: {spy.calls}"
+    made = sorted(p.name for p in (master_after_push.a / EXP_DIR).glob("EXP-*.md"))
+    assert made and made[0].startswith("EXP-007"), f"re-issued an id on origin: {made} {out}"
+
+
+# --- round 2: a base-scan error never escapes a local allocation -----------------------------
+
+SCAN_ERRORS = {
+    "timeout": subprocess.TimeoutExpired(["git", "grep"], 30),
+    "oserror": OSError("git vanished"),
+}
+
+
+def _break_base_scan(monkeypatch, name: str) -> None:
+    def boom(self, rev: str, prefix: str) -> int:
+        raise SCAN_ERRORS[name]
+
+    monkeypatch.setattr(KanbanService, "_next_id_number_at", boom)
+
+
+@pytest.mark.parametrize("name", list(SCAN_ERRORS))
+def test_base_scan_error_does_not_escape_local_create(world, monkeypatch, caplog, name) -> None:
+    b_push(world, _EXP_005)
+    git(world.a, "fetch", "origin")  # origin/main now floors at EXP-006
+    _break_base_scan(monkeypatch, name)
+    with caplog.at_level("WARNING"):
+        result = invoke(world, monkeypatch, ["create", "expedition", TITLE_A])
+    out = output_of(result)
+
+    assert result.exit_code == 0, f"the scan error escaped: {out!r} {result.exception!r}"
+    made = sorted(p.name for p in (world.a / EXP_DIR).glob("EXP-*.md"))
+    assert made and made[0].startswith("EXP-001"), made  # the local scan's answer
+    assert any(r.levelname == "WARNING" for r in caplog.records), "no warning was logged"
+
+
+@pytest.mark.parametrize("name", list(SCAN_ERRORS))
+def test_base_scan_error_does_not_escape_get_next_id_number(world, monkeypatch, caplog, name) -> None:
+    b_push(world, _EXP_005)
+    git(world.a, "fetch", "origin")
+    _break_base_scan(monkeypatch, name)
+    with caplog.at_level("WARNING"):
+        num = service(world)._get_next_id_number("EXP")
+
+    assert num == 1, num
+    assert any(r.levelname == "WARNING" for r in caplog.records), "no warning was logged"
