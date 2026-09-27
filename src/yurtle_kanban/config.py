@@ -37,21 +37,26 @@ CONFIG_VERSION_MULTI = "2.0"
 
 def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
     """Where themes are looked up, first match wins: the repo's .kanban/themes/,
-    the cwd's, the pip-installed share directory, then the source tree."""
+    the cwd's, the source tree when running from a checkout, then the pip-installed
+    share directory. A checkout's own themes/ beats the share copy, which an
+    editable install makes once and never refreshes (#592)."""
     import sys
 
     dirs = []
     if repo_root:
         dirs.append(repo_root / ".kanban" / "themes")
     dirs.append(Path.cwd() / ".kanban" / "themes")
-    dirs.append(Path(sys.prefix) / "share" / "yurtle-kanban" / "themes")
+    sources = []
     try:
         import yurtle_kanban
 
-        dirs.append(Path(yurtle_kanban.__file__).parent.parent.parent / "themes")
+        sources.append(Path(yurtle_kanban.__file__).parent.parent.parent / "themes")
     except Exception:
         pass
-    dirs.append(Path(__file__).parent.parent.parent / "themes")
+    sources.append(Path(__file__).parent.parent.parent / "themes")
+    # an installed wheel has no themes/ beside its package: only a checkout's counts
+    dirs += [d for i, d in enumerate(sources) if d.is_dir() and d not in sources[:i]]
+    dirs.append(Path(sys.prefix) / "share" / "yurtle-kanban" / "themes")
     return dirs
 
 
