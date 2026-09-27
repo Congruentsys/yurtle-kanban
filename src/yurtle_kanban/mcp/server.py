@@ -330,6 +330,14 @@ class KanbanMCPServer:
 
     def handle_tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Handle a tool call and return the result."""
+        # an explicit null for an optional boolean means "omitted" (#728)
+        arguments = {
+            k: v for k, v in arguments.items()
+            if not (k in ("allow_unknown", "sync_remote") and v is None)
+        }
+        for key in ("item_id", "prefix"):
+            if key in arguments and not isinstance(arguments[key], str):
+                return {"error": f"{key} must be a string"}
         try:
             if name == "kanban_list_items":
                 return self._list_items(arguments)
@@ -355,6 +363,10 @@ class KanbanMCPServer:
                 return self._next_id(arguments)
             else:
                 return {"error": f"Unknown tool: {name}"}
+        except ValueError as e:
+            # an expected refusal (bad input): one line, no traceback (#728)
+            logger.warning(f"Refused {name}: {e}")
+            return {"error": str(e)}
         except Exception as e:
             logger.exception(f"Error handling tool call {name}")
             return {"error": str(e)}
