@@ -479,11 +479,16 @@ class KanbanService:
         if not theme or "status_mappings" not in theme:
             return {}
 
-        # Invert: {native: canonical} -> {canonical: native}
-        return {
-            canonical: native
-            for native, canonical in theme["status_mappings"].items()
-        }
+        # Invert: {native: canonical} -> {canonical: native}. A target is resolved
+        # first, so `in-progress` and `in_progress` are one status (#659); a target
+        # that names no status is skipped, as `legal_status_names` skips it
+        reverse: dict[str, str] = {}
+        for native, target in theme["status_mappings"].items():
+            try:
+                reverse[WorkItemStatus.from_string(str(target)).value] = native
+            except ValueError:
+                continue
+        return reverse
 
     def _item_reverse_status_mapping(self, item: WorkItem) -> dict[str, str]:
         """canonical → the item's theme's own status name: the item's board's theme,
