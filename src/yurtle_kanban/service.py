@@ -1969,11 +1969,16 @@ class KanbanService:
             parent, item_type.value, current_id
         )
         in_commit = edit is not None and not self._outside_repo(edit[0].file_path)
-        if in_commit and self._uncommitted(edit[0].file_path):
+        state = self._git_state(edit[0].file_path) if in_commit else None
+        if state is not None:
             shown = self._repo_relative(edit[0].file_path, self._git_toplevel())
+            first = (
+                f"{parent} is not committed: commit {shown}"
+                if state == "untracked"
+                else f"{parent} has uncommitted edits: commit or stash your edit to {shown}"
+            )  # a file git never tracked has no "edits" (#693)
             return self._push_failed(
-                f"{parent} has uncommitted edits: commit or stash your edit to {shown} "
-                "first, so the link's commit holds only the link; nothing was created"
+                f"{first} first, so the link's commit holds only the link; nothing was created"
             )
         file_path = item.file_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2763,8 +2768,14 @@ class KanbanService:
 
     def _uncommitted(self, path: Path) -> bool:
         """True when git shows `path` as changed from HEAD or untracked (#674)."""
+        return self._git_state(path) is not None
+
+    def _git_state(self, path: Path) -> str | None:
+        """'untracked', 'changed', or None when git shows `path` clean (#674, #693)."""
         shown = self._git_run("status", "--porcelain", "--", str(path))
-        return shown.returncode == 0 and shown.stdout.strip() != ""
+        if shown.returncode != 0 or not shown.stdout.strip():
+            return None
+        return "untracked" if shown.stdout.startswith("??") else "changed"
 
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str

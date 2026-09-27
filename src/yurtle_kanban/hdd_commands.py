@@ -90,7 +90,16 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
         )
 
 
-def _print_parent_linked(parent_id: str) -> None:
+def _print_parent_linked(parent_id: str, result: dict | None = None) -> None:
+    """The parent-link line: updated here, or (when the create landed on the default
+    branch but not in this checkout) linked there (#693)."""
+    if result is not None and not result.get("local", True):
+        branch = result.get("branch") or "main"
+        console.print(
+            f"  [dim]Linked {safe(parent_id)} on origin/{safe(branch)} "
+            "(not in this checkout yet)[/dim]"
+        )
+        return
     console.print(f"  [dim]Updated {safe(parent_id)} with inverse reference[/dim]")
 
 
@@ -771,7 +780,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             )
             _print_created_file(result)
             if result.get("parent_linked"):
-                _print_parent_linked(str(source_idea))
+                _print_parent_linked(str(source_idea), result)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1028,7 +1037,7 @@ def hypothesis_create(
             )
             _print_created_file(result)
             if result.get("parent_linked"):
-                _print_parent_linked(f"PAPER-{paper_num}")
+                _print_parent_linked(f"PAPER-{paper_num}", result)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1161,7 +1170,7 @@ def experiment_create(
             )
             _print_created_file(result)
             if result.get("parent_linked"):
-                _print_parent_linked(str(hyp_id))
+                _print_parent_linked(str(hyp_id), result)
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
