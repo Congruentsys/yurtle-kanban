@@ -4868,6 +4868,23 @@ class KanbanService:
         )
         return start, len(text) if end < 0 else end
 
+    def swallowed_fence_line(self, content: str) -> int | None:
+        """The file line of a body code fence that is never closed and so swallows
+        the canonical status-history block after it (`body_span` then runs past the
+        history's opener), else None (#727). Only the full canonical opener counts: a
+        `## Comments` line quoted inside a closed fence is body, not a swallow.
+        `content` is LF text."""
+        start = self._body_start(content)
+        span_end = self.body_span(content)[1]
+        for match in re.finditer(r"(?m)^```yurtle$", content[start:]):
+            offset = start + match.start()
+            if offset >= span_end:
+                return None  # the span stops at (or before) the history: nothing swallowed
+            if self._HISTORY_OPEN_RE.match(content, offset):
+                inner = self._unclosed_fence_line(content[start:offset]) or 1
+                return content[:start].count("\n") + inner
+        return None
+
     def _replace_body(self, content: str, description: str) -> str:
         """Replace the part of the body span (`body_span`) after the H1, or after the
         frontmatter and any leading knowledge blocks when there is no H1 (#583, #576).
@@ -4878,6 +4895,12 @@ class KanbanService:
         """
         if description.strip() == (self._extract_description(content) or ""):
             return content
+        if (line := self.swallowed_fence_line(content)) is not None:
+            raise ValueError(
+                f"The body has a code fence open on line {line} that is never closed: "
+                "close it by hand first. A body edit now would delete the status "
+                "history after it (#727)."
+            )
         h1 = self._h1_span(content)
         start = self._leading_knowledge_end(content)
         if h1:

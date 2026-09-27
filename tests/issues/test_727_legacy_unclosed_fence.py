@@ -14,9 +14,14 @@ HISTORY = (
 
 
 def _legacy(repo: Repo) -> None:
+    """A real status history (via `move`), then a hand-edited unclosed fence in the
+    body just above it."""
+    result = invoke(["move", "EXP-2", "ready", "--force", "--skip-gates"])
+    assert result.exit_code == 0, result.output
     path = repo.path("EXP-2")
     text = path.read_text()
-    path.write_text(text.rstrip("\n") + "\n\nIntro\n```python\nunclosed\n" + HISTORY)
+    at = text.index("```yurtle\n@prefix kb:")
+    path.write_text(text[:at] + "Intro\n```python\nunclosed\n\n" + text[at:])
     repo.commit("legacy unclosed fence")
 
 
