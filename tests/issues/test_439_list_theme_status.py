@@ -202,10 +202,16 @@ def test_reverse_mappings_per_theme() -> None:
         "done": "complete",
         "blocked": "abandoned",
     }
-    # no `status_mappings` today: their names stay canonical everywhere
+    # spec's names were under an unread `status_aliases` key until #588
+    assert _reverse_mapping("spec") == {
+        "backlog": "draft",
+        "ready": "proposed",
+        "in_progress": "implementing",
+        "done": "accepted",
+    }
+    # no `status_mappings`: their names stay canonical everywhere
     assert _reverse_mapping("nautical") == {}
     assert _reverse_mapping("software") == {}
-    assert _reverse_mapping("spec") == {}
 
 
 # ---------------------------------------------------------------------------
