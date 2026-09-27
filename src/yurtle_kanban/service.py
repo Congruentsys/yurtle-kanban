@@ -143,7 +143,7 @@ def _scalar_text(value: Any) -> Any:
     return str(value) if isinstance(value, (int, float)) else value
 
 
-def _list_text(value: Any) -> list[Any]:
+def _list_text(value: Any) -> list[Any] | dict[Any, Any]:
     """A frontmatter list field as text entries (#653): a comma-separated string
     is split, a single scalar is one entry, each entry is read as text
     (`2026` -> '2026', `yes` -> 'true' as #225 reads it, `2026-01-01` as
@@ -160,10 +160,15 @@ def _list_text(value: Any) -> list[Any]:
 
 
 def _entry_text(value: Any) -> Any:
-    """One list entry as text: `_scalar_text`, and a YAML date or timestamp as
-    written (`2026-01-01`); a nested list or mapping as it is (#675)."""
+    """One list entry as text: `_scalar_text`; a YAML date as written
+    (`2026-01-01`) and a timestamp in ISO form (`Z` becomes `+00:00`); a nested
+    list or mapping as its YAML flow text (`[b, c]`, `{k: v}`, #675)."""
     if isinstance(value, (date, datetime)):
         return value.isoformat() if isinstance(value, datetime) else str(value)
+    if isinstance(value, (list, dict)):
+        return yaml.safe_dump(
+            value, default_flow_style=True, sort_keys=False, allow_unicode=True, width=10**9
+        ).strip()
     return _scalar_text(value)
 
 
