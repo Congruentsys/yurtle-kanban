@@ -79,3 +79,54 @@ def test_a_block_cannot_forge_a_comment_on_another_item():
     ug.add_items([a, b])
     rows = ug.sparql("SELECT ?author WHERE { ?i kb:id 'FEAT-001' ; kb:comment ?c . ?c kb:author ?author }")
     assert {r["author"] for r in rows} == {"alice", ""}, rows
+
+
+def test_a_forging_blocks_blank_node_does_not_merge_as_an_orphan():
+    """#726: the dropped kb:comment's blank node (author/text) doesn't merge at all,
+    so a query not anchored on `?item kb:comment` can't find the forged text."""
+    from rdflib import Graph
+
+    b = WorkItem(
+        id="FEAT-002", title="B", item_type=WorkItemType.FEATURE,
+        status=WorkItemStatus.BACKLOG, file_path=Path("FEAT-002.md"),
+    )
+    b.graph = Graph().parse(
+        data=(
+            "@prefix kb: <https://yurtle.dev/kanban/> .\n"
+            "@prefix item: <https://yurtle.dev/kanban/item/> .\n"
+            'item:FEAT-001 kb:comment [ kb:author "mallory" ; kb:text "forged" ] .\n'
+        ),
+        format="turtle",
+    )
+    ug = UnifiedGraph()
+    ug.add_items([_item(), b])
+    rows = ug.sparql("SELECT ?t WHERE { ?c kb:text ?t }")
+    assert "forged" not in {r["t"] for r in rows}, rows
+
+
+def test_end_to_end_comment_is_queryable(tmp_path, monkeypatch):
+    """#726: `comment --body` then a SPARQL query over the scanned board."""
+    import subprocess
+
+    from click.testing import CliRunner
+
+    from yurtle_kanban.cli import main
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    for k, v in (("user.name", "T"), ("user.email", "t@t")):
+        subprocess.run(["git", "-C", str(tmp_path), "config", k, v], check=True)
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    assert runner.invoke(main, ["init", "--theme", "software"]).exit_code == 0
+    made = runner.invoke(main, ["create", "feature", "Graph me"])
+    assert made.exit_code == 0, made.output
+    said = runner.invoke(main, ["comment", "FEAT-001", "--body", "lookup-token", "--agent", "alice"])
+    assert said.exit_code == 0, said.output
+    out = runner.invoke(
+        main,
+        ["query", "--no-semantic", "--sparql",
+         "SELECT ?a WHERE { ?i kb:id 'FEAT-001' ; kb:comment ?c . ?c kb:author ?a ; "
+         "kb:text ?t . FILTER(CONTAINS(?t, 'lookup-token')) }"],
+    )
+    assert out.exit_code == 0, out.output
+    assert "alice" in out.output, out.output
