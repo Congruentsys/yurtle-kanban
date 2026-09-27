@@ -57,10 +57,10 @@ from .workflow import DEFAULT_TRANSITIONS, WorkflowConfig, WorkflowParser
 logger = get_logger("yurtle-kanban")  # escapes control characters (#215)
 
 
-class GitCommitError(ValueError):
+class GitCommitError(InputRefused):
     """Git refused a kanban commit (#584), e.g. a pre-commit hook said no. The
-    message carries git's (or the hook's) own output. A ValueError, so every CLI
-    command's existing error path reports it and exits non-zero."""
+    message carries git's (or the hook's) own output. A refusal, never a bug
+    (#786): every CLI command's error path and MCP report it without a traceback."""
 
 
 class _CasRefusedError(Exception):
@@ -1603,7 +1603,7 @@ class KanbanService:
         files = self.duplicate_ids.get(item.id.upper())
         if files:
             where = ", ".join(self._display_path(f) for f in files)
-            raise ValueError(
+            raise InputRefused(
                 f"{item.id} is on more than one board ({where}): {action} to it is "
                 "ambiguous; fix the duplicate ID first"
             )
@@ -1613,7 +1613,7 @@ class KanbanService:
         ID (#742)."""
         item = self._current_item(item_id)
         if not item:
-            raise ValueError(f"Item not found: {item_id}")
+            raise InputRefused(f"Item not found: {item_id}")
         self.refuse_duplicate(item, action)
         return item
 
@@ -3448,7 +3448,7 @@ class KanbanService:
                 replace(proposed, status=old_status), new_status
             )
             if not valid:
-                raise ValueError(error_msg)
+                raise InputRefused(error_msg)
 
         # Check WIP limits (unless skipped)
         if not skip_wip_check:
@@ -3481,7 +3481,7 @@ class KanbanService:
                             limit = col.get_wip_limit(item_type_str)
                             # 0 is "no limit", as on the board (#402, #411)
                             if limit and type_count >= limit:
-                                raise ValueError(
+                                raise InputRefused(
                                     f"WIP limit reached for {item_type_str}s "
                                     f"in {col.name} on {board.name} "
                                     f"({type_count}/{limit})"
@@ -3499,7 +3499,7 @@ class KanbanService:
                                 ]
                             current_count = len(items_in_status)
                             if col.wip_limit and current_count >= col.wip_limit:
-                                raise ValueError(
+                                raise InputRefused(
                                     f"WIP limit reached for {col.name} on "
                                     f"{board.name} "
                                     f"({current_count}/{col.wip_limit})"
@@ -3517,7 +3517,7 @@ class KanbanService:
             ]
             if blocking:
                 msgs = "; ".join(r.message for r in blocking)
-                raise ValueError(f"Gate check failed: {msgs}")
+                raise InputRefused(f"Gate check failed: {msgs}")
         elif self._has_gates_configured(item):
             # Only record gates_skipped when gates actually exist
             gates_skipped = True
@@ -3892,7 +3892,7 @@ class KanbanService:
         if closed_by:
             # Sanitize: reject characters that could break TTL string syntax
             if re.search(r'[\n\r\\" <>]', closed_by):
-                raise ValueError(
+                raise InputRefused(
                     f"Invalid value for closed_by: contains disallowed characters: {closed_by!r}"
                 )
             ttl_entry += f'\n    kb:closedBy <{closed_by}> ;'
@@ -4180,12 +4180,12 @@ class KanbanService:
         if priority is None:
             return None
         if not isinstance(priority, str):  # e.g. `priority: 1` in a hooks config (#153)
-            raise ValueError(
+            raise InputRefused(
                 unknown_priority_message(priority)
             )
         normalized = priority.strip().lower()
         if normalized not in PRIORITIES:
-            raise ValueError(
+            raise InputRefused(
                 unknown_priority_message(priority)
             )
         return normalized
@@ -4596,7 +4596,7 @@ class KanbanService:
         self._check_no_comments_heading(description)
         for tag in [*(tags or []), *(add_tags or [])]:
             if not str(tag).strip():
-                raise ValueError("A tag is empty: give a tag")
+                raise InputRefused("A tag is empty: give a tag")
         editing_deps = (
             depends_on is not None or bool(add_depends_on) or bool(remove_depends_on)
         )
@@ -4677,9 +4677,9 @@ class KanbanService:
     def _check_title(title: str) -> None:
         """Refuse a title that is empty, blank or more than one line (#576)."""
         if not title.strip():
-            raise ValueError("The title is empty: give a title")
+            raise InputRefused("The title is empty: give a title")
         if "\n" in title or "\r" in title:
-            raise ValueError("The title has a line break: a title is one line")
+            raise InputRefused("The title has a line break: a title is one line")
 
     @staticmethod
     def _id_list(ids: list[Any]) -> list[str]:
@@ -4719,22 +4719,22 @@ class KanbanService:
         duplicated = {i.upper(): files for i, files in self.duplicate_ids.items()}
         for target in added:
             if target == me:
-                raise ValueError(f"{me} can't depend on itself")
+                raise InputRefused(f"{me} can't depend on itself")
             if target in duplicated:
                 where = ", ".join(self._display_path(f) for f in duplicated[target])
-                raise ValueError(
+                raise InputRefused(
                     f"{target} is on more than one board ({where}): a dependency on it "
                     "is ambiguous; fix the duplicate ID first"
                 )
             if target not in graph and not allow_unknown:
-                raise ValueError(
+                raise InputRefused(
                     f"{target} is on no board: check the ID, or allow an item outside "
                     "this repo with --allow-unknown"
                 )
         graph[me] = new_deps
         cycle = self.find_cycle(me, graph, via=added)
         if cycle:
-            raise ValueError(
+            raise InputRefused(
                 f"{me} can't depend on {cycle[1]}: it closes a dependency "
                 f"cycle: {' → '.join(cycle)}"
             )
@@ -5003,7 +5003,7 @@ class KanbanService:
         if description.strip() == (self._extract_description(content) or ""):
             return content
         if (line := self.swallowed_fence_line(content)) is not None:
-            raise ValueError(
+            raise InputRefused(
                 f"The body's code fence on line {line} runs over "
                 f"{self.swallowed_what(content, line)} after it: close that fence by "
                 "hand, or reword a quoted heading inside it, first. A body edit now "
@@ -5043,7 +5043,7 @@ class KanbanService:
             message: Optional commit message
         """
         if rank < 1:
-            raise ValueError(f"Rank must be >= 1, got {rank}")
+            raise InputRefused(f"Rank must be >= 1, got {rank}")
         self._check_text(value_summary=value_summary)  # before any write (#219)
 
         item = self._writable_item(item_id, "a rank")  # the file now (#638, #742)
@@ -5247,7 +5247,7 @@ class KanbanService:
 
         config_data = yaml.safe_load(config_path.read_text()) or {}
         if not isinstance(config_data, dict):
-            raise ValueError(f"{config_path} is not a mapping; run status not updated (#338)")
+            raise InputRefused(f"{config_path} is not a mapping; run status not updated (#338)")
         config_data["status"] = status
         if outcome is not None:
             config_data["outcome"] = outcome

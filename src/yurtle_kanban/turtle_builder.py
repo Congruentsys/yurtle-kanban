@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import re
 
-from .models import turtle_string
+from .models import InputRefused, turtle_string
 
 _SAFE_LOCAL_NAME = re.compile(r"[A-Za-z0-9._-]+")  # used with fullmatch (#183)
 
 
-class InvalidTurtleName(ValueError):  # noqa: N818 — the name #183 specifies
+class InvalidTurtleName(InputRefused):  # noqa: N818 — the name #183 specifies
     """A value refused as a Turtle local name. Its own type, so a CLI can turn
     exactly this into a clean error and let any other ValueError surface (#183)."""
 

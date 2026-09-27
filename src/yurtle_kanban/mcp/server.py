@@ -23,6 +23,7 @@ from ..config import KanbanConfig
 from ..inputs import resolve_actor
 from ..models import (
     PRIORITIES,
+    InputRefused,
     WorkItemStatus,
     WorkItemType,
     check_encodable,
@@ -401,8 +402,9 @@ class KanbanMCPServer:
                 return self._next_id(arguments)
             else:
                 return {"error": f"Unknown tool: {name}"}
-        except ValueError as e:
-            # an expected refusal (bad input): one line, no traceback (#728)
+        except InputRefused as e:
+            # an expected refusal (bad input): one line, no traceback (#728); any
+            # other ValueError is a bug and keeps its traceback below (#786)
             logger.warning(f"Refused {name}: {e}")
             return {"error": str(e)}
         except Exception as e:
