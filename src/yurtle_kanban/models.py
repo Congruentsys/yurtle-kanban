@@ -333,6 +333,8 @@ class WorkItem:
             "related": self.related,
             "blocks": self.blocks,
             "description": self.description,
+            # the `## Comments` section, never part of the description (#605)
+            "comments": [c.to_dict() for c in self.comments],
             "resolution": self.resolution,
             "superseded_by": self.superseded_by,
             "priority_rank": self.priority_rank,
