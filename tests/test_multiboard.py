@@ -1088,14 +1088,16 @@ status: backlog
         assert mapping.get("blocked") == "abandoned"
 
     def test_reverse_status_mapping_no_board(self, hdd_state_setup):
-        """Test _get_reverse_status_mapping returns empty for non-HDD board."""
+        """_get_reverse_status_mapping follows the board's own theme: nautical's
+        names come from nautical.yaml `status_mappings` since #604."""
         service = hdd_state_setup["service"]
 
-        # Nautical preset has no status_mappings → empty reverse mapping
         board = service.config.get_board("development")
         mapping = service._get_reverse_status_mapping(board)
 
-        assert mapping == {}
+        assert mapping["in_progress"] == "underway"
+        assert mapping["blocked"] == "stranded"
+        assert "active" not in mapping.values()  # not hdd's
 
     def test_move_hdd_item_to_abandoned_writes_abandoned(self, hdd_state_setup):
         """Moving an HDD item to 'abandoned' should write native name."""

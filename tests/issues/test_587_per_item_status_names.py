@@ -14,10 +14,10 @@ legal names. No users, so nothing to stay compatible with.
 Name tables used here (what `move` accepts today for each theme's own items):
 - canonical: the six `WorkItemStatus` values, on every theme;
 - hdd: its `status_mappings` (pinned against themes/hdd.yaml below);
-- nautical: harbor/provisioning/underway/approaching/arrived. nautical.yaml has no
-  `status_mappings`; these names come only from the hardcoded alias table, and
-  tests/issues/test_439 already relies on `move <exp> underway`. They stay legal
-  for nautical items (and only for them);
+- nautical: harbor/provisioning/underway/approaching/arrived (and, since #604,
+  stranded/approaching_port — see test_604). They came from a hardcoded alias
+  table until #604 moved them into nautical.yaml `status_mappings`; they stay
+  legal for nautical items (and only for them);
 - software: canonical only;
 - spec: draft/proposed/implementing/accepted (themes/spec.yaml `status_aliases`).
   spec items are NOT a subject here — its native names don't work at all until
@@ -226,10 +226,17 @@ def test_name_tables_match_theme_files() -> None:
     hdd = yaml.safe_load((THEMES_DIR / "hdd.yaml").read_text())
     assert hdd["status_mappings"] == NATIVE["hdd"]
     spec = yaml.safe_load((THEMES_DIR / "spec.yaml").read_text())
-    assert spec["status_mappings"] == NATIVE["spec"]
-    for theme in ("software", "nautical"):
-        data = yaml.safe_load((THEMES_DIR / f"{theme}.yaml").read_text())
-        assert not data.get("status_mappings"), theme
+    assert spec["status_mappings"] == NATIVE["spec"]  # #588
+    # nautical's names live in its `status_mappings` since #604 (it adds
+    # `stranded` and `approaching_port` beside these five)
+    nautical = yaml.safe_load((THEMES_DIR / "nautical.yaml").read_text())
+    folded = {
+        str(k).lower().replace("-", "_").replace(" ", "_"): str(v)
+        for k, v in (nautical.get("status_mappings") or {}).items()
+    }
+    assert {n: folded.get(n) for n in NATIVE["nautical"]} == NATIVE["nautical"]
+    software = yaml.safe_load((THEMES_DIR / "software.yaml").read_text())
+    assert not software.get("status_mappings")
     # every subject theme has foreign names to refuse
     assert all(_foreign(t) for t in SUBJECT_THEMES)
 

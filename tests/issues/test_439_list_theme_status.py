@@ -209,8 +209,20 @@ def test_reverse_mappings_per_theme() -> None:
         "in_progress": "implementing",
         "done": "accepted",
     }
-    # no `status_mappings`: their names stay canonical everywhere
-    assert _reverse_mapping("nautical") == {}
+    # nautical's names moved from a hardcoded table into `status_mappings` (#604);
+    # review has two names (approaching, approaching_port), either may be written
+    nautical = _reverse_mapping("nautical")
+    assert {k: v for k, v in nautical.items() if k != "review"} == {
+        "backlog": "harbor",
+        "ready": "provisioning",
+        "in_progress": "underway",
+        "done": "arrived",
+        "blocked": "stranded",
+    }
+    assert nautical.get("review", "").lower().replace(" ", "_") in {
+        "approaching", "approaching_port",
+    }
+    # no `status_mappings`: its names stay canonical everywhere
     assert _reverse_mapping("software") == {}
 
 
