@@ -2786,13 +2786,23 @@ class KanbanService:
         if "A" in code:
             # `A` under a pathspec is also how a staged rename's new path shows
             # (`git mv`): that file IS committed, under its old name (#705 review)
-            renames = self._git_run("diff", "--cached", "-M", "--name-status", "HEAD")
+            # -z: raw paths, as git would C-quote non-ASCII ones (#718); fields run
+            # status, path[, new path] — a rename's destination is two after R…
+            renames = self._git_run("diff", "--cached", "-M", "--name-status", "-z", "HEAD")
             rel = self._repo_relative(path, self._git_toplevel())
-            if rel is not None and any(
-                ln.startswith("R") and ln.split("\t")[-1] == rel.as_posix()
-                for ln in renames.stdout.splitlines()
-            ):
+            fields, dests, i = renames.stdout.split("\0"), set(), 0
+            while i < len(fields) - 1:  # records: status, path[, new path]
+                status = fields[i]
+                if status[:1] in ("R", "C"):
+                    if status[:1] == "R" and i + 2 < len(fields):
+                        dests.add(fields[i + 2])
+                    i += 3
+                else:
+                    i += 2
+            if rel is not None and rel.as_posix() in dests:
                 return "changed"
+            # a rename below git's 50% similarity is D + A: git itself calls it a
+            # new file, and so does this (#718)
             return "untracked"
         return "changed"
 

@@ -83,10 +83,22 @@ def _update_parent(service, parent_id: str, child_type: str, child_id: str) -> N
     try:
         if service.update_parent_turtle_block(parent_id, child_type, child_id):
             _print_parent_linked(parent_id)
+        else:
+            _print_parent_missing(service, parent_id)
     except Exception as e:
         console.print(
             f"  [yellow]Warning: could not update {safe(parent_id)}: "
             f"{safe(e)}[/yellow]"
+        )
+
+
+def _print_parent_missing(service, parent_id: str) -> None:
+    """Say so when the parent is on no board, so the link isn't silently skipped
+    (a parent moved out of every board path, say) (#718)."""
+    if service.get_item(parent_id) is None:
+        console.print(
+            f"  [yellow]{safe(parent_id)} is not on any board: "
+            "no inverse reference written (not found)[/yellow]"
         )
 
 
@@ -781,6 +793,8 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
             _print_created_file(result)
             if result.get("parent_linked"):
                 _print_parent_linked(str(source_idea), result)
+            elif source_idea:
+                _print_parent_missing(service, str(source_idea))
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1038,6 +1052,8 @@ def hypothesis_create(
             _print_created_file(result)
             if result.get("parent_linked"):
                 _print_parent_linked(f"PAPER-{paper_num}", result)
+            elif paper_num is not None:
+                _print_parent_missing(service, f"PAPER-{paper_num}")
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
@@ -1171,6 +1187,8 @@ def experiment_create(
             _print_created_file(result)
             if result.get("parent_linked"):
                 _print_parent_linked(str(hyp_id), result)
+            elif hyp_id:
+                _print_parent_missing(service, str(hyp_id))
         else:
             raise click.ClickException(f"Failed: {result['message']}")
     else:
