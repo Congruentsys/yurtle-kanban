@@ -406,6 +406,7 @@ class WorkflowParser:
             return item.assignee is not None and item.assignee != ""
 
         # Description length check
+        # the body only: comments are their own field since #605 (#635)
         if "len(item.description" in condition:
             desc = item.description or ""
             match = re.search(r">\s*(\d+)", condition)

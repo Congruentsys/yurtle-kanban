@@ -134,6 +134,17 @@ class UnifiedGraph:
         for sup in item.superseded_by or []:
             self._graph.add((item_uri, KB.supersededBy, self._ref_or_literal(sup)))
 
+        # Comments are their own field (#605): one `kb:comment` node each, so SPARQL
+        # reaches them; a preamble comment has no time (#644, #635)
+        for comment in item.comments or []:
+            node = BNode()
+            self._graph.add((item_uri, KB.comment, node))
+            self._graph.add((node, KB.author, Literal(comment.author or "")))
+            self._graph.add((node, KB.text, Literal(comment.content)))
+            if comment.created_at is not None:
+                at = Literal(comment.created_at.isoformat(), datatype=XSD.dateTime)
+                self._graph.add((node, KB.at, at))
+
         # Extended metadata
         if item.priority_rank is not None:
             rank_lit = Literal(item.priority_rank, datatype=XSD.integer)
