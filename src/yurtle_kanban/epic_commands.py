@@ -18,7 +18,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from ._click import Group, safe
+from ._click import Group, pull_note, safe
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
 from .service import KanbanService
 from .template_engine import TemplateEngine
@@ -168,7 +168,7 @@ def _already_linked(service, item_id: str, epic_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _do_create(title: str, priority: str, items: str | None, push: bool):
+def _do_create(title: str, priority: str, items: str | None, push: bool, group: str = "epic"):
     """Create a new epic/voyage based on the current theme."""
     service = _get_service()
     item_type, theme_name = _detect_epic_type(service)
@@ -194,13 +194,6 @@ def _do_create(title: str, priority: str, items: str | None, push: bool):
         content = content.replace("{{TITLE}}", title)
 
     type_label = _TYPE_LABELS.get(item_type, "Epic")
-
-    if push and items:
-        console.print(
-            "[yellow]Warning: --items with --push only commits the epic file. "
-            "Item link changes are local-only. Run 'git add' + 'git commit' "
-            "to include them.[/yellow]"
-        )
 
     if push:
         # create_item_and_push returns {success, item, message}, not the item (#593)
@@ -228,19 +221,28 @@ def _do_create(title: str, priority: str, items: str | None, push: bool):
         f"Created {type_label} [bold green]{escape(item.id)}[/bold green]: "
         f"{escape(title)}"
     )
+    item_ids = [i.strip() for i in items.split(",") if i.strip()] if items else []
     if push and not result.get("local", True):
-        # landed on the remote's default branch, not in this checkout (#603)
-        branch = result.get("branch") or "main"
+        # landed on the remote's default branch, not in this checkout (#603): no link
+        # to an epic this checkout doesn't have (#625)
+        console.print(pull_note(result))
+        if item_ids:
+            console.print(
+                f"[yellow]  Items not linked: after pulling, run "
+                f"`{safe(group)} add {safe(item.id)} <item>` for "
+                f"{safe(', '.join(item_ids))}[/yellow]"
+            )
+        return
+    console.print(f"  File: {escape(str(item.file_path))}")
+
+    if push and item_ids:
         console.print(
-            f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
-            f"pull {safe(branch)} to see it[/yellow]"
+            "[yellow]Warning: --push committed only the epic; the item links below "
+            "are local changes. Commit and push them yourself.[/yellow]"
         )
-    else:
-        console.print(f"  File: {escape(str(item.file_path))}")
 
     # Link items if provided
-    if items:
-        item_ids = [i.strip() for i in items.split(",") if i.strip()]
+    if item_ids:
         for linked_id in item_ids:
             if _update_item_related(service, linked_id, item.id):
                 console.print(f"  Linked {escape(linked_id)} → {escape(item.id)}")
@@ -416,7 +418,7 @@ def voyage():
 @click.option("--push", is_flag=True, help="Commit and push (atomic)")
 def voyage_create(title: str, priority: str, items: str | None, push: bool):
     """Create a new voyage (or epic in software theme)."""
-    _do_create(title, priority, items, push)
+    _do_create(title, priority, items, push, group="voyage")
 
 
 @voyage.command("show")

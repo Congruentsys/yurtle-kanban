@@ -28,3 +28,14 @@ def safe(value: object) -> str:
     and control characters (ESC, newlines) shown as `\\x1b` / `\\n`, so text from a
     repo file or argv can't clear the screen or forge output lines (#251)."""
     return escape(escape_nonprintable(str(value)))
+
+
+def pull_note(result: dict[str, Any]) -> str:
+    """The one line every `--push` create prints when the item landed on the
+    remote's default branch but not in this checkout (a feature branch, detached
+    HEAD, diverged main): where it is, and to pull (#585, #625)."""
+    branch = result.get("branch") or "main"
+    return (
+        f"[yellow]  Pushed to origin/{safe(branch)}; not in this checkout yet: "
+        f"pull {safe(branch)} to see it[/yellow]"
+    )
