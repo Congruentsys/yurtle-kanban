@@ -62,6 +62,7 @@ def resolve_actor(
     *,
     allow_git_fallback: bool = True,
     cwd: Path | str | None = None,
+    flag: str = "--agent",
 ) -> str:
     """Who is acting: `explicit` (the `--agent` flag), then `$YURTLE_AGENT`, then
     git `user.name` (only when `allow_git_fallback`), else a `ValueError`.
@@ -69,9 +70,9 @@ def resolve_actor(
     `$YURTLE_AGENT` set but blank is an error, not "unset". Every session on one
     machine shares git `user.name`, so coordination verbs pass
     `allow_git_fallback=False`. `cwd` is where git looks for its config (default:
-    the current directory)."""
+    the current directory). `flag` names the option in an error (#660)."""
     if explicit is not None:
-        return check_identity(explicit, "--agent")
+        return check_identity(explicit, flag)
     env = os.environ.get(AGENT_ENV)
     if env is not None:
         return check_identity(env, f"${AGENT_ENV}")

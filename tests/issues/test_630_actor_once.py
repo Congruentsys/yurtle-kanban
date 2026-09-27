@@ -15,11 +15,10 @@ exactly once, in `KanbanService.move_item`, and passes the resolved string down.
 
 from __future__ import annotations
 
-import inspect
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 from click.testing import CliRunner
@@ -142,12 +141,9 @@ def test_update_history_uses_given_actor_without_resolving(
 
 def test_update_history_actor_annotated_plain_str() -> None:
     """The signature says what the spec says: `actor: str`, not optional."""
-    param = inspect.signature(
-        KanbanService._update_item_file_with_history
-    ).parameters["actor"]
-    assert param.annotation in ("str", str), (
-        f"actor is annotated {param.annotation!r}, expected plain str"
-    )
+    # resolved hints: independent of `from __future__ import annotations` (#660)
+    hint = get_type_hints(KanbanService._update_item_file_with_history)["actor"]
+    assert hint is str, f"actor is annotated {hint!r}, expected plain str"
 
 
 # ---------------------------------------------------------------------------

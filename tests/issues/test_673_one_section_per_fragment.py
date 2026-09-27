@@ -67,7 +67,5 @@ def test_split_fragments_each_keep_their_section(tmp_path):
 
 def test_every_real_fragment_assembles():
     mod = _assembler()
-    fragments = mod.read_fragments(ROOT / "changelog.d")
-    assert fragments, "changelog.d/ has fragments"
-    for _num, _section, text, path in fragments:
-        assert "<!-- section:" not in text, path
+    # read_fragments refuses a second section line (outside a fence) itself (#660)
+    assert mod.read_fragments(ROOT / "changelog.d"), "changelog.d/ has fragments"
