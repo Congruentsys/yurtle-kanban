@@ -54,8 +54,15 @@ def _theme_dirs(repo_root: Path | None = None) -> list[Path]:
     except Exception:
         pass
     sources.append(Path(__file__).parent.parent.parent / "themes")
-    # an installed wheel has no themes/ beside its package: only a checkout's counts
-    dirs += [d for i, d in enumerate(sources) if d.is_dir() and d not in sources[:i]]
+    # only a checkout's themes/ counts: it has a pyproject.toml beside it, which a
+    # stray themes/ next to an installed wheel does not (#602); one entry per real
+    # directory, however it was reached (#602)
+    seen: set[Path] = set()
+    for d in sources:
+        real = d.resolve()
+        if real not in seen and d.is_dir() and (d.parent / "pyproject.toml").is_file():
+            seen.add(real)
+            dirs.append(d)
     dirs.append(Path(sys.prefix) / "share" / "yurtle-kanban" / "themes")
     return dirs
 
