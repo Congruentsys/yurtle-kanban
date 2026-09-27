@@ -740,6 +740,7 @@ class TestYamlForbiddenCharactersRoundTripIssue148:
         """`create feature "t<ch>u"` then `list` shows it with the exact title and tag."""
         import json
         import subprocess
+        import unicodedata
 
         from click.testing import CliRunner
 
@@ -753,9 +754,14 @@ class TestYamlForbiddenCharactersRoundTripIssue148:
         assert runner.invoke(main, ["init"], catch_exceptions=False).exit_code == 0
 
         title, tag, assignee = f"t{ch}u", f"x{ch}y", f"a{ch}b"
+        if unicodedata.category(ch) == "Cc":
+            # #580: an identity holding a control character is refused, so the
+            # assignee carries only the non-control characters (BOM, U+FFFE,
+            # LINE/PARA-SEP); title and tag still carry every character.
+            assignee = "ab"
         result = runner.invoke(
             main,
-            ["create", "feature", title, "--tags", tag, "--assignee", assignee],
+            ["create", "feature", title, "--tags", tag, "--assign", assignee],
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output
@@ -859,7 +865,7 @@ class TestLineSeparatorNextToSpaceRoundTripIssue148:
         title, tag, assignee = f"T{value}T", f"x{value}y", f"a{value}b"
         result = runner.invoke(
             main,
-            ["create", "feature", title, "--tags", tag, "--assignee", assignee],
+            ["create", "feature", title, "--tags", tag, "--assign", assignee],
             catch_exceptions=False,
         )
         assert result.exit_code == 0, result.output

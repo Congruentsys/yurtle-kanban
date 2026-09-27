@@ -6,15 +6,17 @@ File-based kanban using Yurtle (Turtle RDF in Markdown). Git is your database.
 Usage:
     yurtle-kanban init [--theme THEME] [--path PATH]
     yurtle-kanban list [--status STATUS] [--type TYPE] [--assignee ASSIGNEE]
-    yurtle-kanban create TYPE TITLE [--priority PRIORITY] [--assignee ASSIGNEE] [--push]
-    yurtle-kanban move ID STATUS
+    yurtle-kanban create TYPE TITLE [--priority PRIORITY] [--assign NAME]
+                         [--body TEXT | --body-file PATH|-] [--push]
+    yurtle-kanban move ID STATUS [--assign NAME] [--agent ACTOR]
+    yurtle-kanban comment ID (--body TEXT | --body-file PATH|-) [--agent ACTOR]
     yurtle-kanban show ID
     yurtle-kanban board
     yurtle-kanban stats
     yurtle-kanban rank ID RANK [--summary TEXT]
     yurtle-kanban roadmap [--by-type] [--type TYPE] [--ranked] [--export md]
     yurtle-kanban history [--week] [--month] [--since DATE] [--by-assignee]
-    yurtle-kanban next [--assignee ASSIGNEE]
+    yurtle-kanban next [--agent ACTOR]
     yurtle-kanban export --format FORMAT [--output FILE]
 """
 
@@ -23,6 +25,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import click
 from rich.console import Console
@@ -47,6 +50,7 @@ from .export import (
     export_research_index,
 )
 from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure, paper
+from .inputs import check_identity, read_text_option, resolve_actor
 from .models import (
     PRIORITIES,
     WorkItemStatus,
@@ -133,6 +137,12 @@ def get_service() -> KanbanService:
         config = KanbanConfig()  # Use defaults
 
     return KanbanService(config, repo_root)
+
+
+def _refuse(e: Exception) -> NoReturn:
+    """Print a refused input as one red line and exit 1 (#580)."""
+    console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
+    sys.exit(1)
 
 
 class _Main(Group):
@@ -410,7 +420,7 @@ def _warn_unparseable(service: KanbanService) -> None:
 @main.command("list")
 @click.option("--status", "-s", help="Filter by status (backlog, ready, in_progress, review, done)")
 @click.option("--type", "-t", "item_type", help="Filter by type (feature, bug, epic, task)")
-@click.option("--assignee", "-a", help="Filter by assignee")
+@click.option("--assignee", help="Filter by assignee (who holds the item)")
 @click.option(
     "--priority", "-p",
     help="Filter by priority (critical, high, medium, low). Comma-separated.",
@@ -426,6 +436,11 @@ def list_items(
     as_json: bool,
 ):
     """List work items."""
+    if assignee is not None:
+        try:
+            assignee = check_identity(assignee, "--assignee")
+        except ValueError as e:
+            _refuse(e)
     service = get_service()
 
     # Parse filters
@@ -490,8 +505,12 @@ def list_items(
     type=click.Choice(PRIORITIES, case_sensitive=False),
     help="Priority",
 )
-@click.option("--assignee", "-a", help="Assignee")
-@click.option("--description", "-d", help="Description")
+@click.option("--assign", "assign", help="Set the assignee (who holds the item); never defaulted")
+@click.option("--body", help="The item's body text (prefer --body-file for anything multi-line)")
+@click.option(
+    "--body-file",
+    help="Read the body from PATH, or from stdin with '-' (pipe it: a quoted heredoc <<'EOF')",
+)
 @click.option("--tags", help="Comma-separated tags")
 @click.option(
     "--push",
@@ -502,8 +521,9 @@ def create(
     item_type: str,
     title: str,
     priority: str,
-    assignee: str | None,
-    description: str | None,
+    assign: str | None,
+    body: str | None,
+    body_file: str | None,
     tags: str | None,
     push: bool,
 ):
@@ -516,8 +536,17 @@ def create(
     Examples:
         yurtle-kanban create feature "Add dark mode"
         yurtle-kanban create expedition "Research vectors" --push
-        yurtle-kanban create bug "Login crash" --push --assignee Mini
+        yurtle-kanban create bug "Login crash" --push --assign Mini
+        yurtle-kanban create feature "Dark mode" --body-file - <<'EOF'
+        ...body text, never expanded by the shell...
+        EOF
     """
+    # the whole body is read before any subprocess can touch stdin (#580)
+    try:
+        description = read_text_option(body, body_file, "body")
+        assignee = check_identity(assign, "--assign") if assign is not None else None
+    except ValueError as e:
+        _refuse(e)
     service = get_service()
 
     try:
@@ -593,7 +622,11 @@ def create(
 @click.argument("new_status")
 @click.option("--no-commit", is_flag=True, help="Don't create git commit")
 @click.option("--message", "-m", help="Custom commit message")
-@click.option("--assign", "-a", help="Set assignee (e.g., 'Claude-M5', 'Claude-DGX')")
+@click.option("--assign", help="Set the assignee (who holds the item, e.g. 'Claude-M5')")
+@click.option(
+    "--agent",
+    help="Who is moving it (kb:by); default $YURTLE_AGENT, then git user.name",
+)
 @click.option(
     "--export-board",
     "-e",
@@ -609,6 +642,7 @@ def move(
     no_commit: bool,
     message: str | None,
     assign: str | None,
+    agent: str | None,
     export_board: str | None,
     force: bool,
     closed_by: str | None,
@@ -627,6 +661,12 @@ def move(
         yurtle-kanban move EXP-123 review --skip-gates  # Skip all transition gates
     """
     service = get_service()
+    try:
+        if assign is not None:
+            assign = check_identity(assign, "--assign")
+        actor = resolve_actor(agent, cwd=service.repo_root)
+    except ValueError as e:
+        _refuse(e)
 
     target = service.get_item(item_id.upper())
     if target is None:
@@ -653,6 +693,7 @@ def move(
             commit=not no_commit,
             message=message,
             assignee=assign,
+            actor=actor,
             skip_wip_check=force,
             validate_workflow=not force,
             closed_by=closed_by,
@@ -1196,12 +1237,17 @@ def history(
 
 
 @main.command("next")
-@click.option("--assignee", "-a", help="Filter by assignee")
-def next_item(assignee: str | None):
+@click.option("--agent", help="Who is asking (items it holds are suggested first)")
+def next_item(agent: str | None):
     """Suggest the next item to work on."""
+    if agent is not None:
+        try:
+            agent = check_identity(agent, "--agent")
+        except ValueError as e:
+            _refuse(e)
     service = get_service()
 
-    item = service.suggest_next_item(assignee=assignee)
+    item = service.suggest_next_item(assignee=agent)
 
     if not item:
         console.print("[dim]No ready items to work on.[/dim]")
@@ -1213,14 +1259,35 @@ def next_item(assignee: str | None):
 
 @main.command()
 @click.argument("item_id")
-@click.argument("comment")
-@click.option("--author", "-a", default="cli", help="Comment author")
-def comment(item_id: str, comment: str, author: str):
-    """Add a comment to a work item."""
+@click.option("--body", help="The comment text (prefer --body-file: no shell expansion)")
+@click.option(
+    "--body-file",
+    help="Read the comment from PATH, or from stdin with '-' (pipe it: a quoted heredoc <<'EOF')",
+)
+@click.option(
+    "--agent",
+    help="Who is commenting; default $YURTLE_AGENT, then git user.name",
+)
+def comment(item_id: str, body: str | None, body_file: str | None, agent: str | None):
+    """Add a comment to a work item.
+
+    Example (the quoted 'EOF' keeps the shell from expanding $(...) and backticks):
+
+        yurtle-kanban comment EXP-123 --body-file - <<'EOF'
+        ...comment text...
+        EOF
+    """
+    # the whole text is read before any subprocess can touch stdin (#580)
+    try:
+        text = read_text_option(body, body_file, "body", required=True)
+        assert text is not None  # required=True: None is a usage error
+    except ValueError as e:
+        _refuse(e)
     service = get_service()
 
     try:
-        item = service.add_comment(item_id.upper(), comment, author)
+        author = resolve_actor(agent, cwd=service.repo_root)
+        item = service.add_comment(item_id.upper(), text, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:
         console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)

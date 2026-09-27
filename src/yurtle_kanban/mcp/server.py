@@ -20,6 +20,7 @@ from typing import Any
 from .. import __version__
 from .._logging import get_logger
 from ..config import KanbanConfig
+from ..inputs import resolve_actor
 from ..models import PRIORITIES, WorkItemStatus, WorkItemType, unknown_priority_message
 from ..service import KanbanService
 
@@ -223,8 +224,10 @@ class KanbanMCPServer:
                         },
                         "author": {
                             "type": "string",
-                            "description": "Comment author name",
-                            "default": "agent",
+                            "description": (
+                                "Who is commenting; omitted = $YURTLE_AGENT, "
+                                "then git user.name"
+                            ),
                         },
                     },
                     "required": ["item_id", "comment"],
@@ -484,7 +487,8 @@ class KanbanMCPServer:
         """Add a comment to an item."""
         item_id = args["item_id"].upper()
         comment = args["comment"]
-        author = args.get("author", "agent")
+        # the same resolver as the CLI's --agent: no "agent" default (#580)
+        author = resolve_actor(args.get("author"), cwd=self.repo_root)
 
         item = self.service.add_comment(item_id, comment, author)
 

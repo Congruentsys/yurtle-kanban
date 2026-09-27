@@ -67,10 +67,10 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     runner = CliRunner()
     for args in (
         ["init", "--theme", "hdd"],
-        ["create", "paper", "First paper", "--assignee", "Mini"],
+        ["create", "paper", "First paper", "--assign", "Mini"],
         ["create", "paper", "Second paper", "--tags", "brainstorm"],
         ["create", "paper", "Third paper"],
-        ["create", "hypothesis", "Dual item", "--tags", "brain-a,brain-b", "--assignee", "Mini"],
+        ["create", "hypothesis", "Dual item", "--tags", "brain-a,brain-b", "--assign", "Mini"],
     ):
         result = runner.invoke(main, args)
         assert result.exit_code == 0, f"fixture step {args} failed: {result.output}"

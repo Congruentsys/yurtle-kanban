@@ -390,6 +390,7 @@ def _action_nats_publish(action: dict, context: HookContext) -> None:
             capture_output=True,
             text=True,
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         logger.debug(f"Published to {subject}: {context.item_id}")
     except FileNotFoundError:
@@ -454,6 +455,7 @@ def _action_shell(action: dict, context: HookContext) -> None:
             capture_output=True,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,  # a hook can't eat or block on piped input (#580)
         )
         if result.returncode != 0:
             logger.warning(
@@ -530,6 +532,7 @@ def _action_notify(action: dict, context: HookContext) -> None:
             capture_output=True,
             text=True,
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         logger.debug(f"Notified {subject}: {message[:80]}")
     except FileNotFoundError:

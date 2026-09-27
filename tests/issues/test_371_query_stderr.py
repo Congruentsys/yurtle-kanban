@@ -71,7 +71,7 @@ MANY_PHRASE_STRUCTURED = "experiments"  # structured only, no semantic part
 def many(repo: Path, runner: CliRunner) -> Path:
     """The #346 repo plus four more experiments: seven experiments in all."""
     for title in ("Cache warmup", "Cache eviction", "Cache sizing", "Cache sharding"):
-        result = runner.invoke(main, ["create", "experiment", title, "--assignee", "Mini"])
+        result = runner.invoke(main, ["create", "experiment", title, "--assign", "Mini"])
         assert result.exit_code == 0, result.output
     return repo
 
