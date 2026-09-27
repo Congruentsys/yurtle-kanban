@@ -475,9 +475,13 @@ class KanbanMCPServer:
     def _move_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Move a work item to a new status."""
         item_id = args["item_id"].upper()
+        # a long-lived server: see duplicates as the files are now (#732, #742)
+        self.service.scan()
         target = self.service.get_item(item_id)
         if target is None:
             return {"error": f"Item not found: {item_id}"}
+        # before its status is read off one of the copies (#742)
+        self.service.refuse_duplicate(target, "a move")
         # the item's own theme's names only, as `move` resolves them (#587, #604)
         new_status = self.service.resolve_status_name(target, str(args["new_status"]))
         if new_status is None:
@@ -557,6 +561,7 @@ class KanbanMCPServer:
         comment = args["comment"]
         # the same resolver as the CLI's --agent: no "agent" default (#580)
         author = resolve_actor(args.get("author"), cwd=self.repo_root)
+        self.service.scan()  # see duplicates as the files are now (#732, #742)
 
         item = self.service.add_comment(item_id, comment, author)
 

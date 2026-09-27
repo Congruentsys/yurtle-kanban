@@ -678,6 +678,10 @@ def move(
     if target is None:
         console.print(f"[red]Error: Item not found: {safe(item_id.upper())}[/red]")
         sys.exit(1)
+    try:  # before its status is read off one of the copies (#742)
+        service.refuse_duplicate(target, "a move")
+    except ValueError as e:
+        _refuse(e)
     # a name resolves through the item's own theme only (hdd `active`), never
     # another theme's; --force doesn't change that (#587)
     status = service.resolve_status_name(target, new_status)

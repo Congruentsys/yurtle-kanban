@@ -1596,6 +1596,27 @@ class KanbanService:
             return self._lookup(item_id)
         return self._reread_item(item)
 
+    def refuse_duplicate(self, item: WorkItem, action: str) -> None:
+        """Refuse `action` ("a move", "an update", ...) on an item whose ID, case
+        folded, is on more than one board: which copy it meant is ambiguous
+        (#721, #732, #742). Names every file."""
+        files = self.duplicate_ids.get(item.id.upper())
+        if files:
+            where = ", ".join(self._display_path(f) for f in files)
+            raise ValueError(
+                f"{item.id} is on more than one board ({where}): {action} to it is "
+                "ambiguous; fix the duplicate ID first"
+            )
+
+    def _writable_item(self, item_id: str, action: str) -> WorkItem:
+        """A writer's item: as its file says now (#638), found, and not a duplicated
+        ID (#742)."""
+        item = self._current_item(item_id)
+        if not item:
+            raise ValueError(f"Item not found: {item_id}")
+        self.refuse_duplicate(item, action)
+        return item
+
     def _reread_item(self, item: WorkItem) -> WorkItem | None:
         """Re-parse one item's file and put the result in the cache (#638).
 
@@ -3391,9 +3412,7 @@ class KanbanService:
         """
         self._check_text(assignee=assignee, message=message, closed_by=closed_by)  # (#239)
         actor = resolve_actor(actor, cwd=self.repo_root)
-        item = self._current_item(item_id)  # the file now (#638)
-        if not item:
-            raise ValueError(f"Item not found: {item_id}")
+        item = self._writable_item(item_id, "a move")  # the file now (#638, #742)
 
         old_status = item.status
 
@@ -4251,9 +4270,7 @@ class KanbanService:
         or ```turtle fence in it is stripped when the comment is read back (#644).
         """
         self._check_text(comment=content, author=author)
-        item = self._current_item(item_id)  # the file now (#638)
-        if not item:
-            raise ValueError(f"Item not found: {item_id}")
+        item = self._writable_item(item_id, "a comment")  # the file now (#638, #742)
 
         comment = Comment(content=content, author=author)
         item.comments.append(comment)
@@ -4559,17 +4576,7 @@ class KanbanService:
         )
         if editing_deps:
             self.scan()  # the whole graph as the files say now (#638)
-        item = self._current_item(item_id)  # the file now (#638)
-        if not item:
-            raise ValueError(f"Item not found: {item_id}")
-        if item.id.upper() in self.duplicate_ids:
-            where = ", ".join(
-                self._display_path(f) for f in self.duplicate_ids[item.id.upper()]
-            )
-            raise ValueError(
-                f"{item.id} is on more than one board ({where}): an update to it is "
-                "ambiguous; fix the duplicate ID first"
-            )
+        item = self._writable_item(item_id, "an update")
 
         new_tags: list[str] | None = None
         if tags is not None or add_tags or remove_tags:
@@ -4998,9 +5005,7 @@ class KanbanService:
             raise ValueError(f"Rank must be >= 1, got {rank}")
         self._check_text(value_summary=value_summary)  # before any write (#219)
 
-        item = self._current_item(item_id)  # the file now (#638)
-        if not item:
-            raise ValueError(f"Item not found: {item_id}")
+        item = self._writable_item(item_id, "a rank")  # the file now (#638, #742)
 
         item.priority_rank = rank
         if value_summary is not None:
