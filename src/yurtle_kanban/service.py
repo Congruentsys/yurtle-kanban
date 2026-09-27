@@ -145,15 +145,24 @@ def _scalar_text(value: Any) -> Any:
 
 def _list_text(value: Any) -> list[Any]:
     """A frontmatter list field as text entries (#653): a comma-separated string
-    is split, each scalar entry is read as `_scalar_text` reads it (`2026` ->
-    '2026', `yes` -> 'true', #225), and null entries are dropped."""
+    is split, a single scalar is one entry, each entry is read as text
+    (`2026` -> '2026', `yes` -> 'true' as #225 reads it, `2026-01-01` as
+    written), and null entries are dropped."""
     if value is None:
         return []
     if isinstance(value, str):
         return [v.strip() for v in value.split(",")]
     if not isinstance(value, list):
-        return value
-    return [_scalar_text(v) for v in value if v is not None]
+        value = [value]  # `tags: 2026` is one entry (#653)
+    return [_entry_text(v) for v in value if v is not None]
+
+
+def _entry_text(value: Any) -> Any:
+    """One list entry as text: `_scalar_text`, and a YAML date or timestamp as
+    written (`2026-01-01`); a nested list or mapping as it is (#675)."""
+    if isinstance(value, (date, datetime)):
+        return value.isoformat() if isinstance(value, datetime) else str(value)
+    return _scalar_text(value)
 
 
 _MAX_FIELD_NODES = 10_000  # values in one frontmatter field, aliases expanded (#277)
@@ -3798,7 +3807,7 @@ class KanbanService:
                     {parsed}
                     if isinstance(parsed, str)
                     # as written, as Python spells it, and as the reader does (#653)
-                    else {str(parsed), text.strip(), str(_scalar_text(parsed))}
+                    else {str(parsed), text.strip(), str(_entry_text(parsed))}
                 )
                 entries.append((keys, line, pending))
                 pending = []
