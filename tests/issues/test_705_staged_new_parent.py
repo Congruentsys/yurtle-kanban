@@ -79,18 +79,35 @@ def test_parent_moved_off_the_board_says_it_was_skipped(world, monkeypatch) -> N
     assert "PAPER-130" in out and "not found" in out.lower(), out
 
 
-def test_already_linked_parent_says_unchanged(world, monkeypatch) -> None:  # noqa: F811
-    """#724: a second create linking the same parent/child pair would find the
-    link already there; the output says the parent is unchanged."""
-    from yurtle_kanban.service import KanbanService
+def test_parent_without_turtle_block_says_so(world, monkeypatch) -> None:  # noqa: F811
+    """#724 review: no turtle block is not 'already linked'."""
+    import re
 
     seed_on_origin(world, monkeypatch, HYP)
     drop_remote(world)
-    monkeypatch.setattr(KanbanService, "_linked_parent_text", lambda self, *a, **k: None)
+    path = world.a / PAPER
+    path.write_text(re.sub(r"```turtle\n.*?```\n", "", path.read_text(), flags=re.S))
+    git(world.a, "commit", "-qam", "drop the paper's turtle block")
     result = invoke(world, monkeypatch, HYP.argv)
     out = flat(result)
     assert result.exit_code == 0, out
-    assert "PAPER-130" in out and "unchanged" in out, out
+    assert "PAPER-130" in out and "no turtle block" in out, out
+    assert "already" not in out, out
+
+
+def test_already_linked_parent_names_the_child(world, monkeypatch) -> None:  # noqa: F811
+    """#724: a parent whose turtle block already links the child says so, by name."""
+    seed_on_origin(world, monkeypatch, HYP)
+    drop_remote(world)
+    first = invoke(world, monkeypatch, HYP.argv)  # links H130.1 into the paper, committed
+    assert first.exit_code == 0, flat(first)
+    child = next((world.a / "research" / "hypotheses").glob("H130.1-*.md"))
+    git(world.a, "rm", "-q", str(child.relative_to(world.a)))
+    git(world.a, "commit", "-qm", "drop the child, keep the paper's link")
+    again = invoke(world, monkeypatch, [*HYP.argv, "--id", "H130.1"])
+    out = flat(again)
+    assert again.exit_code == 0, out
+    assert "PAPER-130 already links to H130.1" in out, out
 
 
 def test_missing_parent_is_said_once(world, monkeypatch, caplog) -> None:  # noqa: F811
