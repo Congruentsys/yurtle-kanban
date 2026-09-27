@@ -1143,33 +1143,12 @@ class KanbanService:
     def _map_theme_status(
         self, status_str: str, file_path: Path | None = None
     ) -> WorkItemStatus | None:
-        """Map theme-specific status to standard status: the item's own board's
-        theme first (#439, #448), then the common aliases below."""
-        # Common status mappings across themes
-        mapping = {
-            # Nautical theme
-            "harbor": WorkItemStatus.BACKLOG,
-            "provisioning": WorkItemStatus.READY,
-            "underway": WorkItemStatus.IN_PROGRESS,
-            "approaching": WorkItemStatus.REVIEW,
-            "arrived": WorkItemStatus.DONE,
-            # Custom statuses
-            "intake": WorkItemStatus.BACKLOG,
-            "planning": WorkItemStatus.READY,
-            "active": WorkItemStatus.IN_PROGRESS,
-            "complete": WorkItemStatus.DONE,
-            "completed": WorkItemStatus.DONE,
-            # Spec theme
-            "draft": WorkItemStatus.BACKLOG,
-            "proposed": WorkItemStatus.READY,
-            "implementing": WorkItemStatus.IN_PROGRESS,
-            "accepted": WorkItemStatus.DONE,
-        }
-        # the item's theme's own names (hdd `abandoned` is blocked): `move` and
-        # `create` write them, so a scan must read them back (#439) — through the
-        # item's own board, so two themes can give one name different meanings (#448)
-        found = self._theme_status_names(file_path).get(_fold_status_name(status_str))
-        return found if found is not None else mapping.get(status_str.lower())
+        """Map a theme-specific status to a standard status through the item's own
+        board's theme only (#439, #448); another theme's names read as unknown (#633)."""
+        # `move` and `create` write the theme's own names (hdd `abandoned` is
+        # blocked), so a scan must read them back (#439) — through the item's own
+        # board, so two themes can give one name different meanings (#448)
+        return self._theme_status_names(file_path).get(_fold_status_name(status_str))
 
     def _single_board_theme(self) -> dict | None:
         """The configured theme: memoised within a scan scope, the current one
@@ -1188,6 +1167,12 @@ class KanbanService:
         board = None
         if self.config.is_multi_board and file_path is not None:
             board = self.config.get_board_for_path(file_path, self.repo_root)
+        return self._board_status_names(board)
+
+    def _board_status_names(self, board: BoardConfig | None) -> dict[str, WorkItemStatus]:
+        """native name → status for `board`'s theme (the single board's theme without
+        boards; every board's, first wins, for None on multi-board). Memoised per
+        board within a scan scope (#448, #459)."""
         key = board.name if board else None
         cache = self._status_names_cache if self._scanning else {}  # (#459)
         if key in cache:
@@ -1229,7 +1214,7 @@ class KanbanService:
         if self._board is None:
             items = self.scan()
             columns = self._get_columns_from_theme()
-            column_status_map = self._get_column_status_map()
+            column_status_map = self._get_column_status_map(None)
             self._board = Board(
                 id="main",
                 name=self.config.theme.title() + " Board",
@@ -1280,8 +1265,7 @@ class KanbanService:
         columns = self._get_columns_from_preset(board_config.preset)
         columns = self._apply_wip_overrides(columns, board_config)
 
-
-        column_status_map = self._get_column_status_map()
+        column_status_map = self._get_column_status_map(board_config)
 
         return Board(
             id=board_config.name,
@@ -1464,56 +1448,14 @@ class KanbanService:
 
         return columns
 
-    def _get_column_status_map(self) -> dict[str, WorkItemStatus]:
-        """Get mapping from column IDs to WorkItemStatus for themed columns.
-
-        Loads status_mappings from all configured board presets, then
-        falls back to hardcoded defaults for known themes.
-        """
-        mappings: dict[str, WorkItemStatus] = {
-            # Standard software theme (identity mapping)
-            "backlog": WorkItemStatus.BACKLOG,
-            "ready": WorkItemStatus.READY,
-            "in_progress": WorkItemStatus.IN_PROGRESS,
-            "review": WorkItemStatus.REVIEW,
-            "done": WorkItemStatus.DONE,
-            "blocked": WorkItemStatus.BLOCKED,
-            # Nautical theme
-            "harbor": WorkItemStatus.BACKLOG,
-            "provisioning": WorkItemStatus.READY,
-            "underway": WorkItemStatus.IN_PROGRESS,
-            "approaching": WorkItemStatus.REVIEW,
-            "arrived": WorkItemStatus.DONE,
-            # Spec theme
-            "draft": WorkItemStatus.BACKLOG,
-            "proposed": WorkItemStatus.READY,
-            "implementing": WorkItemStatus.IN_PROGRESS,
-            "accepted": WorkItemStatus.DONE,
-            # HDD theme (Hypothesis-Driven Development)
-            "active": WorkItemStatus.IN_PROGRESS,
-            "complete": WorkItemStatus.DONE,
-            "abandoned": WorkItemStatus.BLOCKED,
-        }
-
-        # Load status_mappings from all configured board presets
-        from .config import _load_builtin_theme
-
-        # a single board's theme counts too: `move X doing` names its native
-        # status (#613)
-        presets = (
-            [board_config.preset for board_config in self.config.boards]
-            if self.config.is_multi_board
-            else [self.config.theme]
-        )
-        for preset in dict.fromkeys(presets):
-            theme = _load_builtin_theme(preset, self.repo_root)
-            if theme and "status_mappings" in theme:
-                for alias, canonical in theme["status_mappings"].items():
-                    try:
-                        mappings[alias] = WorkItemStatus.from_string(canonical)
-                    except ValueError:
-                        pass
-
+    def _get_column_status_map(
+        self, board_config: BoardConfig | None,
+    ) -> dict[str, WorkItemStatus]:
+        """column id → status for one board: the six canonical names plus that
+        board's own theme `status_mappings` (the configured theme on a single
+        board), no other theme's (#613, #633). A column neither names has no status."""
+        mappings: dict[str, WorkItemStatus] = {s.value: s for s in WorkItemStatus}
+        mappings.update(self._board_status_names(board_config))
         return mappings
 
     def _get_columns_from_theme(self) -> list[Column]:

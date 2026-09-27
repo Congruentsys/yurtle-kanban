@@ -406,7 +406,7 @@ class TestStatusMappings:
     ) -> None:
         text, _ = _bad_theme("status_mappings", shape)
         repo = _repo(tmp_path / "repo", MULTI_CFG, _drop(text, "transitions"))
-        item = _item(repo, "TASK-001", "task", "active")
+        item = _item(repo, "TASK-001", "task", "in_progress")  # hdd `active` is unknown here (#633)
         result = _invoke(repo, monkeypatch, ["move", "TASK-001", "review", "--no-commit"])
         _no_crash(result)
         assert result.exit_code == 0, result.output
@@ -416,7 +416,7 @@ class TestStatusMappings:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         repo = _repo(tmp_path / "repo", MULTI_CFG, "name: Acme\n")
-        item = _item(repo, "TASK-001", "task", "active")
+        item = _item(repo, "TASK-001", "task", "in_progress")  # hdd `active` is unknown here (#633)
         result = _invoke(repo, monkeypatch, ["move", "TASK-001", "review", "--no-commit"])
         _no_crash(result)
         assert result.exit_code == 0, result.output

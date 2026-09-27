@@ -490,8 +490,12 @@ class Board:
         """The status a column shows: the theme's mapping (hdd `draft` is backlog),
         else the column id itself; None for a column that matches no status. The
         header count and the drawn cards both use this, so they agree (#87)."""
-        if column_id in self.column_status_map:
-            return self.column_status_map[column_id]
+        # the service folds theme names as `move` does: lower-case, `-`/space → `_`
+        # (#587, #633)
+        folded = column_id.lower().replace("-", "_").replace(" ", "_")
+        for key in (column_id, folded):
+            if key in self.column_status_map:
+                return self.column_status_map[key]
         try:
             return WorkItemStatus.from_string(column_id)
         except ValueError:
