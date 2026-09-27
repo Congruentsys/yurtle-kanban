@@ -110,6 +110,11 @@ def _print_parent_missing(
             f"  [yellow]{safe(parent_id)} has no turtle block: "
             "no inverse reference written[/yellow]"
         )
+    elif state == "unparseable":
+        console.print(
+            f"  [yellow]{safe(parent_id)} has a turtle block that can't be parsed: "
+            "no inverse reference written[/yellow]"
+        )
     elif state == "linked":
         console.print(f"  [dim]{safe(parent_id)} already links to {safe(child_id)}[/dim]")
 

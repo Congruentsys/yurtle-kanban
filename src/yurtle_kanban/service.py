@@ -2785,7 +2785,7 @@ class KanbanService:
             return None
 
         content, eol = self._read_item_text(parent.file_path)
-        new_content = self._linked_parent_text(content, parent_id, child_type, child_id)
+        new_content, _ = self._linked_parent_text(content, parent_id, child_type, child_id)
         return None if new_content is None else (parent, new_content, eol)
 
     def _apply_parent_link(self, parent: WorkItem, new_content: str, eol: LineEndings) -> None:
@@ -2834,35 +2834,34 @@ class KanbanService:
     def parent_link_state(self, parent_id: str, child_type: str, child_id: str) -> str:
         """Why no inverse reference would be written for `child_id` on `parent_id`:
         'missing' (on no board), 'no-relation' (the child type has none),
-        'no-block' (the parent has no turtle block), 'linked' (already there), or
-        'addable' (#724)."""
+        'no-block' (the parent has no turtle block), 'unparseable' (the block
+        can't be parsed or has no URI subject, #737), 'linked' (already there),
+        or 'addable' (#724)."""
         parent = self._current_item(parent_id)
         if parent is None or not parent.file_path.exists():
             return "missing"
         if child_type not in self._INVERSE_RELATIONS:
             return "no-relation"
         content = parent.file_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-        if not self._TURTLE_BLOCK_RE.search(content):
-            return "no-block"
-        text = self._linked_parent_text(content, parent_id, child_type, child_id)
-        return "linked" if text is None else "addable"
+        text, state = self._linked_parent_text(content, parent_id, child_type, child_id)
+        return state or "addable"
 
     def _linked_parent_text(
         self, content: str, parent_id: str, child_type: str, child_id: str
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """A parent's LF text with the inverse reference to `child_id` added to its
-        turtle block, or None when there is nothing to add: no relation for
-        `child_type`, no turtle block, or the link is already there (#645)."""
+        turtle block (#645), or None with why there is nothing to add:
+        'no-relation', 'no-block', 'unparseable' or 'linked' (#724, #737)."""
         relation = self._INVERSE_RELATIONS.get(child_type)
         if relation is None:
             logger.debug(f"No inverse relation defined for child type: {child_type}")
-            return None
+            return None, "no-relation"
 
         match = self._TURTLE_BLOCK_RE.search(content)
         if not match:
             # the CLI says it (parent_link_state), no warning as well (#724)
             logger.debug(f"No turtle block in {parent_id} — skipping inverse reference")
-            return None
+            return None, "no-block"
 
         # Build rdflib URIs for the predicate and child object
         pred_ns = Namespace(PREFIXES[relation["predicate_ns"]])
@@ -2871,13 +2870,13 @@ class KanbanService:
         child_uri = child_ns[child_id]
 
         # Modify the turtle block using rdflib
-        new_inner, changed = self._modify_turtle_block(match.group(2), predicate, child_uri)
-        if not changed:
-            return None
+        new_inner, state = self._modify_turtle_block(match.group(2), predicate, child_uri)
+        if state is not None:
+            return None, state
 
         # Replace the turtle block in the file
         new_block = match.group(1) + new_inner + "\n" + match.group(3)
-        return content[: match.start()] + new_block + content[match.end() :]
+        return content[: match.start()] + new_block + content[match.end() :], None
 
     def _parent_link_blob(
         self, base: str, parent_id: str, child_type: str, child_id: str
@@ -2888,7 +2887,7 @@ class KanbanService:
         the link can only ride in the child's commit when the parent is already
         there (#645). A parent that exists nowhere is skipped, as it is locally.
         Also returns why nothing was added, read from `base`'s copy: 'missing',
-        'no-relation', 'no-block' or 'linked', else None (#724)."""
+        'no-relation', 'no-block', 'unparseable' or 'linked', else None (#724, #737)."""
         held = self._holder_at(base, parent_id)
         if held is None and self.get_item(parent_id) is None:
             # the CLI says it; no warning as well (#724)
@@ -2932,19 +2931,17 @@ class KanbanService:
             raise _CasRefusedError(
                 f"{held} on the default branch is not UTF-8 ({e}); nothing was created"
             ) from None
-        new_content = self._linked_parent_text(content, parent_id, child_type, child_id)
-        if new_content is not None:
-            return {Path(held): eol.apply(new_content)}, None
-        if child_type not in self._INVERSE_RELATIONS:
-            return {}, "no-relation"
-        return {}, ("linked" if self._TURTLE_BLOCK_RE.search(content) else "no-block")
+        new_content, state = self._linked_parent_text(content, parent_id, child_type, child_id)
+        if new_content is None:
+            return {}, state
+        return {Path(held): eol.apply(new_content)}, None
 
     def _modify_turtle_block(
         self,
         turtle_content: str,
         predicate_uri: Any,
         child_uri: Any,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, str | None]:
         """Parse a turtle block, add a triple, and serialize back.
 
         Uses rdflib for correct Turtle parsing and serialization.
@@ -2961,16 +2958,18 @@ class KanbanService:
             child_uri: rdflib URIRef for the child object to add.
 
         Returns:
-            Tuple of (new_content, changed). changed is False if the triple
-            already exists or no subject was found.
+            Tuple of (new_content, state). state is None when the triple was
+            added, 'linked' when it already exists, and 'unparseable' when the
+            block can't be parsed or has no URI subject (#737).
         """
         base_uri = URIRef("urn:yurtle:block")
         g = Graph()
         try:
             g.parse(data=turtle_content, format="turtle", publicID=str(base_uri))
         except Exception as e:
-            logger.warning(f"Failed to parse turtle block for modification: {e}")
-            return turtle_content, False
+            # the CLI says it (parent_link_state), no warning as well (#737)
+            logger.debug(f"Failed to parse turtle block for modification: {e}")
+            return turtle_content, "unparseable"
 
         # Find subject — first URIRef (skip BNodes)
         subject = next(
@@ -2978,11 +2977,11 @@ class KanbanService:
             None,
         )
         if subject is None:
-            return turtle_content, False
+            return turtle_content, "unparseable"
 
         # Idempotency: skip if triple already present
         if (subject, predicate_uri, child_uri) in g:
-            return turtle_content, False
+            return turtle_content, "linked"
 
         # Add the inverse triple
         g.add((subject, predicate_uri, child_uri))
@@ -2999,7 +2998,7 @@ class KanbanService:
         # Strip @base declaration (original blocks don't have it)
         lines = result.strip().split("\n")
         lines = [line for line in lines if not line.startswith("@base ")]
-        return "\n".join(lines), True
+        return "\n".join(lines), None
 
     def _merge_into_existing_block(
         self, content: str, match: re.Match, missing: Graph

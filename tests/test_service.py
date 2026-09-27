@@ -865,12 +865,12 @@ class TestModifyTurtleBlock:
         paper_ns = Namespace("https://nusy.dev/paper/")
         hyp_ns = Namespace("https://nusy.dev/hypothesis/")
 
-        new_content, changed = svc._modify_turtle_block(
+        new_content, state = svc._modify_turtle_block(
             _paper_turtle_block(),
             paper_ns["hasHypothesis"],
             hyp_ns["H130.1"],
         )
-        assert changed is True
+        assert state is None
         assert "hasHypothesis" in new_content
         assert "H130.1" in new_content
 
@@ -887,17 +887,17 @@ class TestModifyTurtleBlock:
             paper_ns["hasHypothesis"],
             hyp_ns["H130.1"],
         )
-        content2, changed = svc._modify_turtle_block(
+        content2, state = svc._modify_turtle_block(
             content1,
             paper_ns["hasHypothesis"],
             hyp_ns["H130.2"],
         )
-        assert changed is True
+        assert state is None
         assert "H130.1" in content2
         assert "H130.2" in content2
 
     def test_idempotent(self, hdd_repo, hdd_svc_config):
-        """Adding the same child twice should return changed=False."""
+        """Adding the same child twice should return state "linked"."""
         from rdflib import Namespace
 
         svc = self._svc(hdd_repo, hdd_svc_config)
@@ -909,12 +909,12 @@ class TestModifyTurtleBlock:
             paper_ns["hasHypothesis"],
             hyp_ns["H130.1"],
         )
-        _, changed = svc._modify_turtle_block(
+        _, state = svc._modify_turtle_block(
             content1,
             paper_ns["hasHypothesis"],
             hyp_ns["H130.1"],
         )
-        assert changed is False
+        assert state == "linked"
 
     def test_existing_triples_preserved(self, hdd_repo, hdd_svc_config):
         """Original triples should survive modification."""
@@ -952,19 +952,19 @@ class TestModifyTurtleBlock:
         assert "@prefix hyp:" in new_content
 
     def test_empty_block(self, hdd_repo, hdd_svc_config):
-        """Empty turtle content should return unchanged."""
+        """Empty turtle content has no subject: unparseable (#737)."""
         from rdflib import Namespace
 
         svc = self._svc(hdd_repo, hdd_svc_config)
         paper_ns = Namespace("https://nusy.dev/paper/")
         hyp_ns = Namespace("https://nusy.dev/hypothesis/")
 
-        _, changed = svc._modify_turtle_block(
+        _, state = svc._modify_turtle_block(
             "",
             paper_ns["hasHypothesis"],
             hyp_ns["H130.1"],
         )
-        assert changed is False
+        assert state == "unparseable"
 
     def test_no_base_in_output(self, hdd_repo, hdd_svc_config):
         """Output should not contain @base declaration."""
@@ -989,12 +989,12 @@ class TestModifyTurtleBlock:
         hyp_ns = Namespace("https://nusy.dev/hypothesis/")
         expr_ns = Namespace("https://nusy.dev/experiment/")
 
-        new_content, changed = svc._modify_turtle_block(
+        new_content, state = svc._modify_turtle_block(
             _hypothesis_turtle_block(),
             hyp_ns["hasExperiment"],
             expr_ns["EXPR-130"],
         )
-        assert changed is True
+        assert state is None
         assert "hasExperiment" in new_content
         assert "EXPR-130" in new_content
         # Original paper reference should still be there
