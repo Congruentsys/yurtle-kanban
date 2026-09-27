@@ -1022,8 +1022,9 @@ status: backlog
         assert "status: complete" in content
         assert "status: done" not in content
 
-    def test_move_dev_item_writes_canonical_status(self, hdd_state_setup):
-        """Dev items should still use canonical names (in_progress, not active)."""
+    def test_move_dev_item_writes_nautical_native_status(self, hdd_state_setup):
+        """Dev (nautical) items are written with nautical's own name (underway,
+        not hdd's active, nor canonical in_progress) since #604."""
         from yurtle_kanban.models import WorkItemStatus
 
         service = hdd_state_setup["service"]
@@ -1035,9 +1036,10 @@ status: backlog
         )
         assert item.status == WorkItemStatus.IN_PROGRESS
 
-        # Read the file and verify it has canonical name (nautical doesn't define reverse mapping)
+        # nautical.yaml's status_mappings name in_progress `underway` (#604)
         content = dev_file.read_text()
-        assert "status: in_progress" in content
+        assert "status: underway" in content
+        assert "status: active" not in content
 
     def test_hdd_draft_to_active_transition_valid(self, hdd_state_setup):
         """HDD draft→active transition should be valid without --force."""
@@ -1088,14 +1090,16 @@ status: backlog
         assert mapping.get("blocked") == "abandoned"
 
     def test_reverse_status_mapping_no_board(self, hdd_state_setup):
-        """Test _get_reverse_status_mapping returns empty for non-HDD board."""
+        """_get_reverse_status_mapping follows the board's own theme: nautical's
+        names come from nautical.yaml `status_mappings` since #604."""
         service = hdd_state_setup["service"]
 
-        # Nautical preset has no status_mappings → empty reverse mapping
         board = service.config.get_board("development")
         mapping = service._get_reverse_status_mapping(board)
 
-        assert mapping == {}
+        assert mapping["in_progress"] == "underway"
+        assert mapping["blocked"] == "stranded"
+        assert "active" not in mapping.values()  # not hdd's
 
     def test_move_hdd_item_to_abandoned_writes_abandoned(self, hdd_state_setup):
         """Moving an HDD item to 'abandoned' should write native name."""

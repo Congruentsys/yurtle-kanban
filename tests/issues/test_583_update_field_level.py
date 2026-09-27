@@ -37,13 +37,14 @@ from yurtle_kanban.service import KanbanService
 
 # name -> (theme, create type, statuses to move through, CRLF?, expected status line)
 FIXTURES: dict[str, tuple[str, str, list[WorkItemStatus], bool, str]] = {
-    "nautical": ("nautical", "expedition", [WorkItemStatus.IN_PROGRESS], False, "in_progress"),
+    # nautical writes its own name (`underway`) since #604, as hdd does
+    "nautical": ("nautical", "expedition", [WorkItemStatus.IN_PROGRESS], False, "underway"),
     "nautical-crlf": (
         "nautical",
         "expedition",
         [WorkItemStatus.IN_PROGRESS],
         True,
-        "in_progress",
+        "underway",
     ),
     "software": ("software", "feature", [WorkItemStatus.IN_PROGRESS], False, "in_progress"),
     "hdd-active": ("hdd", "idea", [WorkItemStatus.IN_PROGRESS], False, "active"),

@@ -76,26 +76,6 @@ _LIT = Namespace(PREFIXES["lit"])
 # HDD type aliases for backfill (normalize variant names to canonical types)
 _TYPE_ALIASES: dict[str, str] = {"secondary-hypothesis": "hypothesis"}
 
-# status names hardcoded per theme, accepted by `move` for that theme's items only
-# (#587): nautical.yaml has no `status_mappings`; spec's names sit under a key the
-# service doesn't read yet (#588)
-_THEME_STATUS_NAMES: dict[str, dict[str, WorkItemStatus]] = {
-    "nautical": {
-        "harbor": WorkItemStatus.BACKLOG,
-        "provisioning": WorkItemStatus.READY,
-        "underway": WorkItemStatus.IN_PROGRESS,
-        "approaching": WorkItemStatus.REVIEW,
-        "arrived": WorkItemStatus.DONE,
-    },
-    "spec": {
-        "draft": WorkItemStatus.BACKLOG,
-        "proposed": WorkItemStatus.READY,
-        "implementing": WorkItemStatus.IN_PROGRESS,
-        "accepted": WorkItemStatus.DONE,
-    },
-}
-
-
 def _fold_status_name(name: str) -> str:
     """A status name as `move` matches it: lower-case, `-` and spaces → `_` (#587)."""
     return name.lower().replace("-", "_").replace(" ", "_")
@@ -483,11 +463,8 @@ class KanbanService:
     def legal_status_names(self, item: WorkItem) -> dict[str, WorkItemStatus]:
         """Every status name `move` accepts for `item` → its status: the six
         canonical names plus the item's own theme's names, no other theme's (#587)."""
-        board_config, theme = self._item_theme(item)
-        theme_name = board_config.preset if board_config else self.config.theme
+        _, theme = self._item_theme(item)
         names = {s.value: s for s in WorkItemStatus}
-        for native, status in _THEME_STATUS_NAMES.get(theme_name, {}).items():
-            names[_fold_status_name(native)] = status
         for native, canonical in ((theme or {}).get("status_mappings") or {}).items():
             try:
                 status = WorkItemStatus.from_string(str(canonical))
@@ -1395,9 +1372,17 @@ class KanbanService:
             "review": WorkItemStatus.REVIEW,
             "done": WorkItemStatus.DONE,
             "blocked": WorkItemStatus.BLOCKED,
-            # Nautical and spec themes
-            **_THEME_STATUS_NAMES["nautical"],
-            **_THEME_STATUS_NAMES["spec"],
+            # Nautical theme
+            "harbor": WorkItemStatus.BACKLOG,
+            "provisioning": WorkItemStatus.READY,
+            "underway": WorkItemStatus.IN_PROGRESS,
+            "approaching": WorkItemStatus.REVIEW,
+            "arrived": WorkItemStatus.DONE,
+            # Spec theme
+            "draft": WorkItemStatus.BACKLOG,
+            "proposed": WorkItemStatus.READY,
+            "implementing": WorkItemStatus.IN_PROGRESS,
+            "accepted": WorkItemStatus.DONE,
             # HDD theme (Hypothesis-Driven Development)
             "active": WorkItemStatus.IN_PROGRESS,
             "complete": WorkItemStatus.DONE,

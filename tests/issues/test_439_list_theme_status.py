@@ -9,7 +9,8 @@ writes the native name via `_get_reverse_status_mapping`.
 Decided ([steer] on #439):
 1. The human `list` table shows the status as the theme names it, through the theme's
    reverse status mapping (canonical -> native). A theme with no `status_mappings`
-   (software, nautical, spec today) maps nothing, so its names stay canonical.
+   (software; nautical and spec had none until #604 / #588) maps nothing, so its
+   names stay canonical.
 2. Machine contracts are unchanged: `list --json` / `show --json` `status` is
    canonical, and `list --status <canonical>` still finds the item.
 3. `create` on a theme with `status_mappings` writes the native initial status
@@ -209,8 +210,20 @@ def test_reverse_mappings_per_theme() -> None:
         "in_progress": "implementing",
         "done": "accepted",
     }
-    # no `status_mappings`: their names stay canonical everywhere
-    assert _reverse_mapping("nautical") == {}
+    # nautical's names moved from a hardcoded table into `status_mappings` (#604);
+    # review has two names (approaching, approaching_port), either may be written
+    nautical = _reverse_mapping("nautical")
+    assert {k: v for k, v in nautical.items() if k != "review"} == {
+        "backlog": "harbor",
+        "ready": "provisioning",
+        "in_progress": "underway",
+        "done": "arrived",
+        "blocked": "stranded",
+    }
+    assert nautical.get("review", "").lower().replace(" ", "_") in {
+        "approaching", "approaching_port",
+    }
+    # no `status_mappings`: its names stay canonical everywhere
     assert _reverse_mapping("software") == {}
 
 
@@ -286,8 +299,8 @@ def test_multiboard_hdd_moved_item_listed_by_theme_name(
 def test_multiboard_nautical_item_listed_per_its_reverse_mapping(
     repo: Path, runner: CliRunner, wide: io.StringIO
 ) -> None:
-    """Control: the nautical board has no status_mappings, so its names stay canonical,
-    exactly as `move` writes them there — alongside an hdd item listed as `draft`."""
+    """Control: the nautical board lists its item by nautical's own name (#604),
+    exactly as `move` writes it there — alongside an hdd item listed as `draft`."""
     _multiboard(runner)
     dev_id = _created_id(runner, wide, ["create", "expedition", "dev item"])
     _invoke(runner, ["move", dev_id, "underway", "--force", "--skip-gates", "--no-commit"])
@@ -400,7 +413,8 @@ def test_multiboard_hdd_create_writes_draft(
 def test_every_theme_create_writes_native_initial_status(
     repo: Path, runner: CliRunner, wide: io.StringIO, theme: str
 ) -> None:
-    """hdd: `draft`; software/nautical/spec (no status_mappings): `backlog`."""
+    """Each theme's own name for backlog: hdd/spec `draft`, nautical `harbor` (#604),
+    software `backlog`."""
     _invoke(runner, ["init", "--theme", theme])
     item_id = _created_id(runner, wide, ["create", FIRST_TYPE[theme], "item one"])
     assert _file_status(repo, item_id) == _native(theme, "backlog")
@@ -411,7 +425,8 @@ def test_multiboard_nautical_create_unchanged(
 ) -> None:
     _multiboard(runner)
     dev_id = _created_id(runner, wide, ["create", "expedition", "dev item"])
-    assert _file_status(repo, dev_id) == _native("nautical", "backlog") == "backlog"
+    # nautical writes its own name since #604, from its own board's theme (not hdd's `draft`)
+    assert _file_status(repo, dev_id) == _native("nautical", "backlog") == "harbor"
 
 
 def test_software_create_and_list_unchanged(

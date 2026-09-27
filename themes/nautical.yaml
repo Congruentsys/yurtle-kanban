@@ -77,3 +77,14 @@ columns:
     name: "Stranded"
     order: 6
     description: "Blocked by external factors"
+
+# Native status names, native -> canonical, as every theme maps them (#604).
+# Both review names are accepted; the last one listed for a status is written.
+status_mappings:
+  harbor: backlog
+  provisioning: ready
+  underway: in_progress
+  approaching_port: review
+  approaching: review
+  arrived: done
+  stranded: blocked
