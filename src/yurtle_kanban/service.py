@@ -2055,7 +2055,7 @@ class KanbanService:
         except GitCommitError as e:
             return self._push_failed(str(e))
 
-        self._items[current_id] = item
+        self._index_item(item)  # the folded index too (#741, #751)
         self._fire_create_hook(item)
         return {
             "success": True,
@@ -2133,7 +2133,7 @@ class KanbanService:
         def landed(branch: str, local: bool) -> dict[str, Any]:
             item, current_id = made["item"], made["id"]
             if local:
-                self._items[current_id] = item
+                self._index_item(item)  # the folded index too (#741, #751)
             self._fire_create_hook(item)
             # a parent edited here blocks the pull that brings its link (#674)
             top = self._git_toplevel()
@@ -3528,7 +3528,7 @@ class KanbanService:
         if commit:
             commit_msg = message
             if not commit_msg:
-                commit_msg = f"Move {item_id} to {new_status.value}"
+                commit_msg = f"Move {item.id} to {new_status.value}"  # the file's (#751)
                 if forced:
                     commit_msg += " (forced)"
                 if assignee:
@@ -4290,7 +4290,7 @@ class KanbanService:
         if commit:
             self._git_commit(
                 item.file_path,
-                f"Add comment to {item_id}",
+                f"Add comment to {item.id}",  # the file's spelling (#751)
             )
 
         return item
@@ -4649,7 +4649,7 @@ class KanbanService:
         if commit:
             self._git_commit(
                 item.file_path,
-                message or f"Update {item_id}: {', '.join(changes)}",
+                message or f"Update {item.id}: {', '.join(changes)}",  # (#751)
             )
 
         return item, changes
@@ -5047,7 +5047,7 @@ class KanbanService:
         if commit:
             self._git_commit(
                 item.file_path,
-                message or f"Rank {item_id} as #{rank}",
+                message or f"Rank {item.id} as #{rank}",  # the file's spelling (#751)
             )
 
         return item
