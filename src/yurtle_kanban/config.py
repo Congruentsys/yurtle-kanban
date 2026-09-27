@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 from ._logging import get_logger
-from .models import WorkItemStatus
+from .models import InputRefused, WorkItemStatus
 
 logger = get_logger("yurtle-kanban")
 
@@ -402,7 +402,7 @@ def _theme_name(
     value = _or_default(data, key, "software")
     if not isinstance(value, str):
         # a list or mapping crashed the theme lookup; a number loaded nothing (#272)
-        raise ValueError(
+        raise InputRefused(
             f"`{key}`{where} must be a string theme name, got {type(value).__name__} {value!r}"
         )
     if not value.strip():
@@ -429,12 +429,12 @@ def _scan_list(data: dict[str, Any], where: str = "in kanban.paths") -> list[str
     if isinstance(value, str):
         return [value]
     if not isinstance(value, list):
-        raise ValueError(
+        raise InputRefused(
             f"scan_paths: expected a list of paths, got {type(value).__name__} {value!r}"
         )
     bad = [p for p in value if not isinstance(p, str)]
     if bad:
-        raise ValueError(f"scan_paths: every entry must be a path string, got {bad[0]!r}")
+        raise InputRefused(f"scan_paths: every entry must be a path string, got {bad[0]!r}")
     # an empty entry is `Path('.')`, the repo root: never scan that by accident (#517)
     paths = [p for p in value if p.strip()]
     for dropped in (p for p in value if not p.strip()):
@@ -454,7 +454,7 @@ def _ignore_list(data: dict[str, Any]) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise ValueError(
+        raise InputRefused(
             f"ignore: expected a list of glob patterns, got {type(value).__name__} {value!r}"
         )
     return list(value)
@@ -666,7 +666,7 @@ class KanbanConfig:
             data = yaml.safe_load(f) or {}
         if not isinstance(data, dict):
             # the CLI reports a ValueError as an invalid config, not a traceback (#338)
-            raise ValueError(f"the config must be a mapping, got {type(data).__name__}")
+            raise InputRefused(f"the config must be a mapping, got {type(data).__name__}")
         # themes are looked up in the config's own repo first (`<repo>/.kanban/…`),
         # whatever the cwd, as the service does (#272)
         repo_root = config_path.absolute().parent.parent  # as given, like the service
@@ -700,7 +700,7 @@ class KanbanConfig:
         raw_paths = kanban_data.get("paths")
         raw_paths = {} if raw_paths is None else raw_paths
         if not isinstance(raw_paths, dict):
-            raise ValueError(
+            raise InputRefused(
                 f"kanban.paths must be a mapping, got {type(raw_paths).__name__} {raw_paths!r}"
             )
         paths_data = dict(raw_paths)

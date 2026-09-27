@@ -154,7 +154,7 @@ class WorkItemStatus(Enum):
         for status in cls:
             if status.value == normalized:
                 return status
-        raise ValueError(f"Unknown status: {value}")
+        raise InputRefused(f"Unknown status: {value}")
 
 
 class WorkItemType(Enum):
@@ -188,7 +188,7 @@ class WorkItemType(Enum):
         for item_type in cls:
             if item_type.value == normalized:
                 return item_type
-        raise ValueError(f"Unknown item type: {value}")
+        raise InputRefused(f"Unknown item type: {value}")
 
 
 @dataclass
