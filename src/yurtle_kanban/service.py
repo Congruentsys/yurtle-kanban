@@ -4987,7 +4987,8 @@ class KanbanService:
             raise ValueError(
                 f"The body's code fence on line {line} runs over "
                 f"{self.swallowed_what(content, line)} after it: close that fence by "
-                "hand first. A body edit now would delete them (#727, #743)."
+                "hand, or reword a quoted heading inside it, first. A body edit now "
+                "would delete them (#727, #743, #758)."
             )
         h1 = self._h1_span(content)
         start = self._leading_knowledge_end(content)
