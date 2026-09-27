@@ -30,8 +30,8 @@ def test_cli_create_with_unclosed_fence_is_refused(repo: Repo) -> None:
 
 def test_mcp_update_with_unclosed_fence_is_refused(repo: Repo) -> None:
     before = repo.snapshot()
-    out = mcp_server.KanbanMCPServer(repo_root=repo.root)._update_item(
-        {"item_id": "EXP-2", "description": UNCLOSED}
+    out = mcp_server.KanbanMCPServer(repo_root=repo.root).handle_tool_call(
+        "kanban_update_item", {"item_id": "EXP-2", "description": UNCLOSED}
     )
     assert "error" in out and "fence" in out["error"].lower(), out
     assert repo.snapshot() == before

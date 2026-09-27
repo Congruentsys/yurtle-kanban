@@ -4151,9 +4151,33 @@ class KanbanService:
         said = [t.strip() for t in (done.stderr, done.stdout) if t and t.strip()]
         return "\n".join(said) or f"git exited {done.returncode}"
 
+    @classmethod
+    def _unclosed_fence_line(cls, text: str) -> int | None:
+        """The 1-based line of a code fence that is never closed, else None, by the
+        rules `_find_line_outside_fences` uses (#720)."""
+        fence: str | None = None
+        opened = 0
+        for number, line in enumerate(text.split("\n"), start=1):
+            marker = cls._FENCE_RE.match(line)
+            if not marker:
+                continue
+            if fence is None:
+                fence, opened = marker.group(1), number
+            elif marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) \
+                    and not line[len(marker.group(1)):].strip():
+                fence = None
+        return opened if fence is not None else None
+
     def _check_no_comments_heading(self, description: str | None) -> None:
         """Refuse a description with a `## Comments` line outside fenced code: it
-        would become the item's comments section (#605), on update or create (#644)."""
+        would become the item's comments section (#605), on update or create (#644).
+        Refuse one with an unclosed fence too: it would swallow the status-history
+        block, and the next body edit would delete the history (#720)."""
+        if description is not None and (line := self._unclosed_fence_line(description)):
+            raise ValueError(
+                f"A description can't leave a code fence open (the fence on line {line} "
+                "is never closed): close it, or it would swallow the status history."
+            )
         if description is not None and self._find_line_outside_fences(
             description, 0, self._COMMENTS_RE
         ) >= 0:
