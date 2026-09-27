@@ -1185,7 +1185,10 @@ def experiment_create(
     "--params", "params_str", default=None,
     help="Comma-separated key=value pairs (e.g., 'kbdd_rounds=3,wikidata=true')",
 )
-@click.option("--run-by", default=None, help="Who started the run (default: git user.name)")
+@click.option(
+    "--agent", "--run-by", "run_by", default=None,
+    help="Who started the run (default: $YURTLE_AGENT, then git user.name)",
+)
 @click.option("--push", is_flag=True, help="Atomic: commit and push the config.yaml")
 def experiment_run(
     expr_id: str, being: str, params_str: str | None,
@@ -1216,12 +1219,16 @@ def experiment_run(
                 k, v = pair.split("=", 1)
                 params[k.strip()] = v.strip()
 
-    run_path = service.create_experiment_run(
-        expr_id=expr_id,
-        being=being,
-        params=params,
-        run_by=run_by,
-    )
+    try:
+        run_path = service.create_experiment_run(
+            expr_id=expr_id,
+            being=being,
+            params=params,
+            run_by=run_by,
+        )
+    except ValueError as e:  # no actor, or a refused input (#620)
+        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
+        raise SystemExit(1) from None
 
     console.print(f"[green]Created run for {safe(expr_id)}[/green]")
     console.print(f"  Path: {safe(run_path)}")
