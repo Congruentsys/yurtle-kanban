@@ -3572,8 +3572,9 @@ class KanbanService:
             return
         self._commit_paths([file_path], message)
 
-    def _commit_paths(self, paths: list[Path], message: str) -> None:
-        """Commit exactly `paths`, with the user's hooks (#584).
+    def _commit_paths(self, paths: list[Path], message: str) -> bool:
+        """Commit exactly `paths`, with the user's hooks (#584). True when a commit
+        was made; False when nothing of ours changed (#614).
 
         `git commit --only` commits just these paths: whatever else the user has
         staged stays staged and out of the commit, and unstaged work is untouched.
@@ -3586,10 +3587,11 @@ class KanbanService:
         if add.returncode != 0:
             raise GitCommitError(f"Git commit failed ({message}): {self._git_output(add)}")
         if self._git_run("diff", "--cached", "--quiet", "HEAD", "--", *rels).returncode == 0:
-            return  # nothing of ours changed
+            return False  # nothing of ours changed
         done = self._git_run("commit", "--only", "-m", message, "--", *rels, timeout=None)
         if done.returncode != 0:
             raise GitCommitError(f"Git commit failed ({message}): {self._git_output(done)}")
+        return True
 
     @staticmethod
     def _git_output(done: subprocess.CompletedProcess[str]) -> str:
