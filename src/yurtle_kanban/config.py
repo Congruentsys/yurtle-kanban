@@ -17,6 +17,7 @@ from typing import Any
 import yaml
 
 from ._logging import get_logger
+from .models import WorkItemStatus
 
 logger = get_logger("yurtle-kanban")
 
@@ -198,6 +199,42 @@ def _drop_folded_status_keys(data: dict[str, Any], where: str) -> None:
             )
 
 
+def _status_names(theme: dict[str, Any] | None) -> dict[str, WorkItemStatus]:
+    """Every status name a theme's items answer to → its status, keyed folded: the
+    six canonical names, then the theme's own `status_mappings` names (#587). `move`
+    resolves a typed name through this, and so do the theme's `transitions` (#683)."""
+    names = {s.value: s for s in WorkItemStatus}
+    for native, canonical in ((theme or {}).get("status_mappings") or {}).items():
+        try:
+            status = WorkItemStatus.from_string(str(canonical))
+        except ValueError:
+            continue
+        names.setdefault(_fold_status_name(str(native)), status)
+    return names
+
+
+def _warn_unresolvable_transition_names(data: dict[str, Any], where: str) -> None:
+    """One warning naming `where` for every `transitions` name, source or target,
+    that is no status of the theme (`_status_names`). The name stays in the dict
+    (the theme loads as written, #351) and legality ignores it: `legal_next`
+    resolves every name to its status first and skips one that resolves to
+    nothing, so it is warned here once per load, not on each lookup (#683)."""
+    transitions = data.get("transitions")
+    if not isinstance(transitions, dict):
+        return
+    names = _status_names(data)
+    for source, targets in transitions.items():
+        if _fold_status_name(str(source)) not in names:
+            logger.warning(f"{where}: `transitions.{source}` is not a status name; ignored")
+            continue
+        for name in targets:
+            if _fold_status_name(name) not in names:
+                logger.warning(
+                    f"{where}: `transitions.{source}` lists `{name}`, which is not a "
+                    "status name; ignored"
+                )
+
+
 def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]:
     """`data` without any section that isn't a mapping: it is ignored, with one
     warning, as if it were absent (a `null` one too), so board/init/move fall back
@@ -216,6 +253,7 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
         data["transitions"] = _clean_transitions(data["transitions"], f"theme file {theme_path}")
     _clean_str_mapping(data, "status_mappings", f"theme file {theme_path}")  # (#613)
     _drop_folded_status_keys(data, f"theme file {theme_path}")  # (#615)
+    _warn_unresolvable_transition_names(data, f"theme file {theme_path}")  # (#683)
     # one level down: every column and item type is walked as a mapping too (#363)
     for section in ("columns", "item_types"):
         entries = data.get(section, {})

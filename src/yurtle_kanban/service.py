@@ -27,7 +27,7 @@ from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
 from ._graph_iri import set_self_iri
 from ._logging import get_logger
-from .config import KanbanConfig, _fold_status_name, _under
+from .config import KanbanConfig, _fold_status_name, _status_names, _under
 from .hooks import HookContext, HookEngine, HookEvent
 from .inputs import resolve_actor
 
@@ -527,15 +527,7 @@ class KanbanService:
         """Every status name `move` accepts for `item` → its status: the six
         canonical names plus the item's own theme's names, no other theme's (#587)."""
         _, theme = self._item_theme(item)
-        names = {s.value: s for s in WorkItemStatus}
-        for native, canonical in ((theme or {}).get("status_mappings") or {}).items():
-            try:
-                status = WorkItemStatus.from_string(str(canonical))
-            except ValueError:
-                continue
-            # keys folded like the input, so `on-hold`/`In Review` match (#587)
-            names.setdefault(_fold_status_name(str(native)), status)
-        return names
+        return _status_names(theme)
 
     def listed_status_names(self, item: WorkItem) -> list[str]:
         """The statuses to list when `move` refuses a name for `item`: each canonical
@@ -3608,17 +3600,18 @@ class KanbanService:
         """
         board_transitions = self._get_board_transitions(board_config, theme)
         if board_transitions:
-            reverse = self._get_reverse_status_mapping(board_config, theme)
-            from_native = reverse.get(from_status.value, from_status.value)
-            # status `t` is legal iff its theme name `reverse.get(t, t)` is listed;
-            # theme order, then WorkItemStatus order among statuses sharing one
-            # listed name (#467, #474)
+            # every name, source and target, is resolved to its status first, as
+            # `move` resolves a typed name: `doing` and `wip` both mean in_progress
+            # whichever wins the reverse map (#683); theme order; a name that is no
+            # status is skipped (the theme load warned about it)
+            names = _status_names(theme)
             allowed: list[WorkItemStatus] = []
-            for native in board_transitions.get(from_native, []):
-                for status in WorkItemStatus:
-                    if reverse.get(status.value, status.value) == native and (
-                        status not in allowed
-                    ):
+            for source, targets in board_transitions.items():
+                if names.get(_fold_status_name(str(source))) != from_status:
+                    continue
+                for target in targets:
+                    status = names.get(_fold_status_name(target))
+                    if status is not None and status not in allowed:
                         allowed.append(status)
             return allowed
         workflow = self._workflow_parser.load_workflow(item_type) if item_type else None
