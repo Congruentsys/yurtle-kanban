@@ -47,3 +47,19 @@ def test_key_matching_its_own_target_is_kept_quietly(
     repo = _repo(tmp_path / "repo", LAYOUTS[layout], _theme(mappings))
     _, warned = _run(repo, monkeypatch, warnings_log, ["create", "task", "hi"])
     assert not [w for w in warned if "status_mappings" in w], warned
+
+
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+def test_dedupe_keeps_a_usable_key_not_a_trap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warnings_log, layout: str  # noqa: F811
+) -> None:
+    """#712: `done: review` then `Done: done` — the trap key goes first, so the fold
+    dedupe keeps `Done` and no warning claims `done` is kept."""
+    mappings = {"todo": "backlog", "done": "review", "Done": "done", "doing": "in_progress"}
+    repo = _repo(tmp_path / "repo", LAYOUTS[layout], _theme(mappings))
+    result, warned = _run(repo, monkeypatch, warnings_log, ["create", "task", "hi"])
+    assert not [w for w in warned if "which is kept" in w], warned
+    assert len([w for w in warned if "status_mappings.done" in w]) == 1, warned
+    item_id = _created_id(result)
+    _, _ = _run(repo, monkeypatch, warnings_log, ["move", item_id, "done", *MOVE])
+    assert _file_status(repo, item_id) == "Done"
