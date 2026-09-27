@@ -655,7 +655,11 @@ def run_server():
             return {"tools": server.get_tools()}
 
         elif method == "tools/call":
-            params = request.get("params", {})
+            params = request.get("params")
+            if params is None:
+                params = {}  # null or missing: no params (#745)
+            elif not isinstance(params, dict):
+                raise RpcError(-32602, "Invalid params: params must be an object")
             tool_name = params.get("name", "")
             arguments = params.get("arguments", {})
 
