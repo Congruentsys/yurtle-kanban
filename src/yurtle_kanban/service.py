@@ -4899,11 +4899,19 @@ class KanbanService:
         return start, len(text) if end < 0 else end
 
     def swallowed_fence_line(self, content: str) -> int | None:
-        """The file line of a body code fence that is never closed and so swallows
-        the canonical status-history block after it (`body_span` then runs past the
-        history's opener), else None (#727). Only the full canonical opener counts: a
-        `## Comments` line quoted inside a closed fence is body, not a swallow.
-        `content` is LF text."""
+        """The file line of a body code fence that runs over what follows the body,
+        else None (#727). `content` is LF text. Two cases count:
+
+        - the canonical status-history opener lies inside `body_span` (only an
+          unclosed fence lets the span run past it);
+        - the span holds a never-closed fence with a real `## Comments` line after
+          it (comments with no history yet).
+
+        A `## Comments` line quoted inside a CLOSED fence is body, not a swallow.
+        Two refusals are conservative, and safe: a body ending in an unclosed fence
+        that quotes `## Comments` with no real comments, and a closed fence quoting
+        the full canonical history opener. Both are refused (and reported by
+        `validate`) until the fence is closed or the quote reworded (#736)."""
         start = self._body_start(content)
         span_end = self.body_span(content)[1]
         for match in re.finditer(r"(?m)^```yurtle$", content[start:]):
