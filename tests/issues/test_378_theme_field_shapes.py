@@ -27,10 +27,10 @@ Decided behaviour (extends #363 one level down, into the fields):
 3. A column whose key is not a str is dropped with one warning.
 4. ``board`` / ``list`` / ``create task hi`` don't raise, and print what they print
    for the same theme with that field (or column) absent.
-5. Controls: valid values kept; ``columns.<id>.name: [1]`` and odd ``status_mappings``
-   entries (#611: was the dead ``status_aliases``) don't crash `board` today and are
-   left alone; the built-in themes load with no warnings; a theme left empty still
-   falls through to the built-in (#365).
+5. Controls: valid values kept; ``columns.<id>.name: [1]`` is left alone; odd
+   ``status_mappings`` entries don't crash `board`, and since #613 the non-string
+   ones are dropped with one warning each; the built-in themes load with no
+   warnings; a theme left empty still falls through to the built-in (#365).
 """
 
 from __future__ import annotations
@@ -413,19 +413,36 @@ class TestLoaderControls:
         assert _load(repo, monkeypatch) == theme
         assert not _warnings(warnings_log), _warnings(warnings_log)
 
-    def test_status_mappings_entries_kept(
+    def test_status_mappings_non_str_entries_dropped(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         warnings_log: pytest.LogCaptureFixture,
     ) -> None:
+        # #613: a non-string key or value is dropped with one warning; strings stay
         theme = {
             "theme": {"name": "acme"},
-            "status_mappings": {"backlog": 5, "ready": [1], "done": None, 7: "x"},
+            "status_mappings": {
+                "backlog": 5,
+                "ready": [1],
+                "done": None,
+                7: "x",
+                "doing": "in_progress",
+                "todo": "backlog",
+            },
         }
         repo = _repo(tmp_path / "repo", None, _dump(theme))
-        assert _load(repo, monkeypatch) == theme
-        assert not _warnings(warnings_log), _warnings(warnings_log)
+        assert _load(repo, monkeypatch) == {
+            "theme": {"name": "acme"},
+            "status_mappings": {"doing": "in_progress", "todo": "backlog"},
+        }
+        warned = _warnings(warnings_log)
+        for entry in ("backlog", "ready", "done", "7"):
+            hits = [
+                m for m in warned if THEME_FILE in m and _names(m, f"status_mappings.{entry}")
+            ]
+            assert len(hits) == 1, (entry, warned)
+        assert len(warned) == 4, warned
 
     @pytest.mark.parametrize("name", BUILTIN_NAMES)
     def test_builtin_themes_load_without_warnings(

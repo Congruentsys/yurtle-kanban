@@ -1402,19 +1402,21 @@ class KanbanService:
         # Load status_mappings from all configured board presets
         from .config import _load_builtin_theme
 
-        presets_seen: set[str] = set()
-        if self.config.is_multi_board:
-            for board_config in self.config.boards:
-                if board_config.preset in presets_seen:
-                    continue
-                presets_seen.add(board_config.preset)
-                theme = _load_builtin_theme(board_config.preset, self.repo_root)
-                if theme and "status_mappings" in theme:
-                    for alias, canonical in theme["status_mappings"].items():
-                        try:
-                            mappings[alias] = WorkItemStatus.from_string(canonical)
-                        except ValueError:
-                            pass
+        # a single board's theme counts too: `move X doing` names its native
+        # status (#613)
+        presets = (
+            [board_config.preset for board_config in self.config.boards]
+            if self.config.is_multi_board
+            else [self.config.theme]
+        )
+        for preset in dict.fromkeys(presets):
+            theme = _load_builtin_theme(preset, self.repo_root)
+            if theme and "status_mappings" in theme:
+                for alias, canonical in theme["status_mappings"].items():
+                    try:
+                        mappings[alias] = WorkItemStatus.from_string(canonical)
+                    except ValueError:
+                        pass
 
         return mappings
 
