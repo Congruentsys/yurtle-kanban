@@ -10,7 +10,10 @@ ignored copy on origin from being claimed or updated. Nothing pinned it for:
    board's root;
 2. a board at the repo root (``path: .`` or ``""``) with ``.kanban/`` in a
    subdirectory of the git top, so the service's repo root is not the git top;
-3. a single board with ``paths.ignore`` and ``.kanban/`` in a subdirectory.
+3. a single board with ``paths.ignore`` and ``.kanban/`` in a subdirectory;
+4. a single board whose work path is the git top itself (``root: ./``,
+   ``scan_paths: [./]``, ``.kanban/`` at the top) — the ``head in ("", ".")`` clause
+   (#963).
 
 For each layout: ``_board_loads(rel)`` equals "the scan has this file" for every
 ``.md`` file ``_ids_at`` lists at HEAD (the input ``_holders_at`` feeds it), ignored
@@ -134,6 +137,28 @@ SINGLE_FILES = {
 }
 
 
+# `.kanban/` at the git top, the work path the top itself (`root: ./`,
+# `scan_paths: [./]`): its head is "." (#963), so every file under the top is in it.
+TOP_SINGLE_CONFIG = """\
+version: "1.0"
+theme: nautical
+paths:
+  root: ./
+  scan_paths:
+    - ./
+  ignore:
+    - "**/archive/**"
+    - "parked/**"
+"""
+
+TOP_SINGLE_FILES = {
+    "EXP-001-top.md": True,
+    "notes/EXP-002-n.md": True,
+    "parked/EXP-003-parked.md": False,
+    "notes/archive/EXP-004-old.md": False,
+}
+
+
 @dataclass(frozen=True)
 class Layout:
     name: str
@@ -180,6 +205,14 @@ LAYOUTS = [
         SINGLE_FILES,
         ignored="proj/work/parked/EXP-003-parked.md",
         loaded="proj/work/expeditions/parked/EXP-005-deep.md",
+    ),
+    Layout(
+        "single-board-work-path-at-top",
+        "",
+        TOP_SINGLE_CONFIG,
+        TOP_SINGLE_FILES,
+        ignored="parked/EXP-003-parked.md",
+        loaded="notes/EXP-002-n.md",
     ),
 ]
 LAYOUT_IDS = [layout.name for layout in LAYOUTS]
