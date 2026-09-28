@@ -31,7 +31,7 @@ from ._graph_iri import set_self_iri
 from ._logging import get_logger
 from .config import KanbanConfig, _fold_status_name, _status_names, _under
 from .hooks import HookContext, HookEngine, HookEvent
-from .inputs import check_identity, resolve_actor, same_actor
+from .inputs import GIT_ENV, check_identity, resolve_actor, same_actor
 from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
 
 if TYPE_CHECKING:
@@ -155,7 +155,7 @@ def git_toplevel(cwd: Path) -> Path | None:
             text=True,
             check=True,
             stdin=subprocess.DEVNULL,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env={**os.environ, **GIT_ENV},
         ).stdout.strip()
     except (subprocess.CalledProcessError, OSError):
         return None
@@ -2529,7 +2529,7 @@ class KanbanService:
                 capture_output=True,
                 timeout=30,
                 stdin=subprocess.DEVNULL,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                env={**os.environ, **GIT_ENV},
             )
             if shown.returncode != 0:
                 return None
@@ -2776,7 +2776,7 @@ class KanbanService:
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            env={**(os.environ if env is None else env), "GIT_TERMINAL_PROMPT": "0"},
+            env={**(os.environ if env is None else env), **GIT_ENV},
         )
 
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
@@ -3249,7 +3249,7 @@ class KanbanService:
             capture_output=True,
             timeout=30,
             stdin=subprocess.DEVNULL,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env={**os.environ, **GIT_ENV},
         )
         if shown.returncode != 0:
             raise _CasRefusedError(
@@ -4090,7 +4090,7 @@ class KanbanService:
             capture_output=True,
             timeout=60,
             stdin=subprocess.DEVNULL,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env={**os.environ, **GIT_ENV},
         )
         wanted, blobs = set(names), {}
         if done.returncode != 0:
