@@ -870,8 +870,8 @@ class KanbanService:
             if "\r" in raw and "\n" not in raw:
                 # old Mac line endings: skipped, as the base id scan skips them (#661)
                 if raw.startswith("---") and not file_path.name.startswith("_TEMPLATE"):
-                    self.parse_warnings.append(
-                        (file_path, "old Mac line endings (CR only): convert to LF")
+                    self._warn_parse(
+                        file_path, "old Mac line endings (CR only): convert to LF"
                     )
                 return None
             # universal newlines, as read_text() gives
@@ -1035,6 +1035,12 @@ class KanbanService:
             self._parse_failed(file_path, e, raw)
             return None
 
+    def _warn_parse(self, file_path: Path, reason: str) -> None:
+        """Record a file's parse warning once: a file read again (an outside
+        board's, on each push attempt) says it once, not per read (#879)."""
+        if (file_path, reason) not in self.parse_warnings:
+            self.parse_warnings.append((file_path, reason))
+
     def _parse_failed(
         self, file_path: Path, e: Exception, raw: str | None = None
     ) -> None:
@@ -1061,7 +1067,7 @@ class KanbanService:
                 if isinstance(e, RecursionError)
                 else f"{type(e).__name__}: {e}"
             )
-            self.parse_warnings.append((file_path, reason))
+            self._warn_parse(file_path, reason)
 
     def _split_frontmatter(self, content: str) -> tuple[str, str] | None:
         """Split content into (frontmatter text, everything after the closing `---`).
@@ -1079,7 +1085,7 @@ class KanbanService:
         parse (#139). Plain notes and `_TEMPLATE*` files stay silent."""
         reason = self._unparseable_reason(file_path, content)
         if reason is not None:
-            self.parse_warnings.append((file_path, reason))
+            self._warn_parse(file_path, reason)
 
     def _unparseable_reason(self, file_path: Path, content: str) -> str | None:
         """Why frontmatter that is there doesn't parse, or None when there is none
@@ -5951,10 +5957,15 @@ class KanbanService:
         top = self._git_toplevel()
         files: dict[str, list[Path]] = {}
         found_at = [(top / path, found) for path, found in self._ids_at(rev)[1]]
+        seen: dict[str, set[Path]] = {}
         for path, found in [*found_at, *((i.file_path, i.id) for i in outside)]:
-            held = files.setdefault(fold_id(found), [])
-            if path not in held:
-                held.append(path)
+            # one file however it is reached (`/tmp` vs `/private/tmp`, a
+            # symlinked board), as the scan compares (#879)
+            real = path.resolve()
+            if real in seen.setdefault(fold_id(found), set()):
+                continue
+            seen[fold_id(found)].add(real)
+            files.setdefault(fold_id(found), []).append(path)
         return graph, {i: f for i, f in files.items() if len(f) > 1}
 
     def _items_outside_repo(self) -> list[WorkItem]:
