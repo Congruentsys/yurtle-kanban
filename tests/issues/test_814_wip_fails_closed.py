@@ -128,7 +128,7 @@ def break_cat_file(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
     return seen
 
 
-def break_blobs_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+def break_items_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
     """The `ls-tree` that lists the board's blobs exits 128. Since #880 that is
     `_items_at`'s one listing, whose object ids `_blobs_at` reads."""
     return break_git_in(monkeypatch, "_items_at", "ls-tree", "fatal: ls-tree failed (#832 test)")
@@ -180,11 +180,11 @@ def test_cat_file_failure_with_wip_not_full_is_still_refused(world, monkeypatch)
     assert_refused_clean(world, out, base, before, rec, ("cat-file",))
 
 
-def test_blobs_ls_tree_failure_with_wip_not_full_is_still_refused(world, monkeypatch) -> None:
+def test_items_ls_tree_failure_with_wip_limit_not_full_is_still_refused(world, monkeypatch) -> None:
     wip_limit_1(world)
     base = world.remote_sha()
     before = snapshot(world.a)
-    seen = break_blobs_ls_tree(monkeypatch)
+    seen = break_items_ls_tree(monkeypatch)
     rec = Recorder()
 
     out = claim(world.a, A, rec)
