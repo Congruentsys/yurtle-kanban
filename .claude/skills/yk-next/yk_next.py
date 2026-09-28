@@ -40,13 +40,12 @@ from collections.abc import Callable
 
 HOSTS = {"m4-mini": "Mini", "mini": "Mini", "m5": "M5", "spark": "DGX"}
 HOLD = {"needs-decision", "question", "wontfix", "duplicate", "invalid", "blocked", "on-hold"}
-VERDICT = re.compile(
-    r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I,
-)
+# read exactly as safe_merge.sh reads them (#991): the first two lines of the body, a
+# trailing \r dropped, full lowercase 40-hex shas, nothing else on the line
+VERDICT = re.compile(r"reviewed-at-sha: ([0-9a-f]{40})\nverdict: (approve|changes)")
 # pairit's one review round (#987): the driver's comment after fixing a `changes` verdict's findings
-FIXES = re.compile(
-    r"\Afixes-at-sha:\s*([0-9a-f]{40})\s*\nfor-review-at:\s*([0-9a-f]{40})\b", re.I,
-)
+FIXES = re.compile(r"fixes-at-sha: ([0-9a-f]{40})\nfor-review-at: ([0-9a-f]{40})")
+MEMBERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 # "depends on #5", "Depends on: #5", "blocked by #8, #9", "depends on #6, #7, and #8",
 # "Blocked-by: #17", "depends on **#12**" (markdown emphasis), "depends on #6 #7"
@@ -79,23 +78,26 @@ def agent_name() -> str:
 
 
 def verdict_at_head(pr: dict) -> str | None:
-    """The latest verdict posted for the PR's current head sha, or None. A fixes comment
-    at the head, for a sha that has a verdict, counts as `fixed`: one review round, the
-    findings fixed at once, never a second review (#987)."""
+    """The PR head's verdict as safe_merge.sh judges it (#991), or None: the LATEST
+    decisive comment from the repo's own people decides, a verdict or the driver's fixes
+    comment. A verdict names the head exactly, or the head is unreviewed; a fixes comment
+    at the head, for an earlier verdict's sha that isn't the head, is `fixed` (#987).
+    (A comment without `authorAssociation`, as in tests, counts.)"""
     head = pr["headRefOid"]
+    reviewed: set[str] = set()
     found = None
-    reviewed: list[str] = []
     for c in pr.get("comments") or []:
-        body = (c.get("body") or "").strip()
-        if m := VERDICT.match(body):
-            reviewed.append(m.group(1).lower())
-            if head.startswith(m.group(1).lower()):
-                found = m.group(2).lower()
-        elif (f := FIXES.match(body)) and f.group(1).lower() == head.lower():
-            # the exact reviewed sha, as safe_merge.sh checks it, and never the head itself
-            r = f.group(2).lower()
-            if r != head.lower() and r in reviewed:
-                found = "fixed"
+        if c.get("authorAssociation", "MEMBER") not in MEMBERS:
+            continue
+        lines = [line.removesuffix("\r") for line in (c.get("body") or "").split("\n")[:2]]
+        first_two = "\n".join(lines)
+        if m := VERDICT.fullmatch(first_two):
+            reviewed.add(m.group(1))
+            found = m.group(2) if m.group(1) == head else None
+        elif (f := FIXES.fullmatch(first_two)) and (
+            f.group(1) == head and f.group(2) != head and f.group(2) in reviewed
+        ):
+            found = "fixed"  # (a fixes comment the gate wouldn't take changes nothing)
     return found
 
 
