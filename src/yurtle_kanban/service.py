@@ -2229,11 +2229,16 @@ class KanbanService:
         id space, is refused, naming the file that holds it (#634, #641). A `parent`'s
         inverse reference is added to the parent as that base holds it, in the
         same commit, so a lost race rebuilds it on the new base (#645)."""
-        prefix = id_prefix or self._get_type_prefix(item_type)
         made: dict[str, Any] = {}
 
         def build(base: str) -> tuple[dict[Path, str], str]:
-            if item_id is not None and (rival := self._holder_at(base, item_id)):
+            # `base`'s own config allocates, places and finds the parent (#865)
+            try:
+                judge = self._judge_at(base)
+            except _TreeUnreadableError as e:
+                raise _CasRefusedError(f"{e}; nothing was created") from None
+            prefix = id_prefix or judge._get_type_prefix(item_type)
+            if item_id is not None and (rival := judge._holder_at(base, item_id)):
                 raise _CasRefusedError(
                     f"{item_id} is already taken on the default branch by {rival}; "
                     "nothing was created"
@@ -2245,7 +2250,7 @@ class KanbanService:
                     self._check_rendered(text_in)
                 except InputRefused as e:
                     raise _CasRefusedError(f"{e}; nothing was created") from None
-            item, text = self._new_item(
+            item, text = judge._new_item(
                 item_type, title, current_id, priority, assignee, description, tags, text_in
             )
             item_rel = self._repo_relative(item.file_path, self._git_toplevel())
@@ -2280,7 +2285,7 @@ class KanbanService:
                     f"(creating {current_id} would add a folder that differs only in "
                     "case); nothing was created"
                 )
-            linked, parent_state = ({}, None) if parent is None else self._parent_link_blob(
+            linked, parent_state = ({}, None) if parent is None else judge._parent_link_blob(
                 base, parent, item_type.value, current_id
             )
             made.update(
@@ -2795,8 +2800,14 @@ class KanbanService:
 
     def _next_id_at(self, base: str, prefix: str) -> str:
         """The next id in `prefix`'s space: past the scanned board and past what
-        commit `base` holds (#590, #634)."""
-        num = max(self._scanned_next_id_number(prefix), self._next_id_number_at(base, prefix))
+        commit `base` holds (#590, #634), at the board paths `base`'s own config
+        names (`_judge_at`, #865). Raises `_CasRefusedError` when that config
+        doesn't load."""
+        try:
+            judge = self._judge_at(base)
+        except _TreeUnreadableError as e:
+            raise _CasRefusedError(f"{e}; nothing was created") from None
+        num = max(self._scanned_next_id_number(prefix), judge._next_id_number_at(base, prefix))
         return self._format_id(prefix, num)
 
     @staticmethod
@@ -4339,9 +4350,11 @@ class KanbanService:
         (`won` or `local`), for the winner only. `seam`, `sleep` and `jitter` are
         `sync_and_push`'s.
 
-        WIP limits, board paths and ignore patterns are judged by origin's config at
-        the fetched commit (`_judge_at`), or the local one when origin has none
-        (#831); gate checks still read the local working tree."""
+        WIP limits, board paths and ignore patterns (#831), and the item's parse,
+        the move's legality (theme and workflows) and the status written (#865),
+        are judged by origin's config at the fetched commit (`_judge_at`), or the
+        local one when origin has none; gate checks still read the local working
+        tree."""
         actor = check_identity(actor, "--agent")
 
         def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
@@ -4368,6 +4381,8 @@ class KanbanService:
         if isinstance(found, Refuse):
             return found
         rel, text, item = found
+        # `_item_target` read the judge already: this is its cached copy
+        judge = self if read.rev is None else self._judge_at(read.rev)
         old_status = item.status
         in_progress = WorkItemStatus.IN_PROGRESS
         held = item.assignee
@@ -4375,7 +4390,7 @@ class KanbanService:
         mine = bool(holder) and same_actor(holder, actor)
 
         if mine and old_status == in_progress:
-            return NoOp(f"{item.id} is already yours ({self.status_label(item)})")
+            return NoOp(f"{item.id} is already yours ({judge.status_label(item)})")
         if holder and not mine and not take_over:
             return Refuse(
                 f"{item.id} is held by {holder}; to take it over use claim --take-over",
@@ -4386,9 +4401,12 @@ class KanbanService:
 
         proposed = replace(item, status=in_progress, assignee=actor, updated=datetime.now())
         if old_status != in_progress:
-            valid, error = self._validate_transition(
-                replace(proposed, status=old_status), in_progress
-            )
+            try:
+                valid, error = judge._validate_transition(
+                    replace(proposed, status=old_status), in_progress
+                )
+            except _TreeUnreadableError as e:  # origin's workflows (#865)
+                return Refuse(str(e))
             if not valid:
                 return Refuse(error)
             try:
@@ -4412,7 +4430,7 @@ class KanbanService:
             not holder and item.status == WorkItemStatus.IN_PROGRESS
         )
         taken = holder if take_over and overrode else None
-        new_text = self._history_text(
+        new_text = judge._history_text(  # origin's name for in progress (#865)
             text, proposed, in_progress, actor, actor=actor, taken_over_from=taken
         )
         message = f"Claim {item.id} for {actor}"
@@ -4434,6 +4452,7 @@ class KanbanService:
         (#742, #754): which copy `action` ("a claim", "an update") meant is
         ambiguous."""
         top = self._git_toplevel()
+        judge = self
         if read.rev is None:
             try:
                 current = self._writable_item(item_id, action)  # refuse_duplicate
@@ -4442,7 +4461,8 @@ class KanbanService:
             rel = Path(os.path.relpath(current.file_path, top)).as_posix()
         else:
             try:  # found where origin's config puts the boards (#831)
-                holders = self._judge_at(read.rev)._holders_at(
+                judge = self._judge_at(read.rev)
+                holders = judge._holders_at(
                     read.rev, item_id, loaded=True  # the board's item (#856)
                 )
             except _TreeUnreadableError as e:
@@ -4458,7 +4478,7 @@ class KanbanService:
         text = read(rel)
         if text is None:
             return Refuse(f"Item not found: {item_id} ({rel} is gone)")
-        item = self._parse_text(top / rel, text)
+        item = judge._parse_text(top / rel, text)  # by origin's theme (#865)
         if item is None or (
             fold_id(item.id) != fold_id(item_id)
             and (self._id_key(item.id) is None or self._id_key(item.id) != self._id_key(item_id))
@@ -4530,8 +4550,39 @@ class KanbanService:
             judge.parse_warnings = []
             judge._board = None
             judge._workflows = {}
+            # its workflows are `rev`'s too, never the working tree's (#865)
+            judge._workflow_parser = WorkflowParser(
+                self.repo_root / ".kanban",
+                source=lambda: self._files_at(rev, f"{kanban}/workflows/"),
+            )
         self._judges = {rev: judge}  # the last fetched commit's only
         return judge
+
+    def _files_at(
+        self, rev: str, folder: str, suffix: str = ".md"
+    ) -> list[tuple[str, str]]:
+        """(`rev:path`, text) of each regular `suffix` file directly in `folder`
+        (from the work tree's top, ending in `/`) at commit `rev`, in listing
+        order: read as `_blobs_at` reads a board (#832, #865). As the working-tree
+        reader does, other files (a `.DS_Store`) are never read and a non-UTF-8
+        one is skipped with a warning. Raises `_TreeUnreadableError` when git
+        can't read them."""
+        listed = self._git_z("ls-tree", "-z", "--full-tree", rev, "--", folder)
+        if listed.returncode != 0:
+            raise _TreeUnreadableError(
+                f"Can't read {folder} at {rev}: git ls-tree failed "
+                f"({listed.stderr.strip() or f'exit {listed.returncode}'})"
+            )
+        names = []
+        for entry in listed.stdout.split("\0"):
+            meta, tab, name = entry.partition("\t")
+            if tab and meta.split(" ")[0] in ("100644", "100755") and name.endswith(suffix):
+                names.append(name)
+        texts = self._blobs_at(rev, names)
+        for name in names:
+            if name not in texts:
+                logger.warning(f"{name} at {rev} is not UTF-8 text; skipped")
+        return [(f"{rev}:{name}", texts[name]) for name in names if name in texts]
 
     def _blob_at(self, rev: str, rel: str) -> str | None:
         """The text of `rel` (from the work tree's top) as commit `rev` holds it,

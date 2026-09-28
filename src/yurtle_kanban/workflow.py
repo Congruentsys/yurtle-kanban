@@ -17,6 +17,7 @@ Usage:
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -66,6 +67,11 @@ DEFAULT_TRANSITIONS: dict[WorkItemStatus, list[WorkItemStatus]] = {
         WorkItemStatus.BACKLOG,
     ],
 }
+
+
+# Where a parser reads `workflows/` from when not the working tree (#865): the
+# (name, text) of each file directly in it, e.g. as a fetched commit holds them
+WorkflowSource = Callable[[], "list[tuple[str, str]]"]
 
 
 # Namespaces for workflow configuration
@@ -178,12 +184,33 @@ class WorkflowParser:
     This parser extracts workflow configurations from all three layers.
     """
 
-    def __init__(self, config_dir: Path = None):
+    def __init__(self, config_dir: Path = None, source: WorkflowSource | None = None):
+        """`source`, when given, supplies the files of `workflows/` in place of
+        `config_dir`'s working-tree copy (a fetched commit's, #865); it is read
+        once."""
         self.config_dir = Path(config_dir) if config_dir else Path(".kanban")
         self._workflow_cache: dict[str, WorkflowConfig] = {}
+        self._source = source
+        self._source_read = False
 
     def load_all_workflows(self) -> dict[str, WorkflowConfig]:
         """Load all workflow configurations from workflows/ directory."""
+        if self._source is not None:
+            if not self._source_read:
+                files = self._source()
+                self._source_read = True
+                # `*.yurtle.md` first, then the other `.md` files, as the glob reads them
+                ordered = sorted(files, key=lambda f: not f[0].endswith(".yurtle.md"))
+                for name, text in ordered:
+                    if not name.endswith(".md"):
+                        continue
+                    try:
+                        config = self.parse_workflow_text(text, name)
+                        if config:
+                            self._workflow_cache[config.applies_to] = config
+                    except Exception as e:
+                        logger.warning(f"Failed to parse workflow config {name}: {e}")
+            return self._workflow_cache
         workflows_dir = self.config_dir / "workflows"
         if not workflows_dir.exists():
             return {}
@@ -220,7 +247,11 @@ class WorkflowParser:
 
     def parse_workflow_file(self, file_path: Path) -> WorkflowConfig | None:
         """Parse a workflow configuration file."""
-        content = file_path.read_text(encoding="utf-8")
+        return self.parse_workflow_text(file_path.read_text(encoding="utf-8"), file_path)
+
+    def parse_workflow_text(self, content: str, file_path: Path | str) -> WorkflowConfig | None:
+        """Parse a workflow configuration's text; `file_path` names it (#865)."""
+        file_path = Path(file_path)
         frontmatter = self._extract_frontmatter(content)
 
         if frontmatter.get("type") != "kanban-workflow":
