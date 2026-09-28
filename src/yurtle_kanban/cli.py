@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -191,7 +192,10 @@ def _default_prefix(type_id: str) -> str:
     """A template prefix for a theme type with no `id_prefix` (#840): the type
     key's letters and digits from its first letter, upper-cased, at most four;
     `ITEM` when that leaves no prefix the grammar accepts."""
-    kept = "".join(c for c in type_id if c.isalpha() or c.isdigit())
+    # composed first: `e` + a combining acute is the letter `é` (#875)
+    kept = "".join(
+        c for c in unicodedata.normalize("NFC", type_id) if c.isalpha() or c.isdigit()
+    )
     start = next((i for i, c in enumerate(kept) if c.isalpha()), len(kept))
     return id_prefix(kept[start:].upper()[:4]) or "ITEM"
 
