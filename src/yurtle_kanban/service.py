@@ -2448,7 +2448,9 @@ class KanbanService:
             if sha is None:
                 return failed(error or "Git commit failed")
 
-            push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
+            push = self._git_run(  # runs the pre-push hook: no timeout (#584, #925)
+                "push", "origin", f"{sha}:refs/heads/{branch}", timeout=None
+            )
             if push.returncode != 0:
                 err = last_err = push.stderr.strip()
                 if "[rejected]" not in err or not (
@@ -2625,7 +2627,9 @@ class KanbanService:
                     )
                 if seam is not None:
                     seam(attempt)
-                push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
+                push = self._git_run(  # runs the pre-push hook: no timeout (#584, #925)
+                    "push", "origin", f"{sha}:refs/heads/{branch}", timeout=None
+                )
                 if push.returncode == 0:
                     return self._won(branch, sha, result, attempt + 1)
                 err = self._git_output(push)
