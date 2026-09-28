@@ -61,6 +61,7 @@ yurtle-kanban list --status in_progress
 yurtle-kanban list --assignee dev-1
 
 # Move items (kb:by records the actor: --agent, else $YURTLE_AGENT, else git user.name)
+yurtle-kanban move FEAT-001 ready                  # create puts it in backlog
 yurtle-kanban move FEAT-001 in_progress --assign dev-1 --agent dev-1
 yurtle-kanban move FEAT-001 review --agent dev-1     # the holder moves it on
 yurtle-kanban move FEAT-001 done --agent reviewer-1  # review → done: any reviewer
