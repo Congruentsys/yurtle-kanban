@@ -36,6 +36,7 @@ the #834 / #869 suites are unchanged.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -209,3 +210,20 @@ def test_control_allocate_next_id_same_spelling_allocates(world, monkeypatch) ->
     records = json.loads(world.remote_show(ALLOC))
     assert any(r.get("id") == result["id"] for r in records), records
     assert not _twin_dirs(_remote_dirs(world))
+
+
+# --- #950: a write into EITHER spelling is refused when origin holds both ---------------
+
+
+@pytest.mark.parametrize(
+    "written", ["Research/experiments/EXPR-042-b.md", "research/experiments/EXPR-042-b.md"]
+)
+def test_both_twins_refuse_a_write_into_either_spelling(world, written: str) -> None:
+    """`Research/` is the spelling `ls-tree` lists first; the pre-#870 guard kept only
+    the first spelling it saw, so a write there passed (#950)."""
+    svc = _both_twins_board(world)
+    refusal = svc._folder_twin_refusal(
+        svc._tree_names("origin/main"), [Path(written)], "writing"
+    )
+    assert refusal is not None, f"a write into {written!r} passed the guard"
+    _assert_both_named(refusal)
