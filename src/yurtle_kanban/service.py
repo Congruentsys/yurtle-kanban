@@ -3015,20 +3015,6 @@ class KanbanService:
         return folders
 
     @classmethod
-    def _folder_case_twin(cls, listed: list[str], rels: list[Path]) -> str | None:
-        """The folder in `listed`, in its own spelling, that one of `rels`' folders
-        names in a different case, else None (#834)."""
-        folders = cls._folder_spellings(listed)
-        for rel in rels:
-            parts = rel.as_posix().split("/")[:-1]
-            for n in range(1, len(parts) + 1):
-                folder = "/".join(parts[:n])
-                others = sorted(folders.get(_twin_key(folder), set()) - {folder})
-                if others:
-                    return others[0]
-        return None
-
-    @classmethod
     def _folder_twin_refusal(
         cls, listed: list[str], rels: list[Path], doing: str, nothing: str = "changed"
     ) -> str | None:

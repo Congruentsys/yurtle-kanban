@@ -110,7 +110,7 @@ def test_control_ids_at_plain_name(world) -> None:
     assert (PLAIN_NAME, "EXP-001") in ids, ids
 
 
-# --- _folder_case_twin: the whole-tree ls-tree (`_tree_names`, #903) ---------------------------
+# --- the folder-twin guard: the whole-tree ls-tree (`_tree_names`, #903; #950) -----------------
 
 CR_FOLDER = "kanban-work/Odd\rDir"
 
@@ -118,19 +118,19 @@ CR_FOLDER = "kanban-work/Odd\rDir"
 def test_folder_case_twin_finds_cr_folder(world) -> None:
     on_origin(world, {f"{CR_FOLDER}/a.md": item()})
     svc = service(world)
-    got = svc._folder_case_twin(
-        svc._tree_names("origin/main"), [Path(f"{CR_FOLDER.lower()}/b.md")]
+    got = svc._folder_twin_refusal(
+        svc._tree_names("origin/main"), [Path(f"{CR_FOLDER.lower()}/b.md")], "writing"
     )
     assert got is not None, "the \\r-named folder's case twin was missed"
-    assert_exact(got, CR_FOLDER)
+    assert_exact(got.split("/ is already")[0], CR_FOLDER)
 
 
 def test_folder_case_twin_invents_no_lf_folder(world) -> None:
     """The tree has `Odd\\rDir` only: `odd\\ndir` is no twin of anything there."""
     on_origin(world, {f"{CR_FOLDER}/a.md": item()})
     svc = service(world)
-    got = svc._folder_case_twin(
-        svc._tree_names("origin/main"), [Path("kanban-work/odd\ndir/b.md")]
+    got = svc._folder_twin_refusal(
+        svc._tree_names("origin/main"), [Path("kanban-work/odd\ndir/b.md")], "writing"
     )
     assert got is None, f"a folder the tree does not have was reported: {got!r}"
 
@@ -138,8 +138,10 @@ def test_folder_case_twin_invents_no_lf_folder(world) -> None:
 def test_control_folder_case_twin_plain(world) -> None:
     on_origin(world, {"kanban-work/OddDir/a.md": item()})
     svc = service(world)
-    got = svc._folder_case_twin(svc._tree_names("origin/main"), [Path("kanban-work/odddir/b.md")])
-    assert got == "kanban-work/OddDir"
+    got = svc._folder_twin_refusal(
+        svc._tree_names("origin/main"), [Path("kanban-work/odddir/b.md")], "writing"
+    )
+    assert got is not None and got.startswith("kanban-work/OddDir/ is already"), got
 
 
 # --- _git_state: diff --cached -M --name-status -z ---------------------------------------------
