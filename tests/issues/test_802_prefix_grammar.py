@@ -1,19 +1,21 @@
 # ruff: noqa: F811  -- the `repo` / `mcp_log` fixtures imported from #576 / #786 are re-bound
-"""#802: `next-id` refuses a malformed prefix; titles refuse control characters.
+"""#802: `next-id` refuses a malformed prefix.
 
-Decided ([steer] on #802, bucket 1):
-1. `allocate_next_id` (so CLI `next-id` and MCP `kanban_next_id`) refuses a prefix
-   that isn't a letter, then letters or digits, in dash-separated segments, with an
-   optional trailing `.` (paper-scoped `H130.`), case-insensitive. The refusal is an
-   `InputRefused` whose message names the allowed form. Before anything is written
-   or committed: no allocation record, no commit.
-2. A title holding a control character (C0 — NUL, `\\x01`, ESC, TAB — or DEL) is
-   refused as `InputRefused` on create and update, before anything is written. A TAB
-   counts: a title is one line of text.
+Decided ([steer] on #802, as revised): `allocate_next_id` (so CLI `next-id` and MCP
+`kanban_next_id`) refuses a prefix that isn't a letter, then letters or digits, in
+dash-separated segments, with an optional trailing `.` (paper-scoped `H130.`),
+case-insensitive. Letters and digits are any script's: #193 and #219 accept
+non-ASCII prefixes such as `ÉXP`. The refusal is an `InputRefused` whose message
+names the allowed form, raised before anything is written or committed (no
+allocation record, no commit). MCP's blank `prefix` is refused earlier, as
+"prefix is required" (#768).
 
-Controls: valid prefixes (every shipped theme's, the HDD ones hdd_commands builds —
-`IDEA-R`, `IDEA-F`, `LIT`, `H`, `H{paper}.`, `EXPR`, `M`, `PAPER` — and the service's
-built-in defaults) allocate as before; Unicode letters in a title are accepted.
+The title half of the original issue is dropped: #141 / #148 round-trip titles with
+control characters, stored escaped.
+
+Controls: valid prefixes (every shipped theme's, the HDD ones hdd_commands builds:
+`IDEA-R`, `IDEA-F`, `LIT`, `H`, `H{paper}.`, `EXPR`, `M`, `PAPER`; the service's
+built-in defaults; non-ASCII ones such as `ÉXP`, `ÜBER-R`) allocate as before.
 
 Fixture: #576's two-board repo (`development` nautical under `work/`, `research` hdd
 under `research/`): EXP-1..EXP-5 and H1.1, committed, no remote.
@@ -42,6 +44,14 @@ THEMES = Path(yurtle_kanban.__file__).parent.parent.parent / "themes"
 
 GOOD_PREFIXES = ["EXP", "exp", "IDEA-R", "H130.", "M", "LIT", "PAPER", "EXPR"]
 
+# any script's letters and digits (#193, #219): upper-cased as ASCII ones are
+NON_ASCII_PREFIXES = {
+    "ÉXP": ("ÉXP-001", 1),
+    "éxp": ("ÉXP-001", 1),
+    "ÜBER-R": ("ÜBER-R-001", 1),
+    "Ωmega2": ("ΩMEGA2-001", 1),
+}
+
 BAD_PREFIXES = [
     pytest.param("", id="empty"),
     pytest.param("a b", id="space"),
@@ -55,19 +65,6 @@ BAD_PREFIXES = [
     pytest.param("H130..", id="double-dot"),
 ]
 
-BAD_TITLES = [
-    pytest.param("a\x00b", id="nul"),
-    pytest.param("a\x01b", id="soh"),
-    pytest.param("a\x1b[31mb", id="esc"),
-    pytest.param("a\x7fb", id="del"),
-    pytest.param("a\tb", id="tab"),
-]
-
-GOOD_TITLES = [
-    pytest.param("Café crème", id="latin"),
-    pytest.param("日本 plan", id="cjk"),
-]
-
 ALLOCATIONS = Path(".kanban") / "_ID_ALLOCATIONS.json"
 
 
@@ -78,11 +75,6 @@ def _flat(text: str) -> str:
 def _names_prefix_grammar(message: str) -> None:
     low = message.lower()
     assert "prefix" in low and "letter" in low, f"refusal does not name the form: {message!r}"
-
-
-def _names_control_character(message: str) -> None:
-    low = message.lower()
-    assert "title" in low and "control" in low, f"refusal does not say why: {message!r}"
 
 
 class _State:
@@ -118,7 +110,7 @@ def _cli_refused(repo: Repo, args: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. prefix grammar — RED
+# prefix grammar — RED before the fix
 # ---------------------------------------------------------------------------
 
 
@@ -171,7 +163,7 @@ def test_mcp_next_id_refuses_malformed_prefix(repo: Repo, mcp_log, prefix: str) 
 
 
 # ---------------------------------------------------------------------------
-# 1. controls — valid prefixes allocate as before (GREEN)
+# controls — valid prefixes allocate as before (GREEN)
 # ---------------------------------------------------------------------------
 
 
@@ -210,6 +202,25 @@ def test_control_mcp_valid_prefix_allocates(repo: Repo, mcp_log, prefix: str) ->
     assert not _records(mcp_log), [r.getMessage() for r in _records(mcp_log)]
 
 
+@pytest.mark.parametrize("prefix", list(NON_ASCII_PREFIXES))
+def test_control_non_ascii_prefix_allocates(repo: Repo, mcp_log, prefix: str) -> None:
+    """#193 / #219 accept a prefix in any script: the grammar's letters and digits
+    are Unicode ones, through the service, the CLI and MCP."""
+    want_id, want_num = NON_ASCII_PREFIXES[prefix]
+    result = repo.service().allocate_next_id(prefix, sync_remote=False, commit_allocation=False)
+    assert result["success"], result
+    assert (result["id"], result["number"]) == (want_id, want_num), result
+
+    cli = CliRunner().invoke(main, ["next-id", prefix, "--no-sync"])
+    assert cli.exit_code == 0, (cli.output, repr(cli.exception))
+    assert want_id in cli.output, cli.output
+
+    out = _mcp(repo).handle_tool_call("kanban_next_id", {"prefix": prefix})
+    assert out.get("success"), out
+    assert out["id"].startswith(want_id.rsplit("-", 1)[0] + "-"), out
+    assert not _records(mcp_log), [r.getMessage() for r in _records(mcp_log)]
+
+
 def _theme_prefixes() -> list[str]:
     found: list[str] = []
     for path in sorted(THEMES.glob("*.yaml")):
@@ -241,110 +252,3 @@ def test_control_every_shipped_prefix_is_accepted(repo: Repo) -> None:
         if not result["success"]:
             refused[prefix] = result["message"]
     assert not refused, f"shipped prefixes the grammar refuses: {refused}"
-
-
-# ---------------------------------------------------------------------------
-# 2. titles with a control character — RED
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_service_create_refuses_control_title(repo: Repo, title: str) -> None:
-    state = _State(repo)
-    with pytest.raises(InputRefused) as info:
-        repo.service().create_item(WorkItemType.EXPEDITION, title)
-    _names_control_character(str(info.value))
-    state.assert_untouched(f"create_item({title!r})")
-
-
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_service_create_and_push_refuses_control_title(repo: Repo, title: str) -> None:
-    state = _State(repo)
-    with pytest.raises(InputRefused) as info:
-        repo.service().create_item_and_push(WorkItemType.EXPEDITION, title)
-    _names_control_character(str(info.value))
-    state.assert_untouched(f"create_item_and_push({title!r})")
-
-
-@pytest.mark.parametrize("commit", [True, False], ids=["commit", "no-commit"])
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_service_update_refuses_control_title(repo: Repo, title: str, commit: bool) -> None:
-    state = _State(repo)
-    with pytest.raises(InputRefused) as info:
-        repo.service().update_item("EXP-5", title=title, commit=commit)
-    _names_control_character(str(info.value))
-    state.assert_untouched(f"update_item(title={title!r})")
-
-
-@pytest.mark.parametrize("push", [[], ["--push"]], ids=["local", "push"])
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_cli_create_refuses_control_title(repo: Repo, title: str, push) -> None:
-    _names_control_character(_cli_refused(repo, ["create", "expedition", title, *push]))
-
-
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_cli_update_refuses_control_title(repo: Repo, title: str) -> None:
-    _names_control_character(_cli_refused(repo, ["update", "EXP-5", "--title", title]))
-
-
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_mcp_create_refuses_control_title(repo: Repo, mcp_log, title: str) -> None:
-    state = _State(repo)
-    out = _mcp(repo).handle_tool_call(
-        "kanban_create_item", {"item_type": "expedition", "title": title}
-    )
-    assert "error" in out and not out.get("success"), out
-    _names_control_character(out["error"])
-    _assert_one_warning(mcp_log)
-    state.assert_untouched(f"kanban_create_item({title!r})")
-
-
-@pytest.mark.parametrize("title", BAD_TITLES)
-def test_mcp_update_refuses_control_title(repo: Repo, mcp_log, title: str) -> None:
-    state = _State(repo)
-    out = _mcp(repo).handle_tool_call("kanban_update_item", {"item_id": "EXP-5", "title": title})
-    assert "error" in out and not out.get("success"), out
-    _names_control_character(out["error"])
-    _assert_one_warning(mcp_log)
-    state.assert_untouched(f"kanban_update_item({title!r})")
-
-
-# ---------------------------------------------------------------------------
-# 2. controls — Unicode letters are text, not control characters (GREEN)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("title", GOOD_TITLES)
-def test_control_service_unicode_title_create_and_update(repo: Repo, title: str) -> None:
-    svc = repo.service()
-    item = svc.create_item(WorkItemType.EXPEDITION, title)
-    assert item.title == title
-    assert svc.update_item("EXP-5", title=title, commit=False).title == title
-    assert repo.fm("EXP-5")["title"] == title
-
-
-@pytest.mark.parametrize("title", GOOD_TITLES)
-def test_control_cli_unicode_title(repo: Repo, title: str) -> None:
-    for args in (["create", "expedition", title], ["update", "EXP-5", "--title", title]):
-        result = CliRunner().invoke(main, args)
-        assert result.exit_code == 0, (args, result.output, repr(result.exception))
-    assert repo.fm("EXP-5")["title"] == title
-
-
-@pytest.mark.parametrize("title", GOOD_TITLES)
-def test_control_mcp_unicode_title(repo: Repo, mcp_log, title: str) -> None:
-    mcp = _mcp(repo)
-    out = mcp.handle_tool_call("kanban_create_item", {"item_type": "expedition", "title": title})
-    assert out.get("success") and out["item"]["title"] == title, out
-    out = mcp.handle_tool_call("kanban_update_item", {"item_id": "EXP-5", "title": title})
-    assert out.get("success") and out["item"]["title"] == title, out
-    assert not _records(mcp_log), [r.getMessage() for r in _records(mcp_log)]
-
-
-def test_control_existing_title_refusals_unchanged(repo: Repo) -> None:
-    """#576's empty and multi-line refusals keep their wording."""
-    svc = repo.service()
-    with pytest.raises(InputRefused, match="title is empty"):
-        svc.update_item("EXP-5", title="   ", commit=False)
-    with pytest.raises(InputRefused, match="line break"):
-        svc.update_item("EXP-5", title="one\ntwo", commit=False)
