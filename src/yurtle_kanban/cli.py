@@ -647,7 +647,8 @@ def create(
     "--take-over",
     is_flag=True,
     help="Move an item someone else holds in progress (recorded as kb:takenOverFrom); "
-    "needs --agent or $YURTLE_AGENT; gates, WIP and legality still apply",
+    "needs --agent or $YURTLE_AGENT; gates, WIP and legality still apply. An "
+    "in-progress item with no holder moves without it (claim refuses one)",
 )
 def move(
     item_id: str,
@@ -749,7 +750,8 @@ def move(
 @click.option(
     "--take-over",
     is_flag=True,
-    help="Take it from its holder (recorded as kb:takenOverFrom); gates still apply",
+    help="Take it from its holder, or take an in-progress item with no holder "
+    "(recorded as kb:takenOverFrom); gates still apply",
 )
 def claim(item_id: str, agent: str | None, take_over: bool):
     """Claim a work item: move it to in progress, held by you, race-free (#574).

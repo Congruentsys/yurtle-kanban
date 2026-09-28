@@ -4034,12 +4034,15 @@ class KanbanService:
     def _holder_guard(item: WorkItem, actor: str, take_over: bool) -> str | None:
         """`move`'s holder guard (#574 §4): refuse moving an item someone else holds
         in progress (canonical status), unless `take_over`. Returns the holder a
-        take-over records as kb:takenOverFrom, else None."""
+        take-over records as kb:takenOverFrom, else None: `""` for an in-progress item
+        with no holder, the one other thing a take-over overrides (#823)."""
         if item.status != WorkItemStatus.IN_PROGRESS:
             return None
         held = item.assignee
         holder = (held if isinstance(held, str) else str(held or "")).strip()
-        if not holder or same_actor(holder, actor):
+        if not holder:
+            return "" if take_over else None
+        if same_actor(holder, actor):
             return None
         if take_over:
             return holder
@@ -4193,7 +4196,12 @@ class KanbanService:
                     f"Gate check failed: {'; '.join(r.message for r in blocking)}"
                 )
 
-        taken = holder if take_over and not mine else None
+        # recorded only when the take-over overrode something: a holder, or an
+        # in-progress item with no holder; the same rule as `move` (#823)
+        overrode = (bool(holder) and not mine) or (
+            not holder and item.status == WorkItemStatus.IN_PROGRESS
+        )
+        taken = holder if take_over and overrode else None
         new_text = self._history_text(
             text, proposed, in_progress, actor, actor=actor, taken_over_from=taken
         )
