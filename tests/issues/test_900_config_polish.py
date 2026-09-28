@@ -67,13 +67,12 @@ def _board(extra: str, name: str = "a") -> str:
     "text",
     [
         "version: [1]\n",
-        "version: 2\n",
+        "version: true\n",
         "version: {a: 1}\n",
         # with boards too: must not quietly drop them by loading as v1
         "version: [1]\nboards: [{name: a, path: work/}]\n",
-        "version: 2\nboards: [{name: a, path: work/}]\n",
     ],
-    ids=["list", "int", "mapping", "list-with-boards", "int-with-boards"],
+    ids=["list", "bool", "mapping", "list-with-boards"],
 )
 def test_non_string_version_is_refused_naming_version(text: str, tmp_path: Path) -> None:
     with pytest.raises(InputRefused) as exc:
@@ -88,8 +87,13 @@ def test_non_string_version_is_refused_naming_version(text: str, tmp_path: Path)
         ('version: "2.0"\nboards: [{name: a, path: work/}]\n', "2.0"),
         ("kanban:\n  theme: software\n", "1.0"),
         ("", "1.0"),
+        # a number is its version string: an unquoted `version: 2.0` is YAML's
+        # float and must not load as v1 and drop its boards (steer amended, #900)
+        ("version: 2.0\nboards: [{name: a, path: work/}]\n", "2.0"),
+        ("version: 2\nboards: [{name: a, path: work/}]\n", "2.0"),
+        ("version: 1\n", "1.0"),
     ],
-    ids=["string-1.0", "string-2.0", "absent", "empty-file"],
+    ids=["string-1.0", "string-2.0", "absent", "empty-file", "float-2.0", "int-2", "int-1"],
 )
 def test_string_or_absent_version_still_loads(text: str, expected: str, tmp_path: Path) -> None:
     assert _load(text, tmp_path).version == expected
