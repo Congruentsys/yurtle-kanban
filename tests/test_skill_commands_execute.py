@@ -64,6 +64,8 @@ OPTION_TOKEN = re.compile(r"^-(?!-?$)")
 
 # A trailing shell comment (`--force  # Skip WIP limit check`) is prose, not flags.
 SHELL_COMMENT = re.compile(r"\s+#\s.*$")
+# a synopsis's `[...]` group, whose `|` separates alternatives (#936)
+SYNOPSIS_BRACKETS = re.compile(r"\[[^\[\]]*\]")
 
 # Render --help unwrapped. At click's default 80 columns an Examples paragraph is
 # re-flowed and a flag can be split across lines (`--ready-for-` / `training`);
@@ -79,12 +81,14 @@ def _parse(line):
 
     Quoted arguments collapse to one placeholder word, so a value that looks like
     a flag is not read as one. A synopsis's optional brackets are dropped, so
-    `[--priority <p>]` is checked as `--priority <p>` (#899).
+    `[--priority <p>]` is checked as `--priority <p>` (#899), and `|` inside them
+    separates alternatives, each checked: `[--status <s>|--all]` (#936).
     """
     m = INVOCATION.match(line)
     if not m:
         return None
     rest = SHELL_COMMENT.sub("", QUOTED.sub("ARG", m.group(1)))
+    rest = SYNOPSIS_BRACKETS.sub(lambda b: b.group(0).replace("|", " "), rest)
     return tuple(w for word in rest.split() if (w := word.lstrip("[").rstrip("]")))
 
 
@@ -384,9 +388,9 @@ DOC_FILES = [REPO_DIR / "README.md", REPO_DIR / "AGENT-QUICK-REF.md"]
 # blocks inside a ````markdown sample of a CLAUDE.md, and an agent pastes those too.
 BASH_FENCE = re.compile(r"^\s*`{3,}\s*(?:bash|sh|shell|console)\s*$")
 CLOSE_FENCE = re.compile(r"^\s*`{3,}\s*$")
-# `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`: the body up to the terminator is data.
-# Never a here-string `<<<word` (#899).
-HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-EOF`: the body up to the terminator
+# is data (#936). Never a here-string `<<<word` (#899).
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)\\?([A-Za-z_][A-Za-z0-9_]*)\2")
 
 
 def _shell_code(line):
