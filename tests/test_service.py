@@ -937,7 +937,8 @@ class TestModifyTurtleBlock:
         assert any("Brain Architecture" in str(label) for label in labels)
 
     def test_prefixes_bound(self, hdd_repo, hdd_svc_config):
-        """Child prefix should appear in output prefix declarations."""
+        """No prefix is declared by a link: a namespace the block declares is
+        written prefixed, one it doesn't is written in full (#812)."""
         from rdflib import Namespace
 
         svc = self._svc(hdd_repo, hdd_svc_config)
@@ -949,7 +950,11 @@ class TestModifyTurtleBlock:
             paper_ns["hasHypothesis"],
             hyp_ns["H130.1"],
         )
-        assert "@prefix hyp:" in new_content
+        assert "@prefix hyp:" not in new_content
+        assert new_content.count("@prefix") == _paper_turtle_block().count("@prefix")
+        assert new_content.endswith(
+            "<#PAPER-130> paper:hasHypothesis <https://nusy.dev/hypothesis/H130.1> ."
+        )
 
     def test_empty_block(self, hdd_repo, hdd_svc_config):
         """Empty turtle content has no subject: unparseable (#737)."""
