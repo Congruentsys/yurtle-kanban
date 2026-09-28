@@ -1942,14 +1942,15 @@ class TestExperimentStatus:
     """Tests for 'yurtle-kanban experiment status'."""
 
     def test_status_no_runs(self, runner, temp_repo, hdd_config):
-        """Status with no runs should show informative message."""
+        """An unknown experiment (no item, no runs) is refused (#905); a known one
+        with no runs is covered by test_905's controls."""
         result = runner.invoke(
             main,
             ["experiment", "status", "EXPR-130"],
             catch_exceptions=False,
         )
-        assert result.exit_code == 0
-        assert "No runs found" in result.output
+        assert result.exit_code == 1
+        assert "not found" in result.output
 
     def test_status_shows_runs(self, runner, temp_repo, hdd_config):
         """Status should show a table of existing runs."""

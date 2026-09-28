@@ -1659,9 +1659,18 @@ def metrics(item_id: str | None, as_json: bool):
 
     if item_id:
         # Single item metrics
-        metrics_data = service.get_flow_metrics(fold_id(item_id))
+        item = service.get_item(fold_id(item_id))
+        if item is None:  # an unknown item is a refusal, in JSON too (#905)
+            _refuse(f"Item not found: {fold_id(item_id)}")
+        metrics_data = service.get_flow_metrics(item.id)
 
         if "error" in metrics_data:
+            if as_json:  # a known item with no history: the usual shape, empty (#905)
+                click.echo(json.dumps({
+                    "item_id": item.id, "transitions": 0, "time_in_status": {},
+                    "cycle_time_hours": None, "lead_time_hours": None,
+                }, indent=2))
+                return
             console.print(f"[yellow]{safe(metrics_data['error'])}[/yellow]")
             console.print("[dim]Status history is recorded when items move between statuses.[/dim]")
             return

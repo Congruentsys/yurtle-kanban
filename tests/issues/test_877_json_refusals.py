@@ -141,8 +141,10 @@ CMDS: dict[str, Cmd] = {
         ["hdd", "critical-path", "--agent", BAD, "--json"],
     ),
     "experiment-status": Cmd(
-        ["experiment", "status", "EXPR-1", "--json"],
-        [],  # an unknown experiment is `[]` (exit 0): invalid-config case
+        # this board has no experiment to succeed on: the success path is pinned
+        # on an HDD board in test_905 (#905)
+        [],
+        ["experiment", "status", "EXPR-1", "--json"],  # unknown: a refusal (#905)
         ["experiment", "status", BAD, "--json"],
     ),
 }
@@ -264,7 +266,7 @@ def test_json_refusal_is_one_json_object(board: Path, args: list[str]) -> None:
 
 @pytest.mark.parametrize("name", list(CMDS))
 def test_json_invalid_config_is_one_json_object(bad_config: Path, name: str) -> None:
-    obj = _assert_result_refusal(_run(CMDS[name].ok))
+    obj = _assert_result_refusal(_run(CMDS[name].ok or CMDS[name].refused))
     assert "mapping" in obj["error"], obj
 
 
@@ -313,6 +315,8 @@ def test_next_id_json_refusal_keeps_847_keys_and_gains_error(board: Path) -> Non
 
 @pytest.mark.parametrize("name", list(CMDS))
 def test_control_json_success_unchanged(board: Path, name: str) -> None:
+    if not CMDS[name].ok:
+        pytest.skip(f"{name}: success path pinned elsewhere (test_905)")
     result = _run(CMDS[name].ok)
     shown = f"{result.stdout}\n--- stderr ---\n{result.stderr}"
     assert result.exit_code == 0, shown

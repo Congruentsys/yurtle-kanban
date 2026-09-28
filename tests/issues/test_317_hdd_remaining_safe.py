@@ -377,9 +377,8 @@ def test_printable_status_table_is_unchanged(
     row = _line(out, "2026-09-25T10:00:00")
     for cell in ("[b]x", "complete", "win"):
         assert cell in row, repr(row)
-    _stub_status(monkeypatch, [], None)  # no item file: the title falls back to the id
-    out = _plain(_run(repo, experiment, ["status", "EXPR-001"], monkeypatch))
-    assert "EXPR-001: EXPR-001\n  No runs found.\n" in out, repr(out)
+    # no item file and no runs is an unknown experiment: refused since #905
+    # (tests/issues/test_905_json_unknown_items.py pins it)
 
 
 def test_printable_critical_path_rows_are_unchanged(

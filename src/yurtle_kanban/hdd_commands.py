@@ -15,7 +15,7 @@ from __future__ import annotations
 import click
 from rich.console import Console
 
-from ._click import Group, pull_note, safe
+from ._click import Group, json_refusal, pull_note, safe
 from .models import PRIORITIES, InputRefused, WorkItemType
 from .template_engine import TemplateEngine
 from .turtle_builder import InvalidTurtleName
@@ -1340,6 +1340,13 @@ def experiment_status(expr_id: str, as_json: bool):
         expr_id = f"EXPR-{expr_id}"
 
     runs = service.get_experiment_runs(expr_id)
+    item = service.get_item(expr_id)
+    if item is None and not runs:
+        # no item and no runs: an unknown experiment is a refusal (#905)
+        if as_json:
+            json_refusal(f"Experiment not found: {expr_id}")
+        console.print(f"[red]Error: Experiment not found: {safe(expr_id)}[/red]")
+        raise SystemExit(1)
 
     if as_json:
         # Serialize Path objects to strings
@@ -1348,8 +1355,7 @@ def experiment_status(expr_id: str, as_json: bool):
         click.echo(json_mod.dumps(runs, indent=2, default=str))
         return
 
-    # Look up experiment title
-    item = service.get_item(expr_id)
+    # the experiment's title
     title = item.title if item else expr_id
 
     if not runs:
