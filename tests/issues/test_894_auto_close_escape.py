@@ -35,6 +35,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues import _bashes
+from tests.issues._bashes import each_bash  # noqa: F401  (autouse: each bash, #940)
 from tests.issues.test_574_claim import ITEM, ITEM_ID, item_text, push_from_a
 from tests.issues.test_860_auto_close_take_over import (
     PR_URL,
@@ -92,7 +94,7 @@ def run_with_stub(tmp_path: Path) -> tuple[int, bytes]:
     script = tmp_path / "move_items.sh"
     script.write_text(move_step_script())
     proc = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-e", str(script)],
+        [_bashes.BASH, "--noprofile", "--norc", "-e", str(script)],  # each bash (#940)
         cwd=tmp_path,
         env=env,
         capture_output=True,

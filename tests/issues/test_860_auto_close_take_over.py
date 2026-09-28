@@ -49,6 +49,8 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.issues import _bashes
+from tests.issues._bashes import each_bash  # noqa: F401  (autouse: each bash, #940)
 from tests.issues.test_574_claim import (
     ITEM,
     ITEM_ID,
@@ -101,7 +103,7 @@ def run_move_step(clone: Path, tmp_path: Path, ids: str) -> tuple[Any, dict[str,
     script = tmp_path / "move_items.sh"
     script.write_text(move_step_script())
     proc = subprocess.run(
-        ["bash", "--noprofile", "--norc", "-e", str(script)],
+        [_bashes.BASH, "--noprofile", "--norc", "-e", str(script)],  # each bash (#940)
         cwd=clone,
         env=env,
         capture_output=True,
