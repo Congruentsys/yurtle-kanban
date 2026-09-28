@@ -188,7 +188,7 @@ def test_config_value_error_carries_no_raw_esc(
 ) -> None:
     repo = _repo(tmp_path, f'kanban:\n  paths:\n    ignore: {{"{EVIL_YAML}": 1}}\n')
     out = _run_tty(repo, ["list"], monkeypatch)
-    assert "ignore:" in out, repr(out)
+    assert "`ignore`" in out, repr(out)  # the field named (#900 wording)
     _assert_escaped(out)
 
 
