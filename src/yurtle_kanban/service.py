@@ -2454,7 +2454,8 @@ class KanbanService:
             # commit-tree runs no hooks: run pre-commit against this index (#584)
             if all(s.returncode == 0 for s in steps):
                 hook = self._git_run(
-                    "hook", "run", "--ignore-missing", "pre-commit", env=env, timeout=None
+                    "hook", "run", "--ignore-missing", "pre-commit", env=env, timeout=None,
+                    user_locale=True,  # its output is only shown (#826)
                 )
                 if hook.returncode != 0:
                     return None, (
@@ -2926,13 +2927,19 @@ class KanbanService:
         *args: str,
         env: dict[str, str] | None = None,
         timeout: float | None = 30,
+        user_locale: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         """Run one git command in the repo root, capturing text output. Never
         interactive (#585): stdin is closed — always, so git can't eat text the CLI
         was piped (#580) — and git may not prompt for credentials, so a remote that
         wants a password fails instead of hanging on the terminal. Commands that run
         the user's hooks pass `timeout=None`: a hook may legitimately take longer
-        (#584)."""
+        (#584). Git runs under LC_ALL=C, since its messages are matched (#806);
+        `user_locale` keeps the caller's locale for output that is only shown, a
+        hook's (#826)."""
+        fixed = (
+            {"GIT_TERMINAL_PROMPT": GIT_ENV["GIT_TERMINAL_PROMPT"]} if user_locale else GIT_ENV
+        )
         return subprocess.run(
             ["git", *args],
             cwd=self.repo_root,
@@ -2940,7 +2947,7 @@ class KanbanService:
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
-            env={**(os.environ if env is None else env), **GIT_ENV},
+            env={**(os.environ if env is None else env), **fixed},
         )
 
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
