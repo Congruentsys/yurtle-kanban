@@ -22,8 +22,10 @@ pytest's `pythonpath = ["src"]` means a worktree's tests import that worktree's 
 0. BRANCH  a worktree + branch from origin/main
 1. TESTS   the test partner (a fresh Agent sub-agent) writes pytest tests from the issue → commit T, proven RED
 2. CODE    the driver writes code to GREEN without editing T's tests, adds a changelog.d/ fragment, runs the check
-3. REVIEW  push, open the PR, and a DISTINCT `claude -p` session posts a verdict comment (max 2 rounds)
-4. MERGE   verdict approve at head + CI green → `safe_merge.sh <P>`; the issue closes through `Fixes #N`
+3. REVIEW  push, open the PR, and a DISTINCT `claude -p` session posts a verdict comment (ONE round; findings
+           are fixed at once, no re-review)
+4. MERGE   approve at head, or the fixed tip of the one round, + CI green → `safe_merge.sh <P>`; the issue
+           closes through `Fixes #N`
 ```
 
 **0. Branch.** Use `fix/` for a bug, `feat/` for a feature and `chore/` for anything else.
@@ -85,10 +87,23 @@ The brief tells the reviewer to:
   `reviewed-at-sha:`, with no leading whitespace or BOM: `safe_merge.sh` reads only that first line,
   and a verdict it can't read counts as no verdict.
 
-**At most two rounds.** After a `changes` verdict, fix the findings as a new commit (step 2), push and review
-again. A second `changes` stops the item. Comment why on the issue, then park both the issue and the PR:
-`gh issue edit <N> --add-label needs-decision` and `gh pr edit <P> --add-label needs-decision`. The picker
-skips a held PR, so the loop moves on and doesn't reopen it.
+**ONE review round** (rachael-lab, Captain 2026-09-28; #987). The reviewer finds the issues; they are fixed
+AT ONCE, and a fix that passes the check is NOT sent for another review:
+- `verdict: approve` → merge (step 4).
+- `verdict: changes` → hand EVERY finding to the implementer (a fresh Opus sub-agent, or the one that wrote the
+  code) in one message; a finding about a test goes to the test partner as a ruled test edit, in its own named
+  commit. Each fix commit names the finding it closes (`fix(#<N>): r1 F<n> — …`); a behaviour fix carries a
+  test that goes red without it. Run the check, push, then post ONE PR comment whose first two lines are
+  `fixes-at-sha: <FIX-SHA>` and `for-review-at: <REVIEWED-SHA>` (both full 40-hex shas, exactly as the verdict
+  names it; the fixed tip must be a later commit), then one line per finding → its fix commit.
+  `safe_merge.sh` merges that tip once CI is green (the reviewed sha must be an ancestor of it); the picker
+  counts it as reviewed.
+- Escalate instead of merging only when a finding cannot be closed by a tested fix: it needs a Captain ruling,
+  changes the issue's scope, or the driver disputes it. Comment why on the issue and park both:
+  `gh issue edit <N> --add-label needs-decision` and `gh pr edit <P> --add-label needs-decision`. The picker
+  skips a held PR. Never a second review.
+
+Partner, implementer and fixes run as in-session Opus sub-agents (the `Agent` tool); GLM is not used.
 
 The verdict comment is posted under the same GitHub account as the PR, so GitHub can't enforce reviewer ≠
 author. The distinct `claude -p` session is what makes the review independent, and the comment's author
@@ -111,8 +126,8 @@ gh issue view <N> --json state --jq .state    # CLOSED (via "Fixes #N")
 ```
 Never merge by hand: on PR #165 a `gh pr checks … && gh pr merge` chain merged a PR with a failing check,
 because `gh pr checks --json` exits 0 whatever the states are (#167). `safe_merge.sh` reads every check's
-state instead. Merge only with an `approve` verdict at the PR's CURRENT head sha. Any commit after the verdict needs a new
-verdict. Done means the merge is on `origin/main` and the issue is closed.
+state instead. Merge only with an `approve` verdict at the PR's CURRENT head sha, or at the fixed tip of the one
+review round (its `fixes-at-sha:` comment). Any other commit after the verdict needs a new verdict. Done means the merge is on `origin/main` and the issue is closed.
 
 **Rebased after approval?** Each PR adds only new files for its tests (`tests/issues/`) and its
 changelog entry (`changelog.d/`), so a rebase onto a moved `origin/main` is normally clean. Rebase

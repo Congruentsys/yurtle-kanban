@@ -7,8 +7,10 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
                  conflict, no review at its head sha, or approved + green (so: merge it).
                  CI still running is WAIT. A PR that is a draft, or carries a hold label (on
                  itself or on the issue it fixes), is SKIPPED — that is how pairit parks a PR
-                 after its second `changes` verdict without wedging the loop.
-2. REVIEW PR     another author's open PR with no verdict at its head sha (reviewer != author).
+                 whose finding needs a decision without wedging the loop. A head with the
+                 driver's fixes comment after ONE review round counts as reviewed (#987).
+2. REVIEW PR     another author's open PR with no verdict (or fixes comment) at its head sha
+                 (reviewer != author).
 3. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet, not held, not waiting.
    (`--skip-prs` jumps straight to 4, for claiming the next issue while a PR is in review.)
 4. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label,
@@ -40,6 +42,10 @@ HOSTS = {"m4-mini": "Mini", "mini": "Mini", "m5": "M5", "spark": "DGX"}
 HOLD = {"needs-decision", "question", "wontfix", "duplicate", "invalid", "blocked", "on-hold"}
 VERDICT = re.compile(
     r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I,
+)
+# pairit's one review round (#987): the driver's comment after fixing a `changes` verdict's findings
+FIXES = re.compile(
+    r"\Afixes-at-sha:\s*([0-9a-f]{40})\s*\nfor-review-at:\s*([0-9a-f]{40})\b", re.I,
 )
 CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 # "depends on #5", "Depends on: #5", "blocked by #8, #9", "depends on #6, #7, and #8",
@@ -73,13 +79,23 @@ def agent_name() -> str:
 
 
 def verdict_at_head(pr: dict) -> str | None:
-    """The latest verdict posted for the PR's current head sha, or None."""
+    """The latest verdict posted for the PR's current head sha, or None. A fixes comment
+    at the head, for a sha that has a verdict, counts as `fixed`: one review round, the
+    findings fixed at once, never a second review (#987)."""
     head = pr["headRefOid"]
     found = None
+    reviewed: list[str] = []
     for c in pr.get("comments") or []:
-        m = VERDICT.match((c.get("body") or "").strip())
-        if m and head.startswith(m.group(1).lower()):
-            found = m.group(2).lower()
+        body = (c.get("body") or "").strip()
+        if m := VERDICT.match(body):
+            reviewed.append(m.group(1).lower())
+            if head.startswith(m.group(1).lower()):
+                found = m.group(2).lower()
+        elif (f := FIXES.match(body)) and f.group(1).lower() == head.lower():
+            # the exact reviewed sha, as safe_merge.sh checks it, and never the head itself
+            r = f.group(2).lower()
+            if r != head.lower() and r in reviewed:
+                found = "fixed"
     return found
 
 

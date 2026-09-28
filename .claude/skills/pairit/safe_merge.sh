@@ -7,7 +7,8 @@
 # the verdict: it reads every check's state and refuses unless ALL of them are
 # SUCCESS or SKIPPED (no checks at all is not green either), unless origin/<branch>
 # is the PR head, the head merges cleanly with origin/main, and the latest
-# `reviewed-at-sha:` verdict is `approve` at that head (#186). Only then does it
+# `reviewed-at-sha:` verdict is `approve` at that head (#186), or the head is the
+# fixed tip of one review round (#987). Only then does it
 # remove the PR's worktree (found by branch, wherever it lives) and merge, with
 # --match-head-commit so GitHub refuses if the head moved in between.
 #
@@ -57,15 +58,31 @@ case $rc in
   *) echo "NOT MERGING #$PR: git merge-tree failed (exit $rc; needs git 2.38+)"; exit 1 ;;
 esac
 
-# pairit's rule: merge only with an `approve` verdict at the CURRENT head. The latest
-# verdict comment decides; a later `changes` overrides an earlier approve.
-# Only verdicts from the repo's own people count: on a public repo anyone can comment
-verdict=$(printf '%s' "$pr" | jq -r '[.comments[]?
+# pairit's rule: merge with an `approve` verdict at the CURRENT head, or, after ONE
+# review round, with the driver's fixes comment at the head (#987): its first lines are
+# `fixes-at-sha: <head>` / `for-review-at: <R>`, a verdict at R came before it, and R is
+# an ancestor of the head. The latest verdict or fixes comment decides; a later
+# `changes` overrides. Only the repo's own people count: on a public repo anyone can comment
+decisive=$(printf '%s' "$pr" | jq -r '[.comments[]?
   | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER"
       or .authorAssociation == "COLLABORATOR")
-  | .body | select(startswith("reviewed-at-sha:"))]
-  | last // "" | split("\n") | .[0:2] | map(sub("\r$"; "")) | join("\n")')
-if [ "$verdict" != "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then
+  | .body | select(startswith("reviewed-at-sha:") or startswith("fixes-at-sha:"))
+  | split("\n") | .[0:2] | map(sub("\r$"; "")) | join("\n")]')
+verdict=$(printf '%s' "$decisive" | jq -r 'last // ""')
+ok=""
+if [ "$verdict" = "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then
+  ok=approve
+elif [ "${verdict%%$'\n'*}" = "fixes-at-sha: $head" ]; then
+  # R: the full 40-hex sha, with a verdict at exactly R before it, and a PROPER ancestor
+  # of the head: `changes` at the head itself is never "fixed" by a comment alone
+  r=$(printf '%s' "${verdict#*$'\n'}" | sed -n 's/^for-review-at: *\([0-9a-f]\{40\}\) *$/\1/p')
+  if [ -n "$r" ] && [ "$r" != "$head" ] && printf '%s' "$decisive" | jq -e --arg r "$r" '
+      map(select(split("\n")[0] == "reviewed-at-sha: \($r)")) | length > 0' >/dev/null &&
+    git merge-base --is-ancestor "$r" "$head" 2>/dev/null; then
+    ok=fixed
+  fi
+fi
+if [ -z "$ok" ]; then
   latest=$(printf '%s' "$verdict" | tr '\n' ' ')
   echo "NOT MERGING #$PR: no approve verdict at $head (latest verdict: ${latest:-none})"
   exit 1

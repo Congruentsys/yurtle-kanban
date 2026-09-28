@@ -25,7 +25,9 @@ rule still applies. Outside yk-loop, use the plain picker.
 1. **Finish before you start.** Your own open PR comes first. The script prints one of these states:
    `changes-requested`, `ci-red`, `conflict`, `needs-review`, `ready-to-merge` or `wait-ci`. A draft,
    or a PR with a hold label on itself or on the issue it fixes, is **parked** (`SKIP`), never resumed.
-   That's how pairit sets a PR aside after its second `changes` verdict without the loop getting stuck.
+   That's how pairit sets a PR aside when a finding needs a decision, without the loop getting stuck.
+   A head carrying the driver's `fixes-at-sha:` comment (pairit's one review round, #987) counts as
+   reviewed: it is `ready-to-merge` once CI is green, never `needs-review` again.
 2. **Review others' work.** Next is another author's open PR with no verdict at its current head. You may
    review it, because reviewer ≠ author. The author merges it, not you.
 3. **Resume before you pick.** An open issue assigned to you that no open PR fixes yet, unless it has
@@ -39,7 +41,9 @@ rule still applies. Outside yk-loop, use the plain picker.
    first, so the script un-assigns you and moves to the next candidate.
 
 **A verdict** is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
-`verdict: approve|changes`. It counts only at the PR's current head, so pushing a new commit resets it.
+`verdict: approve|changes`. It counts only at the PR's current head, so pushing a new commit resets it,
+except for the driver's fixes comment (`fixes-at-sha: <head>` / `for-review-at: <reviewed sha>`), which
+carries one round's review to its fixed tip (#987).
 A PR with no CI checks reported yet reads as `wait-ci`, never as mergeable.
 
 **One loop per GitHub account.** Identity is the `gh` login. Two sessions on the same account would both
