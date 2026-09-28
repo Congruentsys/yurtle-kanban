@@ -182,10 +182,11 @@ class _Main(Group):
             try:
                 check_encodable(f"argument {n}", arg)
             except ValueError as e:
-                if argv_requests_json(args):  # before --json is parsed (#877)
+                if argv_requests_json(args, self):  # before --json is parsed (#877)
                     json_refusal(e)
                 console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
                 ctx.exit(1)
+        ctx.meta["yurtle_kanban.argv"] = list(args)  # for a usage error's --json (#929)
         return super().parse_args(ctx, args)
 
 
