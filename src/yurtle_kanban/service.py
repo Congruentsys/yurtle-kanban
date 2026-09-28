@@ -3989,19 +3989,26 @@ class KanbanService:
         self, read: Read, item_id: str
     ) -> tuple[str, str, WorkItem] | Refuse:
         """(path relative to the git work tree, LF text, parsed item) of `item_id`
-        in `read`'s tree: the fetched commit's, else the working tree's (#574)."""
+        in `read`'s tree: the fetched commit's, else the working tree's (#574). An
+        ID held by more than one file there is refused, as every writer refuses it
+        (#742, #754): which copy the claim meant is ambiguous."""
         top = self._git_toplevel()
         if read.rev is None:
             try:
-                current = self._writable_item(item_id, "a claim")
+                current = self._writable_item(item_id, "a claim")  # refuse_duplicate
             except ValueError as e:
                 return Refuse(str(e))
             rel = Path(os.path.relpath(current.file_path, top)).as_posix()
         else:
-            found = self._holder_at(read.rev, item_id)
-            if found is None:
+            holders = self._holders_at(read.rev, item_id)
+            if len(holders) > 1:
+                return Refuse(
+                    f"{item_id} is on more than one board ({', '.join(holders)}): a claim "
+                    "to it is ambiguous; fix the duplicate ID first"
+                )
+            if not holders:
                 return Refuse(f"Item not found on origin: {item_id}")
-            rel = found
+            rel = holders[0]
         text = read(rel)
         if text is None:
             return Refuse(f"Item not found: {item_id} ({rel} is gone)")

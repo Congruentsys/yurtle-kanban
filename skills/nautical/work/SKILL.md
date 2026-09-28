@@ -40,7 +40,7 @@ Once an expedition is selected (either from $ARGUMENTS or user choice):
 # Claim it: one race-free commit on origin's default branch, so of two
 # agents claiming one item exactly one wins. Use YOUR agent name, never a
 # shared one (sessions on one machine share git user.name).
-YURTLE_AGENT=<your-agent-name> yurtle-kanban claim EXP-XXX
+yurtle-kanban claim EXP-XXX --agent <your-agent-name>
 
 # Create the expedition branch from the remote default branch (main here)
 git fetch origin
