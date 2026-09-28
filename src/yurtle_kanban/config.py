@@ -8,6 +8,7 @@ Multi-board is opt-in: detected when config has 'version: 2.0' and 'boards' key.
 import copy
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum
@@ -31,6 +32,11 @@ _NO_RAW: Any = _Unset.NO_RAW  # a BoardConfig not loaded from config.yaml (#420)
 
 # Cache for loaded themes
 _theme_cache: dict[str, dict[str, Any] | None] = {}  # None: not a mapping (#338)
+
+# name -> (cache key, text) of the repo's `.kanban/themes/<name>.yaml` as a commit
+# holds it, or None when it holds none: the repo's theme overrides read somewhere
+# other than the working tree (origin's fetched tree, #831)
+ThemeSource = Callable[[str], "tuple[str, str] | None"]
 
 # Config version constants
 CONFIG_VERSION_SINGLE = "1.0"
@@ -344,8 +350,14 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
     return data
 
 
-def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[str, Any] | None:
+def _load_builtin_theme(
+    theme_name: str, repo_root: Path | None = None, source: ThemeSource | None = None
+) -> dict[str, Any] | None:
     """Load a theme from local .kanban/themes/ or package resources.
+
+    With a `source`, the repo's own `.kanban/themes/` is read from it instead of
+    the working tree (the cwd's too, when that is the same repo): a commit's
+    overrides, then the built-ins (#831).
 
     The cache is keyed by the theme FILE that wins the lookup, not by the name:
     two repos with different `.kanban/themes/nautical.yaml` never share an entry,
@@ -356,7 +368,18 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
     not no theme); it is cached as None so it is said once (#338, #352). So is one
     that is empty, or left empty once its bad sections are dropped, and a dangling
     symlink (#365)."""
-    for theme_dir in _theme_dirs(repo_root):
+    dirs = _theme_dirs(repo_root)
+    if source is not None:
+        found = source(theme_name)
+        if found is not None:
+            key, text = found
+            if key not in _theme_cache:
+                _theme_cache[key] = _theme_from_text(text, Path(key))
+            if _theme_cache[key] is not None:
+                return _theme_cache[key]
+        own = {(d / ".kanban" / "themes").resolve() for d in (repo_root,) if d}
+        dirs = [d for d in dirs if d.resolve() not in own]
+    for theme_dir in dirs:
         theme_path = theme_dir / f"{theme_name}.yaml"
         try:
             if not theme_path.exists():
@@ -374,29 +397,43 @@ def _load_builtin_theme(theme_name: str, repo_root: Path | None = None) -> dict[
             continue
         if key not in _theme_cache:
             try:
-                with open(theme_path) as f:
-                    data = yaml.safe_load(f)
+                text = theme_path.read_text()
             except Exception as e:
-                problem = f"could not be read or parsed ({type(e).__name__})"
-                data = None
-            else:
-                problem = (
-                    "is empty" if data is None or data == {}
-                    else f"is not a mapping ({type(data).__name__})"
+                logger.warning(
+                    f"theme file {theme_path} could not be read or parsed "
+                    f"({type(e).__name__}); ignored"
                 )
-            if isinstance(data, dict) and data:
-                data = _drop_bad_sections(data, theme_path)  # (#351)
-                if not data:
-                    problem = "has nothing left once its bad sections are ignored"
-            if not isinstance(data, dict) or not data:
-                # nothing usable: the next dir's theme (e.g. the built-in) wins (#365)
-                logger.warning(f"theme file {theme_path} {problem}; ignored")
-                data = None
-            _theme_cache[key] = data
+                _theme_cache[key] = None
+            else:
+                _theme_cache[key] = _theme_from_text(text, theme_path)
         if _theme_cache[key] is not None:
             return _theme_cache[key]
 
     return None
+
+
+def _theme_from_text(text: str, theme_path: Path) -> dict[str, Any] | None:
+    """A theme file's text as a theme, its bad sections dropped (#351); None, with
+    one warning, when nothing usable is left: the next dir's theme (e.g. the
+    built-in) then wins (#365). `theme_path` names it in warnings."""
+    try:
+        data = yaml.safe_load(text)
+    except Exception as e:
+        problem = f"could not be read or parsed ({type(e).__name__})"
+        data = None
+    else:
+        problem = (
+            "is empty" if data is None or data == {}
+            else f"is not a mapping ({type(data).__name__})"
+        )
+    if isinstance(data, dict) and data:
+        data = _drop_bad_sections(data, theme_path)  # (#351)
+        if not data:
+            problem = "has nothing left once its bad sections are ignored"
+    if not isinstance(data, dict) or not data:
+        logger.warning(f"theme file {theme_path} {problem}; ignored")
+        return None
+    return data
 
 
 def _or_default(data: dict[str, Any], key: str, default: str) -> Any:
@@ -407,7 +444,8 @@ def _or_default(data: dict[str, Any], key: str, default: str) -> Any:
 
 
 def _theme_name(
-    data: dict[str, Any], key: str, where: str, repo_root: Path | None = None
+    data: dict[str, Any], key: str, where: str, repo_root: Path | None = None,
+    source: ThemeSource | None = None,
 ) -> Any:
     """A theme/preset name: null means the default (#220), an explicit value is
     kept (#241), but an empty or blank one is never a theme, so say so (#256)."""
@@ -422,7 +460,7 @@ def _theme_name(
             f"config: `{key}` is empty{where}; no theme is loaded "
             "(no WIP limits or workflows). Remove the key for the default."
         )
-    elif _load_builtin_theme(value, repo_root) is None:
+    elif _load_builtin_theme(value, repo_root, source) is None:
         logger.warning(
             f"config: `{key}`{where} is {value!r}, which is not a known theme; no theme is "
             f"loaded. Available: {', '.join(_available_themes(repo_root))}"
@@ -517,12 +555,17 @@ class BoardConfig:
         """Get the board's work path."""
         return Path(self.path)
 
-    def get_theme(self, repo_root: Path | None = None) -> dict[str, Any] | None:
+    def get_theme(
+        self, repo_root: Path | None = None, source: ThemeSource | None = None
+    ) -> dict[str, Any] | None:
         """Get the theme/preset configuration."""
-        return _load_builtin_theme(self.preset, repo_root)
+        return _load_builtin_theme(self.preset, repo_root, source)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], repo_root: Path | None = None) -> "BoardConfig":
+    def from_dict(
+        cls, data: dict[str, Any], repo_root: Path | None = None,
+        source: ThemeSource | None = None,
+    ) -> "BoardConfig":
         """Create BoardConfig from dictionary.
 
         wip_limits can be:
@@ -544,7 +587,7 @@ class BoardConfig:
             # explicit "" keeps its meaning (`path: ""` is the repo root, #241)
             name=board_name,
             preset=_theme_name(
-                data, "preset", f" for board {board_name!r}", repo_root
+                data, "preset", f" for board {board_name!r}", repo_root, source
             ),
             path=_or_default(data, "path", "work/"),
             # a bare key (YAML null) means empty, never None (#194, #204)
@@ -615,6 +658,9 @@ class KanbanConfig:
     default_board: str | None = None  # Name of default board
     # the repo this config belongs to (set by load); themes resolve there first (#287)
     repo_root: Path | None = field(default=None, repr=False, compare=False)
+    # where the repo's `.kanban/themes/` is read when not the working tree: a
+    # config loaded from a commit reads that commit's (#831)
+    theme_source: ThemeSource | None = field(default=None, repr=False, compare=False)
 
     @property
     def is_multi_board(self) -> bool:
@@ -675,20 +721,32 @@ class KanbanConfig:
             return cls()
 
         with open(config_path) as f:
-            data = yaml.safe_load(f) or {}
-        if not isinstance(data, dict):
-            # the CLI reports a ValueError as an invalid config, not a traceback (#338)
-            raise InputRefused(f"the config must be a mapping, got {type(data).__name__}")
+            text = f.read()
         # themes are looked up in the config's own repo first (`<repo>/.kanban/…`),
         # whatever the cwd, as the service does (#272)
         repo_root = config_path.absolute().parent.parent  # as given, like the service
+        return cls.from_text(text, repo_root)
+
+    @classmethod
+    def from_text(
+        cls, text: str, repo_root: Path, theme_source: ThemeSource | None = None
+    ) -> "KanbanConfig":
+        """A config from the text of `<repo_root>/.kanban/config.yaml`, parsed and
+        checked as `load` does. With `theme_source`, the repo's `.kanban/themes/`
+        is read from it, not the working tree: a config as a commit holds it
+        (#831)."""
+        data = yaml.safe_load(text) or {}
+        if not isinstance(data, dict):
+            # the CLI reports a ValueError as an invalid config, not a traceback (#338)
+            raise InputRefused(f"the config must be a mapping, got {type(data).__name__}")
 
         # Check for v2 multi-board config
         version = data.get("version", CONFIG_VERSION_SINGLE)
         # a bare `boards:` is the same as none: fall back to v1 (#204)
         if version == CONFIG_VERSION_MULTI and data.get("boards") is not None:
-            config = cls._load_v2(data, repo_root)
+            config = cls._load_v2(data, repo_root, theme_source)
             config.repo_root = repo_root
+            config.theme_source = theme_source
             return config
         dropped = [k for k in ("namespace", "default_board") if data.get(k) is not None]
         if version == CONFIG_VERSION_MULTI and "boards" in data and dropped:
@@ -698,12 +756,16 @@ class KanbanConfig:
             )
 
         # Fall back to v1 single-board config
-        config = cls._load_v1(data, repo_root)
+        config = cls._load_v1(data, repo_root, theme_source)
         config.repo_root = repo_root
+        config.theme_source = theme_source
         return config
 
     @classmethod
-    def _load_v1(cls, data: dict[str, Any], repo_root: Path | None = None) -> "KanbanConfig":
+    def _load_v1(
+        cls, data: dict[str, Any], repo_root: Path | None = None,
+        theme_source: ThemeSource | None = None,
+    ) -> "KanbanConfig":
         """Load v1 single-board configuration."""
         # a bare key (YAML null) means empty, never None (#194, #204)
         kanban_data = data.get("kanban", data) or {}
@@ -742,18 +804,22 @@ class KanbanConfig:
 
         return cls(
             version=CONFIG_VERSION_SINGLE,
-            theme=_theme_name(kanban_data, "theme", "", repo_root),
+            theme=_theme_name(kanban_data, "theme", "", repo_root, theme_source),
             paths=paths,
             workflows=kanban_data.get("workflows") or {},
             gates=kanban_data.get("gates") or {},
         )
 
     @classmethod
-    def _load_v2(cls, data: dict[str, Any], repo_root: Path | None = None) -> "KanbanConfig":
+    def _load_v2(
+        cls, data: dict[str, Any], repo_root: Path | None = None,
+        theme_source: ThemeSource | None = None,
+    ) -> "KanbanConfig":
         """Load v2 multi-board configuration."""
         # a bare `- ` list entry is skipped, not a crash (#220)
         boards = [
-            BoardConfig.from_dict(b, repo_root) for b in data.get("boards", []) if b is not None
+            BoardConfig.from_dict(b, repo_root, theme_source)
+            for b in data.get("boards", []) if b is not None
         ]
 
         # Aggregate scan_paths from all boards for Priority 3 fallback. Ignore
@@ -907,10 +973,10 @@ class KanbanConfig:
         if self.is_multi_board and board_name:
             board = self.get_board(board_name)
             if board:
-                return board.get_theme(self.repo_root)
+                return board.get_theme(self.repo_root, self.theme_source)
             return None
 
-        return _load_builtin_theme(self.theme, self.repo_root)
+        return _load_builtin_theme(self.theme, self.repo_root, self.theme_source)
 
 
 # ---------------------------------------------------------------------------
