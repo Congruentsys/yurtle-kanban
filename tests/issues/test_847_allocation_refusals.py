@@ -7,13 +7,16 @@ bucket 1):
 1. ``_parse_allocations`` — shared by ``create`` and ``next-id`` — refuses a corrupt
    ``.kanban/_ID_ALLOCATIONS.json`` with a message ending "nothing was changed", not
    "nothing was created": that is true of both callers.
-2. ``next-id`` / ``KanbanService.allocate_next_id``: EVERY refusal (a corrupt
-   allocations file, a malformed prefix, an unencodable prefix, no actor, a refused
-   commit) comes back as the result dict — ``success: False``, ``id: None``,
-   ``prefix``, ``number: None``, ``message`` — never raised. So ``next-id --json``
-   prints parseable JSON on stdout with ``success == false`` and exits 1, as its
-   remote path already does. Without ``--json`` the refusal still prints the error
-   and exits 1.
+2. ``next-id --json``: EVERY refusal (a corrupt allocations file, a malformed
+   prefix, an unencodable prefix, no actor, a refused commit) prints the refusal
+   dict — ``success: False``, ``id: None``, ``prefix``, ``number: None``,
+   ``message`` — as parseable JSON on stdout and exits 1, as its remote path already
+   does. Without ``--json`` the refusal still prints the error and exits 1.
+3. ``KanbanService.allocate_next_id`` (the steer as amended on #847): an input
+   refusal — a corrupt local allocations file, a malformed or unencodable prefix —
+   still RAISES ``InputRefused`` (the #786 design MCP relies on); only the CLI's
+   ``--json`` turns it into the dict. A corrupt origin, no actor or a refused commit
+   comes back as the dict, with ``number: None``.
 
 Reuses the #585/#590/#818 real-git harness: a bare remote, clone A under test.
 """
@@ -317,6 +320,19 @@ def test_allocate_next_id_refused_commit_returns_full_dict(world, monkeypatch) -
     monkeypatch.chdir(world.a)
     result = service_result(lambda: service(world).allocate_next_id("EXP"))
     assert_refusal_dict(result)
+
+
+@pytest.mark.parametrize("sync", [True, False], ids=["remote", "no-sync"])
+def test_allocate_next_id_unencodable_prefix_raises(world, monkeypatch, sync: bool) -> None:
+    """`EXP\\udcff` (argv bytes b"EXP\\xff") is refused by raising, with or without
+    the remote; test_219's TestAllocateNextId pins the no-remote repo as well."""
+    seed_local(world, "[]")
+    monkeypatch.chdir(world.a)
+    before = local_snapshot(world)
+    with pytest.raises(InputRefused) as info:
+        service(world).allocate_next_id("EXP\udcff", sync_remote=sync)
+    assert "prefix" in str(info.value), str(info.value)
+    assert local_snapshot(world) == before, "the refused allocation wrote to A's checkout"
 
 
 # --- 5. controls: a good allocation is unchanged ---------------------------------------------
