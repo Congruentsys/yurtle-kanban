@@ -2473,14 +2473,17 @@ class KanbanService:
         base's is "noop" (#805). With no `origin`, the change is made and committed
         here only ("local"). So is a `Change` naming a file outside the repository,
         decided per Change before origin is contacted (#805): when a board lies
-        outside, `mutate` is first asked against the working tree, and a Change
-        naming a file outside is made here without touching origin; any other
-        answer runs the compare-and-swap, so an in-repo Change keeps it."""
+        outside, `mutate` is first asked against the working tree, and when it read
+        or wrote a file outside, that answer (Change, NoOp or Refuse) stands, made
+        here without touching origin; otherwise the compare-and-swap asks again
+        against origin's tree (mutate is pure), so an in-repo Change keeps it."""
         if not self._has_remote():
             return self._sync_locally(mutate)
         if self._board_outside_repo():
-            asked, eols_here = self._ask_working_tree(mutate)
-            if isinstance(asked, Change) and self._names_outside(asked):
+            asked, eols_here, read_here = self._ask_working_tree(mutate)
+            wrote = asked.files if isinstance(asked, Change) else {}
+            if self._any_outside([*read_here, *wrote]):
+                # about an external item: the working tree's answer, whatever it is
                 return self._write_locally(asked, eols_here)
         branch = "main"
         rejected = False
@@ -2640,30 +2643,34 @@ class KanbanService:
         repository (#574, #805): `read` is the working tree, and a `Change` is
         written, keeping line endings, and committed alone (#584). No commit made
         is "noop"; a refused commit keeps the edit in the working tree (#805)."""
-        return self._write_locally(*self._ask_working_tree(mutate))
+        asked, eols, _ = self._ask_working_tree(mutate)
+        return self._write_locally(asked, eols)
 
     def _ask_working_tree(
         self, mutate: Mutate
-    ) -> tuple[Change | NoOp | Refuse, dict[str, LineEndings]]:
-        """`mutate(read, 0)` with `read` the working tree (rev None), and the line
-        endings of each file it read, for `_write_locally` (#574, #805)."""
+    ) -> tuple[Change | NoOp | Refuse, dict[str, LineEndings], list[str]]:
+        """`mutate(read, 0)` with `read` the working tree (rev None); the line
+        endings of each file it read, for `_write_locally`; and every path it asked
+        for, found or not (#574, #805)."""
         top = self._git_toplevel()
         eols: dict[str, LineEndings] = {}
+        asked: list[str] = []
 
         def read(rel: str) -> str | None:
+            asked.append(rel)
             path = top / rel
             if not path.is_file():
                 return None
             text, eols[rel] = self._read_item_text(path)
             return text
 
-        return mutate(_Reader(None, read), 0), eols
+        return mutate(_Reader(None, read), 0), eols, asked
 
-    def _names_outside(self, change: Change) -> bool:
-        """True when `change` names a file outside the git repository, which git
-        can't commit or push (#805)."""
+    def _any_outside(self, rels: list[str]) -> bool:
+        """True when any of `rels` (relative to the work tree) lies outside the git
+        repository, which origin can't hold (#805)."""
         top = self._git_toplevel()
-        return any(self._outside_git(top / rel) for rel in change.files)
+        return any(self._outside_git(top / rel) for rel in rels)
 
     def _write_locally(
         self, result: Change | NoOp | Refuse, eols: dict[str, LineEndings]
