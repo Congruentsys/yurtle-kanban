@@ -191,11 +191,12 @@ def test_parent_link_blob_cat_file_is_c_locale(world, spy) -> None:
 
 
 def test_blobs_at_reads_are_c_locale(world, spy) -> None:
-    """`_blobs_at` reads blobs with `ls-tree` + `cat-file --batch` (#832): both C."""
+    """`_items_at` lists the board with `ls-tree` and `_blobs_at` reads the blobs
+    with `cat-file --batch` (#832, #880): both C."""
     svc = service(world)
     spy.calls.clear()
-    blobs = svc._blobs_at("HEAD", [ITEM])
-    assert blobs.get(ITEM) == ITEM_TEXT, blobs
+    items = svc._items_at("HEAD", None)
+    assert any(i.file_path.name == Path(ITEM).name for i in items), items
     assert_all_c(spy, ("cat-file", "--batch"), ("ls-tree",), only=True)
     assert not spy.not_c("ls-tree"), spy.not_c("ls-tree")
 

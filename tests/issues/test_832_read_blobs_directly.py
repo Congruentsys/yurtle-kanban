@@ -21,7 +21,7 @@ a. The substitution is made to change a COUNTED value, in both directions:
    - over-count: B's item has ``status: $Format:%s$`` (an unknown status, parsed as
      backlog) and the tip's subject is ``in_progress``. The archive makes it in
      progress, so A is refused. Read as committed, WIP is free and A wins.
-b. ``_blobs_at(rev, names)[name]`` must equal the committed bytes, decoded. This is
+b. ``_blobs_at(rev, oids)[name]`` must equal the committed bytes, decoded. This is
    pinned directly, as well as through ``claim``.
 c. ``export-ignore`` (#814): with direct reads the file IS readable, since it is in
    the tree. The fixed behaviour this file pins is that the file is READ and counted
@@ -127,6 +127,12 @@ def setup_origin(world: World, attributes: str | None, item: str, subject: str) 
     assert not (world.a / OTHER).exists(), "A must not see B's item locally"
 
 
+def blob_oids(repo: Path, rev: str, names: list[str]) -> dict[str, str]:
+    """`_blobs_at`'s input (#880): each name's blob object id at `rev`, as
+    `_items_at`'s `ls-tree` passes them."""
+    return {n: git(repo, "rev-parse", f"{rev}:{n}").strip() for n in names}
+
+
 def origin_rev(world: World) -> str:
     git(world.a, "fetch", "origin")
     return git(world.a, "rev-parse", f"origin/{world.default}").strip()
@@ -184,7 +190,7 @@ def test_blobs_at_reads_committed_bytes_under_export_subst(
     assert "$Format:%s$" in committed
     assert archived_text(world, rev, OTHER) != committed, "export-subst did not apply"
 
-    blobs = service(world.a)._blobs_at(rev, [OTHER])
+    blobs = service(world.a)._blobs_at(rev, blob_oids(world.a, rev, [OTHER]))
 
     assert blobs.get(OTHER) == committed, (
         f"_blobs_at altered {OTHER}:\n{blobs.get(OTHER)!r}\n!=\n{committed!r}"
@@ -265,7 +271,7 @@ def test_control_blobs_at_without_export_subst_is_verbatim(world, item, subject)
     setup_origin(world, None, item, subject)
     rev = origin_rev(world)
 
-    blobs = service(world.a)._blobs_at(rev, [OTHER])
+    blobs = service(world.a)._blobs_at(rev, blob_oids(world.a, rev, [OTHER]))
 
     assert blobs.get(OTHER) == committed_text(world, OTHER)
 
@@ -304,7 +310,7 @@ def test_blobs_at_reads_export_ignored_file(world, attributes) -> None:
     rev = origin_rev(world)
     names = [f"{EXP_DIR}/EXP-001-x.md", OTHER]
 
-    blobs = service(world.a)._blobs_at(rev, names)
+    blobs = service(world.a)._blobs_at(rev, blob_oids(world.a, rev, names))
 
     assert blobs == {n: committed_text(world, n) for n in names}
 
@@ -345,6 +351,7 @@ def test_control_blobs_at_git_calls_never_inherit_stdin(world, monkeypatch) -> N
     setup_origin(world, SUBST_ALL_MD, id_placeholder_item(), ITEM_ID)
     rev = origin_rev(world)
     svc = service(world.a)
+    oids = blob_oids(world.a, rev, [f"{EXP_DIR}/EXP-001-x.md", OTHER])
     calls: list[tuple[list[str], bool]] = []
     real_run, real_popen = subprocess.run, subprocess.Popen
 
@@ -365,7 +372,7 @@ def test_control_blobs_at_git_calls_never_inherit_stdin(world, monkeypatch) -> N
     monkeypatch.setattr(subprocess, "run", run)
     monkeypatch.setattr(subprocess, "Popen", Popen)
 
-    svc._blobs_at(rev, [f"{EXP_DIR}/EXP-001-x.md", OTHER])
+    svc._blobs_at(rev, oids)
 
     assert calls, "no git subprocess seen"
     inherited = [" ".join(c) for c, ok in calls if not ok]

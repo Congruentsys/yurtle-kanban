@@ -21,8 +21,8 @@ Ambiguities resolved here (the test partner's reading; the driver may challenge)
 a. The read failure is injected by making ``git cat-file --batch`` exit 128 at
    BOTH places a service could run it: ``KanbanService._git_run`` and
    ``subprocess.run`` (where ``_blobs_at`` runs it today), so the test does not pin
-   which of the two it routes through. A variant fails ``_blobs_at``'s own
-   ``ls-tree`` (#832).
+   which of the two it routes through. A variant fails the ``ls-tree`` that
+   lists the blobs (#832; ``_items_at``'s since #880).
 b. "A message naming the cause": the message names the git command that failed
    (``cat-file`` or ``ls-tree``).
 c. Fail-closed is pinned with WIP full on origin (the fail-open bug: a claim that
@@ -129,8 +129,8 @@ def break_cat_file(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
 
 
 def break_blobs_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
-    """The `ls-tree` that `_blobs_at` itself runs exits 128 (`_items_at`'s listing
-    still succeeds, so the failure is the blob read's own)."""
+    """The `ls-tree` that lists the board's blobs exits 128. Since #880 that is
+    `_items_at`'s one listing, whose object ids `_blobs_at` reads."""
     seen: list[tuple[str, ...]] = []
     real_git_run = KanbanService._git_run
 
@@ -139,7 +139,7 @@ def break_blobs_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]
         caller = sys._getframe(1)
         if caller.f_code.co_name == "_git_z":
             caller = caller.f_back
-        if args[:1] == ("ls-tree",) and caller.f_code.co_name == "_blobs_at":
+        if args[:1] == ("ls-tree",) and caller.f_code.co_name == "_items_at":
             seen.append(args)
             return subprocess.CompletedProcess(
                 ["git", *args], 128, "", "fatal: ls-tree failed (#832 test)"
@@ -205,7 +205,7 @@ def test_blobs_ls_tree_failure_with_wip_not_full_is_still_refused(world, monkeyp
 
     out = claim(world.a, A, rec)
 
-    assert seen, "`_blobs_at` ran no `git ls-tree`"
+    assert seen, "`_items_at` ran no `git ls-tree`"
     assert_refused_clean(world, out, base, before, rec, ("ls-tree",))
 
 
