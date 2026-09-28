@@ -11,7 +11,7 @@ import re
 from datetime import date
 from pathlib import Path
 
-from yurtle_kanban.models import check_encodable, yaml_flow_list, yaml_quote
+from yurtle_kanban.models import MissingFile, check_encodable, yaml_flow_list, yaml_quote
 from yurtle_kanban.turtle_builder import TurtleBlockBuilder
 
 # HDD item types that get Turtle knowledge blocks generated.
@@ -47,7 +47,7 @@ class TemplateEngine:
             Full markdown file content with variables substituted.
 
         Raises:
-            FileNotFoundError: If no template exists for this theme/type.
+            MissingFile: If no template exists for this theme/type (a FileNotFoundError).
         """
         # a lone surrogate would be written escaped (`"a\\udcffb"` in a JSON-style
         # list), past the content check, and read back broken: refuse it here (#219)
@@ -55,7 +55,7 @@ class TemplateEngine:
             check_encodable(name, value)
         template_path = self._get_template_path(theme, item_type)
         if template_path is None:
-            raise FileNotFoundError(
+            raise MissingFile(  # a refusal, and still a FileNotFoundError (#803)
                 f"No template found for theme='{theme}', type='{item_type}' "
                 f"(searched {self.templates_dir})"
             )

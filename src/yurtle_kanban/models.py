@@ -39,6 +39,12 @@ class InputRefused(ValueError):  # noqa: N818 — the name #666 specifies
     (#666). A `ValueError`, so a caller catching that (MCP) is unaffected."""
 
 
+class MissingFile(InputRefused, FileNotFoundError):  # noqa: N818 — the name #803 specifies
+    """A user file the command needs isn't there: a run's config.yaml, a theme's
+    template (#803). A refusal, and still a `FileNotFoundError`, so every caller
+    that catches that keeps working."""
+
+
 class InvalidText(InputRefused):  # noqa: N818 — the name #239 specifies
     """User text that can't be written as UTF-8: a refusal of the input, never a
     bug, so a CLI command shows it as a one-line error (#239)."""

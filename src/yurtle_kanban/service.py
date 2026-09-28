@@ -43,6 +43,7 @@ from .models import (
     Column,
     Comment,
     InputRefused,
+    MissingFile,
     WorkItem,
     WorkItemStatus,
     WorkItemType,
@@ -5814,7 +5815,7 @@ class KanbanService:
         self._check_text(status=status, outcome=outcome)  # before any write (#239)
         config_path = run_path / "config.yaml"
         if not config_path.exists():
-            raise FileNotFoundError(f"No config.yaml in {run_path}")
+            raise MissingFile(f"No config.yaml in {run_path}")  # (#803)
 
         config_data = yaml.safe_load(config_path.read_text()) or {}
         if not isinstance(config_data, dict):
