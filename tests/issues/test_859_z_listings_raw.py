@@ -110,15 +110,16 @@ def test_control_ids_at_plain_name(world) -> None:
     assert (PLAIN_NAME, "EXP-001") in ids, ids
 
 
-# --- _folder_case_twin: the whole-tree ls-tree -------------------------------------------------
+# --- _folder_case_twin: the whole-tree ls-tree (`_tree_names` since #903) -------------------------------------------------
 
 CR_FOLDER = "kanban-work/Odd\rDir"
 
 
 def test_folder_case_twin_finds_cr_folder(world) -> None:
     on_origin(world, {f"{CR_FOLDER}/a.md": item()})
-    got = service(world)._folder_case_twin(
-        "origin/main", [Path(f"{CR_FOLDER.lower()}/b.md")]
+    svc = service(world)
+    got = svc._folder_case_twin(
+        svc._tree_names("origin/main"), [Path(f"{CR_FOLDER.lower()}/b.md")]
     )
     assert got is not None, "the \\r-named folder's case twin was missed"
     assert_exact(got, CR_FOLDER)
@@ -127,15 +128,17 @@ def test_folder_case_twin_finds_cr_folder(world) -> None:
 def test_folder_case_twin_invents_no_lf_folder(world) -> None:
     """The tree has `Odd\\rDir` only: `odd\\ndir` is no twin of anything there."""
     on_origin(world, {f"{CR_FOLDER}/a.md": item()})
-    got = service(world)._folder_case_twin(
-        "origin/main", [Path("kanban-work/odd\ndir/b.md")]
+    svc = service(world)
+    got = svc._folder_case_twin(
+        svc._tree_names("origin/main"), [Path("kanban-work/odd\ndir/b.md")]
     )
     assert got is None, f"a folder the tree does not have was reported: {got!r}"
 
 
 def test_control_folder_case_twin_plain(world) -> None:
     on_origin(world, {"kanban-work/OddDir/a.md": item()})
-    got = service(world)._folder_case_twin("origin/main", [Path("kanban-work/odddir/b.md")])
+    svc = service(world)
+    got = svc._folder_case_twin(svc._tree_names("origin/main"), [Path("kanban-work/odddir/b.md")])
     assert got == "kanban-work/OddDir"
 
 

@@ -2260,14 +2260,18 @@ class KanbanService:
                 )
             # whatever the ids say, never replace a file the base already has there,
             # nor sit beside one whose name differs only in case: on a
-            # case-insensitive filesystem they are one file (#788)
+            # case-insensitive filesystem they are one file (#788). One listing of
+            # the whole tree serves this and the folder check below (#903); a twin
+            # in a folder spelled another way is the folder check's to name.
+            listed = self._tree_names(base)
             folder = item_rel.parent.as_posix()
-            listed = self._git_z(
-                "ls-tree", "--name-only", "-z", "--full-tree", base, "--",
-                f"{folder}/" if folder not in ("", ".") else ".",
-            ).stdout.split("\0")
+            folder = "" if folder == "." else folder
             twin = next(
-                (p for p in listed if p and _twin_key(p) == _twin_key(item_rel.as_posix())),
+                (
+                    p for p in listed
+                    if p.rpartition("/")[0] == folder
+                    and _twin_key(p) == _twin_key(item_rel.as_posix())
+                ),
                 None,
             )
             if twin is not None:
@@ -2279,7 +2283,7 @@ class KanbanService:
             blobs = {item_rel: text, **self._allocation_blob(base, current_id, actor)}
             # and no folder on a written path may be another folder spelled in
             # another case: a case-insensitive filesystem merges them (#834)
-            if (folder_twin := self._folder_case_twin(base, list(blobs))) is not None:
+            if (folder_twin := self._folder_case_twin(listed, list(blobs))) is not None:
                 raise _CasRefusedError(
                     f"{folder_twin}/ is already on the default branch in that spelling "
                     f"(creating {current_id} would add a folder that differs only in "
@@ -2943,13 +2947,17 @@ class KanbanService:
                 return True
         return False
 
-    def _folder_case_twin(self, rev: str, rels: list[Path]) -> str | None:
-        """The folder at commit `rev`, in its own spelling, that one of `rels`'
-        folders names in a different case, else None (#834). One listing of the
-        tree covers every folder on every path."""
-        listed = self._git_z(
-            "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev
-        ).stdout.split("\0")
+    def _tree_names(self, rev: str) -> list[str]:
+        """Every path in commit `rev`'s tree, folders (`-t`) as well as files, from
+        the top."""
+        listed = self._git_z("ls-tree", "-r", "-t", "-z", "--name-only", "--full-tree", rev)
+        return [name for name in listed.stdout.split("\0") if name]
+
+    @staticmethod
+    def _folder_case_twin(listed: list[str], rels: list[Path]) -> str | None:
+        """The folder in `listed` (a tree's paths, `_tree_names`), in its own
+        spelling, that one of `rels`' folders names in a different case, else None
+        (#834). One listing of the tree covers every folder on every path."""
         folders: dict[str, str] = {}
         for name in listed:
             parts = name.split("/")[:-1]
