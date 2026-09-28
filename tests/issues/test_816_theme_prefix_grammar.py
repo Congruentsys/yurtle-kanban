@@ -31,6 +31,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 
@@ -139,8 +140,8 @@ def _repo(tmp_path: Path, config: str, theme: str) -> Path:
 def _snapshot(tmp_path: Path) -> set[Path]:
     return {
         p
-        for p in tmp_path.rglob("*")
-        if p.is_file() and ".git" not in p.relative_to(tmp_path).parts
+        for p in paths_outside_git(tmp_path)
+        if p.is_file()
     }
 
 

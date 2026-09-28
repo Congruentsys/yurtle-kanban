@@ -29,6 +29,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 
@@ -153,8 +154,8 @@ def _snapshot(repo: Path) -> dict[str, Any]:
     """HEAD, the status and every file under the checkout (except .git)."""
     files = sorted(
         p.relative_to(repo).as_posix()
-        for p in repo.rglob("*")
-        if p.is_file() and ".git" not in p.relative_to(repo).parts
+        for p in paths_outside_git(repo)
+        if p.is_file()
     )
     return {
         "head": _git(repo, "rev-parse", "HEAD").strip(),
@@ -165,8 +166,8 @@ def _snapshot(repo: Path) -> dict[str, Any]:
 
 def _no_unknown_in(repo: Path, remote: Path | None, output: str) -> None:
     assert "unknown" not in output.lower(), f"'unknown' in the output: {output!r}"
-    for p in repo.rglob("*"):
-        if p.is_file() and ".git" not in p.relative_to(repo).parts:
+    for p in paths_outside_git(repo):
+        if p.is_file():
             assert "unknown" not in p.read_text(errors="replace"), f"'unknown' in {p}"
     history = _git(repo, "log", "--all", "-p")
     assert '"unknown"' not in history, "'unknown' committed locally"

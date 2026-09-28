@@ -27,6 +27,7 @@ import pytest
 from click.testing import CliRunner
 from rdflib import URIRef
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItem, WorkItemStatus, WorkItemType
@@ -95,7 +96,7 @@ def runner(temp_repo: Path, hdd_config: KanbanConfig, monkeypatch) -> CliRunner:
 def _newline_paths(root: Path) -> list[Path]:
     if not root.exists():
         return []
-    return [p for p in root.rglob("*") if "\n" in p.name or "\r" in p.name]
+    return [p for p in paths_outside_git(root) if "\n" in p.name or "\r" in p.name]
 
 
 # ---------------------------------------------------------------------------
