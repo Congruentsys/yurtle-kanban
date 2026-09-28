@@ -18,7 +18,6 @@ Helpers and fixtures are #605's (tests/issues/test_605_comments_field.py), which
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -26,6 +25,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from tests.issues.test_583_update_field_level import (
     Item,
     _build,
@@ -79,11 +79,7 @@ def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _files(root: Path) -> set[Path]:
     """The work tree's files; `.git` is never walked, so git rewriting its object
     store meanwhile can't fail the walk (#841)."""
-    found = set()
-    for top, dirs, names in os.walk(root):
-        dirs[:] = [d for d in dirs if d != ".git"]
-        found.update(p for n in names if (p := Path(top) / n).is_file())
-    return found
+    return {p for p in paths_outside_git(root) if p.is_file()}
 
 
 def _clean(root: Path) -> None:

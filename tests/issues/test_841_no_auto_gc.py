@@ -11,6 +11,9 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from tests.issues.test_266_pattern_globs_prune_git import _deny_git_scans
 from tests.issues.test_644_comments_followups import _files
 
 
@@ -28,14 +31,12 @@ def test_suite_repos_never_auto_gc(tmp_path: Path) -> None:
     assert _config(tmp_path, "maintenance.auto") == "false"
 
 
-def test_files_never_walks_git(tmp_path: Path) -> None:
-    """A `.git` that can't be listed can't fail `_files` (it isn't entered)."""
+def test_files_never_walks_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repack vanishing a `.git/objects` folder mid-walk raises FileNotFoundError
+    from os.scandir (3.11's rglob doesn't swallow it); `_files` never scans `.git`."""
     (tmp_path / "a.md").write_text("x")
-    git = tmp_path / ".git" / "objects" / "e5"
-    git.mkdir(parents=True)
-    (git / "loose").write_text("x")
-    git.chmod(0)
-    try:
-        assert _files(tmp_path) == {tmp_path / "a.md"}
-    finally:
-        git.chmod(0o755)
+    (tmp_path / ".git" / "objects" / "e5").mkdir(parents=True)
+    scanned = _deny_git_scans(monkeypatch)
+    assert _files(tmp_path) == {tmp_path / "a.md"}
+    assert scanned, "non-vacuity: the fake scandir was used"
+    assert not [s for s in scanned if ".git" in Path(s).parts], scanned
