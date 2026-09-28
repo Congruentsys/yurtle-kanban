@@ -3376,7 +3376,9 @@ class KanbanService:
             # (`git mv`): that file IS committed, under its old name (#705 review)
             # -z: raw paths, as git would C-quote non-ASCII ones (#718); fields run
             # status, path[, new path] — a rename's destination is two after R…
-            renames = self._git_run("diff", "--cached", "-M", "--name-status", "-z", "HEAD")
+            renames = self._git_run(
+                "diff", "--no-relative", "--cached", "-M", "--name-status", "-z", "HEAD"
+            )
             rel = self._repo_relative(path, self._git_toplevel())
             fields, dests, i = renames.stdout.split("\0"), set(), 0
             while i < len(fields) - 1:  # records: status, path[, new path]
@@ -5260,7 +5262,10 @@ class KanbanService:
         add = self._git_run("add", "--", *rels)
         if add.returncode != 0:
             raise GitCommitError(f"Git commit failed ({message}): {self._git_output(add)}")
-        if self._git_run("diff", "--cached", "--quiet", "HEAD", "--", *rels).returncode == 0:
+        staged = self._git_run(
+            "diff", "--no-relative", "--cached", "--quiet", "HEAD", "--", *rels
+        )
+        if staged.returncode == 0:
             return False  # nothing of ours changed
         done = self._git_run("commit", "--only", "-m", message, "--", *rels, timeout=None)
         if done.returncode != 0:
