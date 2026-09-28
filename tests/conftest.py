@@ -27,7 +27,12 @@ SUITE_GIT_EMAIL = "test-git-user@example.invalid"
 @pytest.fixture(scope="session")
 def _suite_gitconfig(tmp_path_factory: pytest.TempPathFactory) -> Path:
     path = tmp_path_factory.mktemp("gitconfig") / "gitconfig"
-    path.write_text(f"[user]\n\tname = {SUITE_GIT_USER}\n\temail = {SUITE_GIT_EMAIL}\n")
+    # no background `gc --auto` / maintenance: a detached repack pruning loose
+    # objects while a test walks or deletes its repo fails it at random (#841)
+    path.write_text(
+        f"[user]\n\tname = {SUITE_GIT_USER}\n\temail = {SUITE_GIT_EMAIL}\n"
+        "[gc]\n\tauto = 0\n\tautoDetach = false\n[maintenance]\n\tauto = false\n"
+    )
     return path
 
 

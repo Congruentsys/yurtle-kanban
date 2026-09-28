@@ -1,0 +1,42 @@
+"""Issue #841: no background git gc in the suite's repos.
+
+`test_666_rendered_wording` failed at random with FileNotFoundError under
+`.git/objects`: a detached `gc --auto` pruned loose objects while the test walked
+the repo. The suite's global gitconfig (tests/conftest.py) turns auto-gc and
+auto-maintenance off, and `_files` never walks `.git`.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from tests.issues.test_266_pattern_globs_prune_git import _deny_git_scans
+from tests.issues.test_644_comments_followups import _files
+
+
+def _config(repo: Path, key: str) -> str:
+    return subprocess.run(
+        ["git", "config", "--get", key], cwd=repo, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL,
+    ).stdout.strip()
+
+
+def test_suite_repos_never_auto_gc(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, stdin=subprocess.DEVNULL)
+    assert _config(tmp_path, "gc.auto") == "0"
+    assert _config(tmp_path, "gc.autoDetach") == "false"
+    assert _config(tmp_path, "maintenance.auto") == "false"
+
+
+def test_files_never_walks_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repack vanishing a `.git/objects` folder mid-walk raises FileNotFoundError
+    from os.scandir (3.11's rglob doesn't swallow it); `_files` never scans `.git`."""
+    (tmp_path / "a.md").write_text("x")
+    (tmp_path / ".git" / "objects" / "e5").mkdir(parents=True)
+    scanned = _deny_git_scans(monkeypatch)
+    assert _files(tmp_path) == {tmp_path / "a.md"}
+    assert scanned, "non-vacuity: the fake scandir was used"
+    assert not [s for s in scanned if ".git" in Path(s).parts], scanned
