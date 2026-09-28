@@ -90,6 +90,7 @@ class _Claimed:
     old_status: str
     new_status: str
     assignee: str
+    old_assignee: str = ""
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,14 @@ def _parse_allocations(text: str | None, where: str) -> list[Any]:
             "(a missing file starts a fresh list); nothing was created"
         )
     return records
+
+
+class _TreeUnreadableError(ValueError):
+    """A commit's board files can't all be read (#814): `git archive` failed, its
+    output isn't a tar, or it left out a file `ls-tree` lists (an `export-ignore`).
+    A count taken from such a read would be short, so the caller refuses instead;
+    its message names the cause. A ValueError, so `update --push`'s refusal path
+    reports it as it reports a bad dependency."""
 
 
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
@@ -4181,7 +4190,10 @@ class KanbanService:
             )
             if not valid:
                 return Refuse(error)
-            refusal = self._wip_refusal_in(read, proposed)
+            try:
+                refusal = self._wip_refusal_in(read, proposed)
+            except _TreeUnreadableError as e:  # never count an unreadable tree (#814)
+                return Refuse(str(e))
             if refusal:
                 return Refuse(refusal)
             blocking = [
@@ -4203,6 +4215,7 @@ class KanbanService:
         claimed = _Claimed(
             item_id=item.id, item_type=item.item_type.value, title=item.title,
             old_status=old_status.value, new_status=in_progress.value, assignee=actor,
+            old_assignee=holder,
         )
         return Change({rel: new_text}, message, data=claimed)
 
@@ -4263,7 +4276,8 @@ class KanbanService:
     def _items_at(self, rev: str, board_config: BoardConfig | None) -> list[WorkItem]:
         """The items of `board_config` (None: the single board) as commit `rev`
         holds them, parsed from their text as a scan parses files, ignore patterns
-        applied (#574)."""
+        applied (#574). Raises `_TreeUnreadableError` when they can't all be read
+        (#814): a short list would under-count."""
         top = self._git_toplevel()
         if board_config is not None:
             roots = [_under(self.repo_root, board_config.path)]
@@ -4279,6 +4293,12 @@ class KanbanService:
         listed = self._git_run(  # -z: names raw, never quoted (#808)
             "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", *rels
         )
+        if listed.returncode != 0:  # an empty listing would count zero (#814)
+            raise _TreeUnreadableError(
+                f"Can't read the board at {rev}: git ls-tree failed "
+                f"({listed.stderr.strip() or f'exit {listed.returncode}'}); "
+                "refusing rather than judge an empty board"
+            )
         names = []
         for name in dict.fromkeys(n for n in listed.stdout.split("\0") if n):
             path = top / name
@@ -4299,7 +4319,12 @@ class KanbanService:
     def _blobs_at(self, rev: str, names: list[str]) -> dict[str, str]:
         """Each of `names` (paths from the work tree's top) as commit `rev` holds it,
         its text as a file read with `newline=""` gives it: one `git archive`, since
-        git never reads stdin (#580). A non-UTF-8 file is left out."""
+        git never reads stdin (#580). A non-UTF-8 file is left out.
+
+        Fails closed (#814): raises `_TreeUnreadableError` when the archive fails,
+        its output isn't a tar, or it lacks any of `names` (which come from
+        `ls-tree`) — an `export-ignore` in `.gitattributes` drops files from an
+        archive, and a dropped file would silently not be counted."""
         import io
         import tarfile
 
@@ -4315,22 +4340,44 @@ class KanbanService:
             env={**os.environ, **GIT_ENV},
         )
         wanted, blobs = set(names), {}
+        refusing = "refusing rather than judge a partial board (it would count short)"
         if done.returncode != 0:
-            return {}
-        with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
-            for member in tar:
-                if member.name not in wanted or not member.isfile():
-                    continue
-                handle = tar.extractfile(member)
-                if handle is None:
-                    continue
-                with suppress(UnicodeDecodeError):
-                    blobs[member.name] = handle.read().decode("utf-8")
+            err = done.stderr.decode("utf-8", "replace").strip() if done.stderr else ""
+            raise _TreeUnreadableError(
+                f"Can't read the board files at {rev}: git archive failed "
+                f"({err or f'exit {done.returncode}'}); {refusing}"
+            )
+        seen: set[str] = set()
+        try:
+            with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
+                for member in tar:
+                    if member.name not in wanted or not member.isfile():
+                        continue
+                    seen.add(member.name)
+                    handle = tar.extractfile(member)
+                    if handle is None:
+                        continue
+                    with suppress(UnicodeDecodeError):
+                        blobs[member.name] = handle.read().decode("utf-8")
+        except tarfile.TarError as e:  # every path export-ignored: no tar at all
+            raise _TreeUnreadableError(
+                f"Can't read the board files at {rev}: git archive gave no readable "
+                f"tar ({e}); an export-ignore in .gitattributes may cover the board; "
+                f"{refusing}"
+            ) from e
+        missing = sorted(wanted - seen)
+        if missing:
+            raise _TreeUnreadableError(
+                f"Can't read the board files at {rev}: git archive left out "
+                f"{len(missing)} file(s) git ls-tree lists (e.g. {missing[0]}); "
+                f"an export-ignore in .gitattributes? {refusing}"
+            )
         return blobs
 
     def _fire_claim_hooks(self, claimed: _Claimed) -> None:
         """The hooks of a claim that landed (#574): STATUS_CHANGE when the status
-        changed, and ASSIGNED."""
+        changed, and ASSIGNED when the holder changed (#814) — the same actor, as
+        `same_actor` compares, is no change."""
         if claimed.old_status != claimed.new_status:
             self._hook_engine.trigger(
                 HookEvent.STATUS_CHANGE,
@@ -4344,6 +4391,8 @@ class KanbanService:
                     assignee=claimed.assignee,
                 ),
             )
+        if claimed.old_assignee and same_actor(claimed.old_assignee, claimed.assignee):
+            return
         self._hook_engine.trigger(
             HookEvent.ASSIGNED,
             HookContext(
