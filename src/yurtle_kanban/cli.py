@@ -60,6 +60,7 @@ from .models import (
     unknown_priority_message,
 )
 from .service import KanbanService, git_toplevel
+from .sync import Outcome
 
 
 def _get_shared_data_dir(subdir: str) -> Path:
@@ -138,6 +139,16 @@ def get_service() -> KanbanService:
         config = KanbanConfig()  # Use defaults
 
     return KanbanService(config, repo_root)
+
+
+def _print_outcome(outcome: Outcome) -> NoReturn:
+    """Print a sync outcome and exit with its code: a non-zero one as one `Error:`
+    line, as every refusal (#666, #825)."""
+    if outcome.exit_code == 0:
+        console.print(f"[green]{safe(outcome.message)}[/green]", soft_wrap=True)
+    else:
+        console.print(f"[red]Error: {safe(outcome.message)}[/red]", soft_wrap=True)
+    sys.exit(int(outcome.exit_code))
 
 
 def _refuse(e: Exception) -> NoReturn:
@@ -773,9 +784,7 @@ def claim(item_id: str, agent: str | None, take_over: bool):
         outcome = service.claim_item(item_id.upper(), actor=actor, take_over=take_over)
     except InputRefused as e:
         _refuse(e)
-    color = "green" if outcome.exit_code == 0 else "red"
-    console.print(f"[{color}]{safe(outcome.message)}[/{color}]", soft_wrap=True)
-    sys.exit(int(outcome.exit_code))
+    _print_outcome(outcome)
 
 
 @main.command()
@@ -1412,13 +1421,8 @@ def update(
         allow_unknown=allow_unknown,
     )
     if push:
-        try:
-            outcome = service.update_item_push(item_id.upper(), **edits)
-        except InputRefused as e:
-            _refuse(e)
-        color = "green" if outcome.exit_code == 0 else "red"
-        console.print(f"[{color}]{safe(outcome.message)}[/{color}]", soft_wrap=True)
-        sys.exit(int(outcome.exit_code))
+        # every refusal comes back as an outcome (#825)
+        _print_outcome(service.update_item_push(item_id.upper(), **edits))
     try:
         item, changes = service.update_item_changes(
             item_id.upper(), **edits, commit=not no_commit
