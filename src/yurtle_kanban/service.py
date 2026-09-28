@@ -731,6 +731,7 @@ class KanbanService:
         self.duplicate_ids = {}
         self._folded_items = {}
         self.parse_warnings = []
+        self._parse_warned = set()
 
         if self.config.is_multi_board:
             # Each board applies its OWN ignore patterns to its own path, exactly
@@ -1041,7 +1042,7 @@ class KanbanService:
         board's, on each push attempt) says it once, not per read (#879)."""
         warning = (file_path, reason)
         # a set beside the list, so a board of thousands of broken files isn't
-        # quadratic (#921); rebuilt whenever the list was reset without it
+        # quadratic (#921); reset with it, and rebuilt should a reset miss it
         if len(self._parse_warned) != len(self.parse_warnings):
             self._parse_warned = set(self.parse_warnings)
         if warning not in self._parse_warned:
@@ -4535,6 +4536,7 @@ class KanbanService:
             judge._folded_items = {}
             judge.duplicate_ids = {}
             judge.parse_warnings = []
+            judge._parse_warned = set()  # its own, not self's (#921)
             judge._board = None
             judge._workflows = {}
         self._judges = {rev: judge}  # the last fetched commit's only
