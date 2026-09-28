@@ -95,7 +95,15 @@ REFUSED_TODAY: list[tuple[str, str, str]] = [
     ("v2-board-ignore-int", _board("ignore: 5"), "ignore"),
 ]
 
-ALL_CASES = RED_CASES + REFUSED_TODAY
+# Added by the driver: the other typed v2 fields, per the implementer brief (#864).
+MORE_FIELDS: list[tuple[str, str, str]] = [
+    ("v2-namespace-list", _board("") + "namespace: [1]\n", "namespace"),
+    ("v2-default_board-int", _board("") + "default_board: 5\n", "default_board"),
+    ("v2-board-wip_exempt_types-str", _board("wip_exempt_types: expedite"), "wip_exempt_types"),
+    ("v2-board-wip_exempt_types-int-entry", _board("wip_exempt_types: [1]"), "wip_exempt_types"),
+]
+
+ALL_CASES = RED_CASES + REFUSED_TODAY + MORE_FIELDS
 
 
 def _ids(cases: list[tuple[str, str, str]]) -> list[str]:
@@ -278,6 +286,8 @@ boards:
   - name: research
     path: research/
     wip_limits: null
+    wip_exempt_types: [expedite]
+namespace: https://example.org/kanban/
 default_board: dev
 """
 
@@ -309,6 +319,8 @@ def test_control_valid_v2_loads(tmp_path: Path, loader: str) -> None:
     }
     assert config.boards[1].wip_limits is None
     assert config.default_board == "dev"
+    assert config.namespace == "https://example.org/kanban/"
+    assert config.boards[1].wip_exempt_types == ["expedite"]
 
 
 def test_control_empty_and_bare_sections_load(tmp_path: Path) -> None:
