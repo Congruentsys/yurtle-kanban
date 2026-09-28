@@ -2206,7 +2206,7 @@ class KanbanService:
             # case-insensitive filesystem they are one file (#788)
             folder = item_rel.parent.as_posix()
             listed = self._git_run(
-                "ls-tree", "--name-only", "-z", base, "--",
+                "ls-tree", "--name-only", "-z", "--full-tree", base, "--",
                 f"{folder}/" if folder not in ("", ".") else ".",
             ).stdout.split("\0")
             twin = next(
@@ -2857,7 +2857,10 @@ class KanbanService:
         # the `---` lines too, numbered: a file's frontmatter is line 1's `---` up
         # to the next line starting with `---`, as the parser reads it
         grep = self._git_run(
-            "grep", "-z", "-n", "-I", "-E", "^(---|id:[[:space:]])", rev, "--", *specs
+            # --full-name: repo-rooted paths, as ls-tree gives, from a board in a
+            # subdirectory too (#788)
+            "grep", "-z", "-n", "-I", "--full-name", "-E", "^(---|id:[[:space:]])",
+            rev, "--", *specs
         )
         ids = []
         state: dict[str, bool] = {}  # path -> still inside its frontmatter
