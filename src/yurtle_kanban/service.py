@@ -3678,6 +3678,9 @@ class KanbanService:
     # Turtle's PN_LOCAL (#910): name characters, `:`, `%xx` and `\`-escapes; a `.`
     # only inside, never last (a statement's `.` follows)
     _PLX = r"%[0-9A-Fa-f]{2}|\\[_~.\-!$&'()*+,;=/?#@%]"
+    # Turtle's PN_PREFIX (#956): a letter in any script, then name characters and `.`,
+    # never ending in `.` (`true.:Beta` is `true`, the statement's `.`, then `:Beta`)
+    _PN_PREFIX = r"[^\W\d_](?:[\w.-]*[\w-])?"
     _PN_LOCAL = rf"(?:(?:[\w:]|{_PLX})(?:(?:[\w.:-]|{_PLX})*(?:[\w:-]|{_PLX}))?)?"
     # a turtle block's tokens, in order (#876, #910): strings and comments only to be
     # skipped; `@prefix`/`@base` and SPARQL `PREFIX`/`BASE` directives, whose
@@ -3688,10 +3691,10 @@ class KanbanService:
         r'|"(?:[^"\\\n]|\\.)*"'
         r"|'(?:[^'\\\n]|\\.)*'"
         r"|#[^\n]*"
-        r"|(?<![\w:-])(?:@prefix|(?i:prefix))\s+([A-Za-z][\w.-]*)?:\s*<([^<>\"{}|^`\\\s]*)>"
+        r"|(?<![\w:-])(?:@prefix|(?i:prefix))\s+(" + _PN_PREFIX + r")?:\s*<([^<>\"{}|^`\\\s]*)>"
         r"|(?<![\w:-])(?:@base|(?i:base))\s+<([^<>\"{}|^`\\\s]*)>"
         r"|<([^<>\"{}|^`\\\s]*)>"
-        rf"|(?<![\w.:-])([A-Za-z][\w.-]*)?:({_PN_LOCAL})"
+        rf"|(?<![\w:-])({_PN_PREFIX})?:({_PN_LOCAL})"
     )
 
     @classmethod
