@@ -2291,12 +2291,11 @@ class KanbanService:
             blobs = {item_rel: text, **self._allocation_blob(base, current_id, actor)}
             # and no folder on a written path may be another folder spelled in
             # another case: a case-insensitive filesystem merges them (#834)
-            if (folder_twin := self._folder_case_twin(listed, list(blobs))) is not None:
-                raise _CasRefusedError(
-                    f"{folder_twin}/ is already on the default branch in that spelling "
-                    f"(creating {current_id} would add a folder that differs only in "
-                    "case); nothing was created"
-                )
+            twin = self._folder_twin_refusal(
+                listed, list(blobs), f"creating {current_id}", nothing="created"
+            )
+            if twin is not None:
+                raise _CasRefusedError(twin)
             linked, parent_state = ({}, None) if parent is None else judge._parent_link_blob(
                 base, parent, item_type.value, current_id
             )
@@ -2962,23 +2961,62 @@ class KanbanService:
         return [name for name in listed.stdout.split("\0") if name]
 
     @staticmethod
-    def _folder_case_twin(listed: list[str], rels: list[Path]) -> str | None:
-        """The folder in `listed` (a tree's paths, `_tree_names`), in its own
-        spelling, that one of `rels`' folders names in a different case, else None
-        (#834). One listing of the tree covers every folder on every path."""
-        folders: dict[str, str] = {}
+    def _folder_spellings(listed: list[str]) -> dict[str, set[str]]:
+        """Every folder of `listed` (a tree's paths, `_tree_names`), grouped by
+        `_twin_key`: the spellings a case-insensitive filesystem merges (#834,
+        #869)."""
+        folders: dict[str, set[str]] = {}
         for name in listed:
             parts = name.split("/")[:-1]
             for n in range(1, len(parts) + 1):
                 folder = "/".join(parts[:n])
-                folders.setdefault(_twin_key(folder), folder)
+                folders.setdefault(_twin_key(folder), set()).add(folder)
+        return folders
+
+    @classmethod
+    def _folder_case_twin(cls, listed: list[str], rels: list[Path]) -> str | None:
+        """The folder in `listed`, in its own spelling, that one of `rels`' folders
+        names in a different case, else None (#834)."""
+        folders = cls._folder_spellings(listed)
         for rel in rels:
             parts = rel.as_posix().split("/")[:-1]
             for n in range(1, len(parts) + 1):
                 folder = "/".join(parts[:n])
-                existing = folders.get(_twin_key(folder))
-                if existing is not None and existing != folder:
-                    return existing
+                others = sorted(folders.get(_twin_key(folder), set()) - {folder})
+                if others:
+                    return others[0]
+        return None
+
+    @classmethod
+    def _folder_twin_refusal(
+        cls, listed: list[str], rels: list[Path], doing: str, nothing: str = "changed"
+    ) -> str | None:
+        """Why writing `rels` onto the tree `listed` would leave folders a
+        case-insensitive filesystem merges, else None (#834, #869, #870): a written
+        folder spelled unlike the one the tree holds, or the tree already holding
+        a folder in two spellings (then a write into either is refused). `doing`
+        names the write ("creating EXP-042"); the message ends "nothing was
+        `nothing`"."""
+        folders = cls._folder_spellings(listed)
+        for rel in rels:
+            parts = rel.as_posix().split("/")[:-1]
+            for n in range(1, len(parts) + 1):
+                folder = "/".join(parts[:n])
+                spellings = folders.get(_twin_key(folder), set())
+                if len(spellings) > 1:
+                    both = " and ".join(f"{f}/" for f in sorted(spellings))
+                    return (
+                        f"the default branch already has case-twin folders {both} "
+                        f"(one folder on a case-insensitive filesystem): fix that "
+                        f"before {doing}; nothing was {nothing}"
+                    )
+                if spellings and folder not in spellings:
+                    existing = next(iter(spellings))
+                    return (
+                        f"{existing}/ is already on the default branch in that spelling "
+                        f"({doing} would add a folder that differs only in case); "
+                        f"nothing was {nothing}"
+                    )
         return None
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
@@ -4029,10 +4067,14 @@ class KanbanService:
 
             def build(base: str) -> tuple[dict[Path, str], str]:
                 made["id"] = self._next_id_at(base, prefix)
-                return (
-                    self._allocation_blob(base, made["id"], actor),
-                    f"Allocate ID: {made['id']}",
+                blobs = self._allocation_blob(base, made["id"], actor)
+                # the record's folders are guarded as a create's are (#870)
+                twin = self._folder_twin_refusal(
+                    self._tree_names(base), list(blobs), f"allocating {made['id']}"
                 )
+                if twin is not None:
+                    raise _CasRefusedError(twin)
+                return blobs, f"Allocate ID: {made['id']}"
 
             def landed(branch: str, local: bool) -> dict[str, Any]:
                 space = self._id_space(made["id"])  # `H130.2` has no dash (#655)
