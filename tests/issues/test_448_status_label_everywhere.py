@@ -29,6 +29,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_439_list_theme_status import (  # noqa: F401  (fixtures)
     THEMES_DIR,
     _clear_theme_cache,
@@ -331,7 +332,7 @@ def test_hdd_scan_does_not_load_theme_per_item(
 
     _invoke(runner, ["init", "--theme", "hdd"])
     first = _created_id(runner, wide, ["create", "idea", "template"])
-    template = next(p for p in repo.rglob(f"{first}-*.md") if ".git" not in p.parts)
+    template = next(glob_outside_git(repo, f"{first}-*.md"))
     body = re.sub(r"(?m)^status: .*$", "status: active", template.read_text())
     n_items = 60
     for n in range(2, n_items + 1):

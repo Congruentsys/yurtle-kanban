@@ -27,6 +27,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_585_create_push_loop import World, git, output_of, porcelain
 from tests.issues.test_603_push_failure_messages import invoke
 from tests.issues.test_645_parent_in_cas import (
@@ -68,7 +69,7 @@ def flat(result) -> str:
 def hypothesis_files(world: World) -> list[str]:
     root = world.a / "research" / "hypotheses"
     return sorted(
-        str(p.relative_to(world.a)) for p in root.rglob("*.md")
+        str(p.relative_to(world.a)) for p in glob_outside_git(root, "*.md")
     ) if root.exists() else []
 
 

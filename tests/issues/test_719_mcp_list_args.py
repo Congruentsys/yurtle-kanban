@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_576_cli_update_deps import Repo, repo  # noqa: F401  (fixture)
 from yurtle_kanban.mcp import server as mcp_server
 
@@ -16,7 +17,7 @@ def _mcp(repo: Repo):
 
 
 def _file_text(repo: Repo, item_id: str) -> str:
-    return next(repo.root.rglob(f"{item_id}-*.md")).read_text()
+    return next(glob_outside_git(repo.root, f"{item_id}-*.md")).read_text()
 
 
 @pytest.mark.parametrize(

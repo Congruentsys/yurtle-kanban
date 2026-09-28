@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
 from tests.issues.test_347_hooks_repo_cwd import _assert_cwd_untouched
 from tests.issues.test_357_hooks_context_copy_safe_paths import (
     _ctx,
@@ -77,7 +78,7 @@ def test_log_action_missing_assignee_keeps_directory_segment(
     with caplog.at_level(logging.WARNING, logger="yurtle-kanban.hooks"):
         service._hook_engine.trigger(HookEvent.ITEM_CREATED, _ctx())
     target = repo / "logs" / "_" / "x.jsonl"
-    assert target.is_file(), f"expected R/logs/_/x.jsonl, got {list(repo.rglob('*'))}"
+    assert target.is_file(), f"expected R/logs/_/x.jsonl, got {list(paths_outside_git(repo))}"
     assert not (repo / "logs" / "x.jsonl").exists(), "empty value collapsed the segment"
     (entry,) = _log_entries(target)
     assert entry["item_id"] == "E-1"
