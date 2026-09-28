@@ -654,7 +654,7 @@ class BoardConfig:
             )
         # Preserve None (explicitly unlimited board); a bad limit is dropped (#411)
         wip_limits = (
-            _clean_wip_limits(raw_wip, f"config.yaml board {board_name!r}")
+            _clean_wip_limits(raw_wip, on)  # `on board 'a'`, the #900 shape (#946)
             if raw_wip is not None else None
         )
         return cls(
@@ -872,7 +872,11 @@ class KanbanConfig:
         paths_data = dict(raw_paths)
         # README long showed `ignore:` (and consumers wrote `scan_paths:`) beside
         # `paths:`, not in it: read them there too; `paths.*` wins (#482)
-        scan_where = "in kanban.paths"
+        # where each list sits, for its refusal (#946): in the paths section, or
+        # beside it (in `kanban`, or at the top level of a file with no `kanban:`)
+        in_paths = f"in {where}paths"
+        beside = "in kanban" if where else "at the top level"
+        scan_where = ignore_where = in_paths
         for key in ("ignore", "scan_paths"):
             if key not in kanban_data:
                 continue
@@ -883,7 +887,9 @@ class KanbanConfig:
             else:
                 paths_data[key] = kanban_data[key]
                 if key == "scan_paths":
-                    scan_where = "in kanban"
+                    scan_where = beside
+                else:
+                    ignore_where = beside
         root = _str_or_none(paths_data.get("root"), f"{where}paths.root", "a path string")
 
         def folder(key: str) -> str | None:  # a type's folder is a path too (#864)
@@ -892,7 +898,7 @@ class KanbanConfig:
         paths = PathConfig(
             root="work/" if root is None else root,
             scan_paths=_scan_list(paths_data, scan_where),
-            ignore=_ignore_list(paths_data),
+            ignore=_ignore_list(paths_data, ignore_where),
             features=folder("features"),
             bugs=folder("bugs"),
             epics=folder("epics"),
@@ -1127,14 +1133,17 @@ def _clean_wip_limits(raw: Any, where: str, quiet: bool = False) -> dict[str, An
             per_type = {}
             for item_type, type_limit in limit.items():
                 keep, value = _wip_limit_value(
-                    type_limit, f"{where} wip_limits.{column}.{item_type}", quiet
+                    type_limit, f"config.yaml: `wip_limits.{column}.{item_type}` {where}".rstrip(),
+                    quiet,
                 )
                 if keep:
                     per_type[item_type] = value
             if per_type or not limit:  # all dropped: no override, the theme's applies (#420)
                 cleaned[column] = per_type
         else:
-            keep, value = _wip_limit_value(limit, f"{where} wip_limits.{column}", quiet)
+            keep, value = _wip_limit_value(
+                limit, f"config.yaml: `wip_limits.{column}` {where}".rstrip(), quiet
+            )
             if keep:
                 cleaned[column] = value
     return cleaned
