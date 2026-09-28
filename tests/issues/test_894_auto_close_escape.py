@@ -33,14 +33,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.issues.test_574_claim import (
-    ITEM,
-    ITEM_ID,
-    _env,  # noqa: F401  (autouse: clean env, theme cache)
-    item_text,
-    push_from_a,
-    world,  # noqa: F401  (fixture)
-)
+import pytest
+
+from tests.issues.test_574_claim import ITEM, ITEM_ID, item_text, push_from_a
 from tests.issues.test_860_auto_close_take_over import (
     PR_URL,
     REPO,
@@ -48,6 +43,9 @@ from tests.issues.test_860_auto_close_take_over import (
     move_step_script,
     run_move_step,
 )
+
+# `world` is tests/issues/conftest.py's; its env setup is requested, as in test_860 (#892)
+pytestmark = pytest.mark.usefixtures("claim_env")
 
 # (no single quote: the stub single-quotes it)
 # a refusal with a literal %, already-encoded-looking %0A / %25 / %0D, a CRLF, and a
