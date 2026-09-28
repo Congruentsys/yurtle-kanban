@@ -546,11 +546,13 @@ yurtle-kanban list --status in_progress    # Filter by status
 yurtle-kanban history --week               # Recent completions
 ```
 
-**Moving items:**
+**Claiming and moving items:**
 ```bash
-yurtle-kanban move EXP-001 in_progress
-yurtle-kanban move EXP-001 done
+yurtle-kanban claim EXP-001 --agent <your-agent-name>          # race-free claim
+yurtle-kanban move EXP-001 review --agent <your-agent-name>    # the holder moves it on
 ```
+An item in progress can only be moved by its holder: pass `--agent` (or set
+`YURTLE_AGENT`). To take over someone else's item, add `--take-over`.
 ````
 
 ## Python API
