@@ -112,8 +112,9 @@ def _origin_files(world: World) -> list[str]:
 def _rewrite_origin(
     world: World, respell: tuple[str, str] | None = None, files: dict[str, str] | None = None
 ) -> None:
-    """Commit on origin/main main's tree with every path under folder `respell[0]` moved
-    under `respell[1]` (same blobs), plus `files`, all spelled exactly as given."""
+    """Commit on origin/main main's tree with every path under folder `respell[0]`
+    (in either normalization) moved under `respell[1]` (same blobs), plus `files`,
+    all spelled exactly as given."""
     with tempfile.TemporaryDirectory() as tmp:
         env = {
             **os.environ,
@@ -128,8 +129,13 @@ def _rewrite_origin(
         lines = []
         for entry in filter(None, listed.split("\0")):
             meta, path = entry.split("\t", 1)
-            if respell is not None and path.startswith(respell[0]):
-                path = respell[1] + path[len(respell[0]) :]
+            # either spelling of the folder: git on a Mac records A's folders
+            # precomposed, git on Linux keeps them as written (CI runs Linux)
+            if respell is not None:
+                for spelled in {unicodedata.normalize(f, respell[0]) for f in ("NFC", "NFD")}:
+                    if path.startswith(spelled):
+                        path = respell[1] + path[len(spelled) :]
+                        break
             lines.append(f"{meta}\t{path}")
         for rel, text in (files or {}).items():
             sha = _plumb(world, "hash-object", "-w", "--stdin", env=env, stdin=text).strip()
