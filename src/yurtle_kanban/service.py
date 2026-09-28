@@ -4085,7 +4085,7 @@ class KanbanService:
                 if assignee:
                     commit_msg += f" (assigned to {assignee})"
                 if taken_over_from is not None:
-                    commit_msg += f" (taken over from {taken_over_from})"
+                    commit_msg += f" (taken over from {taken_over_from or 'no holder'})"
             self._git_commit(item.file_path, commit_msg)
 
         # Fire hooks (after successful move)
