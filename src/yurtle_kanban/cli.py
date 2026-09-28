@@ -32,7 +32,15 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
-from ._click import Group, argv_requests_json, json_refusal, json_requested, pull_note, safe
+from ._click import (
+    Group,
+    argv_requests_json,
+    json_refusal,
+    json_requested,
+    pull_note,
+    refuse,
+    safe,
+)
 from .board import (
     render_board,
     render_history,
@@ -158,13 +166,8 @@ def _print_outcome(outcome: Outcome) -> NoReturn:
 
 
 def _refuse(e: object, plain: str | None = None) -> NoReturn:
-    """A refusal, exit 1. With `--json`: one JSON object on stdout,
-    `{"success": false, "error": <e>}` (#877). Without: `plain` (a Rich markup
-    line) when given, else `e` as one red `Error:` line (#580)."""
-    if json_requested():
-        json_refusal(e)
-    console.print(plain if plain is not None else f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
-    sys.exit(1)
+    """The shared `refuse` (#962) on this module's console."""
+    refuse(e, plain, console=console)
 
 
 class _Main(Group):
@@ -1667,14 +1670,10 @@ def metrics(item_id: str | None, as_json: bool):
             _refuse(f"Item not found: {fold_id(item_id)}")
         metrics_data = service.get_flow_metrics(item.id)
 
-        if "error" in metrics_data:
-            if as_json:  # a known item with no history: the usual shape, empty (#905)
-                click.echo(json.dumps({
-                    "item_id": item.id, "transitions": 0, "time_in_status": {},
-                    "cycle_time_hours": None, "lead_time_hours": None,
-                }, indent=2))
-                return
-            console.print(f"[yellow]{safe(metrics_data['error'])}[/yellow]")
+        if "error" in metrics_data or (not as_json and not metrics_data["transitions"]):
+            # plain output of a history-less item is unchanged (#962)
+            said = metrics_data.get("error", "No status history found")
+            console.print(f"[yellow]{safe(said)}[/yellow]")
             console.print("[dim]Status history is recorded when items move between statuses.[/dim]")
             return
 
