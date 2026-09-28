@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemType
 from yurtle_kanban.service import KanbanService
@@ -261,7 +262,7 @@ def sw(tmp_path: Path) -> Path:
 
 
 def _item_file(repo: Path, item_id: str = "FEAT-001") -> Path:
-    found = [p for p in repo.rglob(f"{item_id}*.md") if ".git" not in p.parts]
+    found = list(glob_outside_git(repo, f"{item_id}*.md"))
     assert len(found) == 1, found
     return found[0]
 

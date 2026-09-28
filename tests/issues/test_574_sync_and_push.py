@@ -47,7 +47,7 @@ from typing import Any
 
 import pytest
 
-from tests.issues._snapshot import paths_outside_git
+from tests.issues._snapshot import files_outside_git
 from tests.issues.test_585_create_push_loop import EXP_DIR, FEATURE, World, git
 from tests.issues.test_590_next_id_and_hdd_ids import b_push
 from yurtle_kanban.config import KanbanConfig
@@ -143,11 +143,7 @@ def rival(world: World, n: int = 0) -> None:
 def snapshot(clone: Path) -> dict[str, Any]:
     """HEAD, current branch, local branches, index entries, status and every tree
     file's bytes (outside .git)."""
-    files = {
-        str(p.relative_to(clone)): p.read_bytes()
-        for p in sorted(paths_outside_git(clone))
-        if p.is_file()
-    }
+    files = files_outside_git(clone)
     return {
         "head": git(clone, "rev-parse", "HEAD").strip(),
         "branch": git(clone, "symbolic-ref", "--short", "HEAD", check=False).strip(),

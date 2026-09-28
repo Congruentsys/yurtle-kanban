@@ -27,6 +27,7 @@ from typing import Any
 import pytest
 import yaml
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_615_folded_status_keys import (
     LAYOUTS,
     MOVE,
@@ -59,7 +60,7 @@ def _expected(mappings: dict[str, str]) -> list[str]:
 
 
 def _written(root: Path, item_id: str) -> str:
-    files = [p for p in root.rglob(f"{item_id}-*.md") if ".git" not in p.parts]
+    files = list(glob_outside_git(root, f"{item_id}-*.md"))
     assert len(files) == 1, files
     front = files[0].read_text().split("---", 2)[1]
     return str(yaml.safe_load(front)["status"])

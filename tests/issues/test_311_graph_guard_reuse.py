@@ -22,6 +22,7 @@ import pytest
 import yaml
 from rdflib import Literal, URIRef
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban import service as service_mod
 from yurtle_kanban.config import KanbanConfig
 from yurtle_kanban.models import WorkItemType
@@ -67,7 +68,7 @@ def board(tmp_path: Path) -> Path:
 
 
 def _items(repo: Path) -> list[Path]:
-    return sorted(p for p in repo.rglob("FEAT-*.md") if ".git" not in p.parts)
+    return sorted(glob_outside_git(repo, "FEAT-*.md"))
 
 
 def _field_count(path: Path) -> int:

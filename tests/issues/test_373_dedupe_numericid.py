@@ -33,6 +33,7 @@ from click.testing import CliRunner
 from rdflib import Literal
 from rdflib.namespace import XSD
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_349_sparql_distinct import (  # noqa: F401 (fixtures)
     DUAL,
     engine,
@@ -71,7 +72,7 @@ ALL_ORDER = [DUAL, "PAPER-003", "PAPER-002", "PAPER-001"]
 def numid_repo(repo: Path) -> Path:
     """The #349 board, plus a second kb:numericId on PAPER-002 and PAPER-003."""
     for item_id, num in _EXTRA_NUMID.items():
-        (path,) = repo.rglob(f"{item_id}*.md")
+        (path,) = glob_outside_git(repo, f"{item_id}*.md")
         path.write_text(
             path.read_text(encoding="utf-8") + _BLOCK.format(item_id=item_id, num=num),
             encoding="utf-8",

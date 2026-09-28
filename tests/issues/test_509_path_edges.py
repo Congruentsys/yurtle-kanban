@@ -23,6 +23,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_479_tilde_paths import _init_repo, _no_literal_tilde, _single_yaml
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
@@ -284,7 +285,7 @@ def test_log_action_tilde_item_data_stays_in_repo(tmp_path, home, field, value, 
     target = repo / segment / "x.log"
     assert target.exists(), (
         f"{field}={value!r}: log not at {target}; repo has "
-        f"{sorted(str(p.relative_to(repo)) for p in repo.rglob('*'))}"
+        f"{sorted(str(p.relative_to(repo)) for p in glob_outside_git(repo, '*'))}"
     )
     assert _entries(target)[0][field] == value
     _nothing_under(home)
