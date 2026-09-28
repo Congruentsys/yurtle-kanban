@@ -64,8 +64,7 @@ OPTION_TOKEN = re.compile(r"^-(?!-?$)")
 
 # A trailing shell comment (`--force  # Skip WIP limit check`) is prose, not flags.
 SHELL_COMMENT = re.compile(r"\s+#\s.*$")
-# a synopsis's `[...]` group, whose `|` separates alternatives (#936)
-SYNOPSIS_BRACKETS = re.compile(r"\[[^\[\]]*\]")
+
 
 # Render --help unwrapped. At click's default 80 columns an Examples paragraph is
 # re-flowed and a flag can be split across lines (`--ready-for-` / `training`);
@@ -75,6 +74,15 @@ HELP_WIDTH = 10_000
 # Side-by-side examples on one line are separated by a run of 3+ spaces (the
 # docstring indentation that click keeps when it re-flows a paragraph).
 EXAMPLE_SEPARATOR = re.compile(r"\s{3,}")
+
+def _split_alternatives(text):
+    """`|` inside a synopsis's `[...]`, at any depth, as a word break (#936, #972)."""
+    out, depth = [], 0
+    for c in text:
+        depth += (c == "[") - (c == "]" and depth > 0)
+        out.append(" " if c == "|" and depth else c)
+    return "".join(out)
+
 
 def _parse(line):
     """The argv words after `yurtle-kanban` in a printed command, or None.
@@ -88,7 +96,7 @@ def _parse(line):
     if not m:
         return None
     rest = SHELL_COMMENT.sub("", QUOTED.sub("ARG", m.group(1)))
-    rest = SYNOPSIS_BRACKETS.sub(lambda b: b.group(0).replace("|", " "), rest)
+    rest = _split_alternatives(rest)
     return tuple(w for word in rest.split() if (w := word.lstrip("[").rstrip("]")))
 
 
@@ -390,7 +398,11 @@ BASH_FENCE = re.compile(r"^\s*`{3,}\s*(?:bash|sh|shell|console)\s*$")
 CLOSE_FENCE = re.compile(r"^\s*`{3,}\s*$")
 # `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<\EOF`, `<<-EOF`: the body up to the terminator
 # is data (#936). Never a here-string `<<<word` (#899).
-HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)\\?([A-Za-z_][A-Za-z0-9_]*)\2")
+HEREDOC = re.compile(
+    # quoted, the terminator is literal, backslash and all (`<<'\\EOF'` ends at `\\EOF`,
+    # #972); unquoted, a leading backslash only quotes it (`<<\\EOF` ends at `EOF`, #936)
+    r"(?<!<)<<(?!<)(-?)\s*(?:(['\"])(\\?[A-Za-z_][A-Za-z0-9_]*)\2|\\?([A-Za-z_][A-Za-z0-9_]*))"
+)
 
 
 def _shell_code(line):
@@ -445,7 +457,7 @@ def _block_commands(lines, first_lineno):
             (m for m in HEREDOC.finditer(text) if not _shell_code(text[: m.start()])[1]), None
         )
         if heredoc:
-            strip_tabs, terminator = heredoc.group(1), heredoc.group(3)
+            strip_tabs, terminator = heredoc.group(1), heredoc.group(3) or heredoc.group(4)
             while i < len(lines):
                 body = lines[i].lstrip("\t") if strip_tabs else lines[i]
                 i += 1
