@@ -47,6 +47,7 @@ from typing import Any
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
 from tests.issues.test_585_create_push_loop import EXP_DIR, FEATURE, World, git
 from tests.issues.test_590_next_id_and_hdd_ids import b_push
 from yurtle_kanban.config import KanbanConfig
@@ -144,8 +145,8 @@ def snapshot(clone: Path) -> dict[str, Any]:
     file's bytes (outside .git)."""
     files = {
         str(p.relative_to(clone)): p.read_bytes()
-        for p in sorted(clone.rglob("*"))
-        if p.is_file() and ".git" not in p.relative_to(clone).parts
+        for p in sorted(paths_outside_git(clone))
+        if p.is_file()
     }
     return {
         "head": git(clone, "rev-parse", "HEAD").strip(),

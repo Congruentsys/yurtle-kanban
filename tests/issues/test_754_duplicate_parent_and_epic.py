@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
 from tests.issues.test_576_cli_update_deps import (  # noqa: F401
     Repo,
     _flat,
@@ -128,8 +129,8 @@ def _tree(world: World) -> dict[str, bytes]:
     """Every file in clone A outside .git (item files, config, _ID_ALLOCATIONS.json)."""
     return {
         p.relative_to(world.a).as_posix(): p.read_bytes()
-        for p in world.a.rglob("*")
-        if p.is_file() and ".git" not in p.relative_to(world.a).parts
+        for p in paths_outside_git(world.a)
+        if p.is_file()
     }
 
 

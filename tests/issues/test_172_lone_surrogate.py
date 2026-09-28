@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemType
@@ -79,7 +80,7 @@ def existing(svc: KanbanService) -> str:
 def _snapshot(repo: Path) -> dict[str, bytes]:
     """Every file under kanban-work/ with its bytes."""
     root = repo / "kanban-work"
-    return {str(p.relative_to(repo)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    return {str(p.relative_to(repo)): p.read_bytes() for p in paths_outside_git(root) if p.is_file()}
 
 
 def _assert_rejected(excinfo: pytest.ExceptionInfo[BaseException], field: str) -> None:
