@@ -3608,43 +3608,67 @@ class KanbanService:
     _PLAIN_LOCAL_RE = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.\-]*[A-Za-z0-9_\-])?")
     _BASE_DECL_RE = re.compile(r"^\s*(?:@base\b|(?i:base)\s*<)", re.MULTILINE)
 
-    # a turtle block's terms, in order: strings and comments are matched only to be
-    # skipped; an IRI ref `<…>` and a prefixed name `p:local` are terms (#876)
+    # Turtle's PN_LOCAL (#910): name characters, `:`, `%xx` and `\`-escapes; a `.`
+    # only inside, never last (a statement's `.` follows)
+    _PLX = r"%[0-9A-Fa-f]{2}|\\[_~.\-!$&'()*+,;=/?#@%]"
+    _PN_LOCAL = rf"(?:(?:[\w:]|{_PLX})(?:(?:[\w.:-]|{_PLX})*(?:[\w:-]|{_PLX}))?)?"
+    # a turtle block's tokens, in order (#876, #910): strings and comments only to be
+    # skipped; `@prefix`/`@base` and SPARQL `PREFIX`/`BASE` directives, whose
+    # bindings apply from where they are written; IRI refs and prefixed names
     _TURTLE_TERM_RE = re.compile(
-        r'"""(?:[^"\\]|\\.|"(?!""))*"""|\'\'\'(?:[^\'\\]|\\.|\'(?!\'\'))*\'\'\''
-        r'|"(?:[^"\\\n]|\\.)*"|\'(?:[^\'\\\n]|\\.)*\'|#[^\n]*'
+        r'"""(?:[^"\\]|\\.|"(?!""))*"""'
+        r"|'''(?:[^'\\]|\\.|'(?!''))*'''"
+        r'|"(?:[^"\\\n]|\\.)*"'
+        r"|'(?:[^'\\\n]|\\.)*'"
+        r"|#[^\n]*"
+        r"|(?<![\w:-])(?:@prefix|(?i:prefix))\s+([A-Za-z][\w.-]*)?:\s*<([^<>\"{}|^`\\\s]*)>"
+        r"|(?<![\w:-])(?:@base|(?i:base))\s+<([^<>\"{}|^`\\\s]*)>"
         r"|<([^<>\"{}|^`\\\s]*)>"
-        r"|(?<![\w.:-])([A-Za-z][\w.-]*)?:((?:[\w-]|\.(?=[\w-]))*)"
+        rf"|(?<![\w.:-])([A-Za-z][\w.-]*)?:({_PN_LOCAL})"
     )
-    _DIRECTIVE_RE = re.compile(r"^\s*(?:@prefix|@base|(?i:prefix|base))\b[^\n]*", re.MULTILINE)
 
     @classmethod
     def _first_written(
         cls, text: str, subjects: list[URIRef], namespaces: dict[str, Any], base_uri: str
     ) -> URIRef:
         """Of `subjects`, the one whose term is written first in the block `text`
-        (#876): IRI refs resolved against the block's `@base` (else `base_uri`) and
-        prefixed names against its prefixes, outside strings, comments and the
-        `@prefix`/`@base` lines. `<#PAPER-10>` is no `<#PAPER-1>`, a comment naming
-        a subject doesn't count, and an empty local name is no wildcard. None
-        written (a subject rdflib derived): the first in IRI order."""
+        (#876, #910). The block is read in order: strings and comments are skipped,
+        each `@prefix`/`@base` (or SPARQL `PREFIX`/`BASE`) binds from where it is
+        written, IRI refs resolve against the base then in force (else
+        `base_uri`), and prefixed names, with Turtle's full local-name grammar,
+        against the prefixes then declared. `<#PAPER-10>` is no `<#PAPER-1>`, a
+        comment naming a subject doesn't count, and an empty local name is no
+        wildcard. None written (a subject rdflib derived): the first in IRI order.
+        `namespaces` (rdflib's final bindings) resolves a prefix used before any
+        declaration the reader saw."""
         wanted = {str(s): s for s in subjects}
         base = base_uri
-        declared = re.search(r"^\s*(?:@base|(?i:base))\s*<([^>]*)>", text, re.MULTILINE)
-        if declared:
-            base = declared.group(1)
-        body = cls._DIRECTIVE_RE.sub(lambda m: " " * len(m.group(0)), text)
-        for match in cls._TURTLE_TERM_RE.finditer(body):
-            ref, prefix, name = match.group(1), match.group(2), match.group(3)
+        bound: dict[str, str] = {}
+
+        def resolve(ref: str) -> str:
+            if ref.startswith("#"):
+                return base.split("#")[0] + ref
+            if re.match(r"[A-Za-z][\w+.-]*:", ref):
+                return ref
+            return urljoin(base, ref)
+
+        for match in cls._TURTLE_TERM_RE.finditer(text):
+            pfx, pfx_iri, base_iri, ref, prefix, name = match.groups()
+            if pfx_iri is not None:
+                bound[pfx or ""] = resolve(pfx_iri)
+                continue
+            if base_iri is not None:
+                base = resolve(base_iri)
+                continue
             if ref is not None:
-                if ref.startswith("#"):
-                    iri = base.split("#")[0] + ref
-                elif re.match(r"[A-Za-z][\w+.-]*:", ref):
-                    iri = ref
-                else:
-                    iri = urljoin(base, ref)
-            elif name is not None and (prefix or "") in namespaces:
-                iri = str(namespaces[prefix or ""]) + name
+                iri = resolve(ref)
+            elif name is not None:
+                ns = bound.get(prefix or "")
+                if ns is None and (prefix or "") in namespaces:
+                    ns = str(namespaces[prefix or ""])
+                if ns is None:
+                    continue
+                iri = ns + re.sub(r"\\(.)", r"\1", name)  # `\-` is `-`; `%41` stays
             else:
                 continue
             if iri in wanted:
