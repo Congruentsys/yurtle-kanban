@@ -51,10 +51,11 @@ from .export import (
     export_research_index,
 )
 from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure, paper
-from .inputs import check_identity, read_text_option, resolve_actor
+from .inputs import advisory_actor, check_identity, read_text_option, resolve_actor
 from .models import (
     PRIORITIES,
     InputRefused,
+    WorkItem,
     WorkItemStatus,
     WorkItemType,
     check_encodable,
@@ -63,7 +64,7 @@ from .models import (
     unknown_priority_message,
 )
 from .service import KanbanService, git_toplevel
-from .sync import Outcome
+from .sync import NOTHING_PICKABLE, Outcome
 
 
 def _get_shared_data_dir(subdir: str) -> Path:
@@ -470,6 +471,18 @@ def _warn_unparseable(service: KanbanService) -> None:
     help="Filter by priority (critical, high, medium, low). Comma-separated.",
 )
 @click.option("--board", "-b", "board_name", help="Filter to a specific board (multi-board mode)")
+@click.option(
+    "--pickable", is_flag=True,
+    help="Only the items you may pick up now, in pick order (not the same as --status ready)",
+)
+@click.option(
+    "--agent",
+    help="With --pickable: who is asking; default $YURTLE_AGENT, then git user.name",
+)
+@click.option(
+    "--explain", is_flag=True,
+    help="With --pickable: also each ready item that is not pickable, and why",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_items(
     status: str | None,
@@ -477,9 +490,27 @@ def list_items(
     assignee: str | None,
     priority: str | None,
     board_name: str | None,
+    pickable: bool,
+    agent: str | None,
+    explain: bool,
     as_json: bool,
 ):
-    """List work items."""
+    """List work items.
+
+    --pickable lists only what --agent may pick up now (#575): status ready,
+    unassigned or held by --agent, and every dependency met (done). That is not
+    --status ready, which lists every ready item whoever holds it and whatever it
+    waits on. Order: priority_rank, then priority, then the oldest ID. With no
+    identity at all, only unassigned items are shown. A dependency cycle among
+    ready items is warned about on stderr. It reads the local tree: claim is the
+    authoritative gate.
+    """
+    if pickable and (status is not None or assignee is not None):
+        raise click.UsageError(
+            "--pickable chooses statuses and holders itself: drop --status/--assignee"
+        )
+    if not pickable and (agent is not None or explain):
+        raise click.UsageError("--agent and --explain go with --pickable")
     if assignee is not None:
         try:
             assignee = check_identity(assignee, "--assignee")
@@ -528,6 +559,10 @@ def list_items(
         priority=priority_filter,
     )
 
+    if pickable:
+        _list_pickable(service, items, agent, explain, as_json)
+        return
+
     _warn_unparseable(service)
 
     if not items:
@@ -539,6 +574,41 @@ def list_items(
         click.echo(json.dumps(data, indent=2))
     else:
         render_list(items, console, status_label=service.status_label)
+
+
+def _list_pickable(
+    service: KanbanService, items: list[WorkItem], agent: str | None, explain: bool,
+    as_json: bool,
+) -> None:
+    """`list --pickable [--explain]` of `items` (#575)."""
+    try:
+        actor = advisory_actor(agent, cwd=service.repo_root)
+    except InputRefused as e:
+        _refuse(e)
+    picks, refused = service.pick_report(actor, items)
+    _warn_unparseable(service)
+    ready = {fold_id(i.id) for i in items if i.status == WorkItemStatus.READY}
+    for cycle in service.dependency_cycles():
+        if ready & set(cycle):
+            click.echo(f"warning: dependency cycle {' → '.join(cycle)}", err=True)
+
+    if as_json:
+        data: Any = [item.to_dict() for item in picks]
+        if explain:
+            data = {
+                "items": data,
+                "not_pickable": [{"id": i.id, "reason": why} for i, why in refused],
+            }
+        click.echo(json.dumps(data, indent=2))
+        return
+    if picks:
+        render_list(picks, console, status_label=service.status_label)
+    else:
+        console.print("[dim]Nothing pickable.[/dim]")
+    if explain and refused:
+        click.echo("Not pickable:")
+        for item, why in refused:
+            click.echo(f"  {item.id} — {why}")
 
 
 @main.command()
@@ -788,21 +858,29 @@ def move(
 
 
 @main.command()
-@click.argument("item_id")
+@click.argument("item_id", required=False)
 @click.option("--agent", help="Who is claiming it; default $YURTLE_AGENT (never git user.name)")
 @click.option(
     "--take-over",
     is_flag=True,
     help="Take it from its holder, or take an in-progress item with no holder "
-    "(recorded as kb:takenOverFrom); gates still apply",
+    "(recorded as kb:takenOverFrom); gates and dependencies still apply",
 )
-def claim(item_id: str, agent: str | None, take_over: bool):
+@click.option(
+    "--next", "next_", is_flag=True,
+    help="Claim the first pickable item you win, in list --pickable order; "
+    "exit 7 when none is left",
+)
+def claim(item_id: str | None, agent: str | None, take_over: bool, next_: bool):
     """Claim a work item: move it to in progress, held by you, race-free (#574).
 
     One compare-and-swap commit on origin's default branch (a kanban-only commit):
     of two agents claiming one item, exactly one wins; the other is told who.
-    Exit codes: 0 claimed (or already yours), 1 refused, 3 lost to another agent,
-    4 remote unreachable, 5 remote busy, 6 push refused by the remote.
+    Only a pickable item is claimed (#575): status ready, unassigned or yours,
+    every dependency met; --take-over also takes one held by another or in
+    progress. Exit codes: 0 claimed (or already yours), 1 refused, 3 lost to
+    another agent, 4 remote unreachable, 5 remote busy, 6 push refused by the
+    remote, 7 nothing pickable (--next).
 
     WIP limits, board paths and ignore patterns are judged by origin's
     config (.kanban/config.yaml and the theme files it names under
@@ -813,15 +891,39 @@ def claim(item_id: str, agent: str | None, take_over: bool):
         YURTLE_AGENT=Claude-M5 yurtle-kanban claim EXP-123
         yurtle-kanban claim EXP-123 --agent Claude-M5
         yurtle-kanban claim EXP-123 --take-over --agent Claude-M5
+        yurtle-kanban claim --next --agent Claude-M5
     """
+    if next_ == (item_id is not None):
+        raise click.UsageError("Give an ITEM_ID or --next (one of them)")
+    if next_ and take_over:
+        raise click.UsageError("--take-over names its item: not with --next")
     service = get_service()
     try:
         # every session on a machine shares git user.name: no fallback (#574)
         actor = resolve_actor(agent, allow_git_fallback=False, cwd=service.repo_root)
+        if next_:
+            _claim_next(service, actor)
+        assert item_id is not None
         outcome = service.claim_item(fold_id(item_id), actor=actor, take_over=take_over)
     except InputRefused as e:
         _refuse(e)
     _print_outcome(outcome)
+
+
+def _claim_next(service: KanbanService, actor: str) -> NoReturn:
+    """`claim --next` (#575 §8): claim each pickable item in turn. `refused` or
+    `lost` moves on to the next; any other outcome ends it (`unreachable`, `busy`
+    and `push_refused` without trying the rest). None left: exit 7."""
+    picks, _ = service.pick_report(actor)
+    for item in picks:
+        outcome = service.claim_item(item.id, actor=actor)
+        if outcome.kind not in ("refused", "lost"):
+            _print_outcome(outcome)
+    message = f"nothing pickable for {actor}"
+    if picks:
+        message += f" ({len(picks)} tried: each refused or lost)"
+    console.print(f"[red]Error: {safe(message)}[/red]", soft_wrap=True)
+    sys.exit(NOTHING_PICKABLE)
 
 
 @main.command()
@@ -1343,24 +1445,40 @@ def history(
 
 
 @main.command("next")
-@click.option("--agent", help="Who is asking (items it holds are suggested first)")
-def next_item(agent: str | None):
-    """Suggest the next item to work on."""
-    if agent is not None:
-        try:
-            agent = check_identity(agent, "--agent")
-        except ValueError as e:
-            _refuse(e)
+@click.option(
+    "--agent",
+    help="Who is asking; default $YURTLE_AGENT, then git user.name. "
+    "Its own in-progress items come first",
+)
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help='Output as JSON: {"id", "kind": "resume"|"pick", "reason"}, or null (exit 7)',
+)
+def next_item(agent: str | None, as_json: bool):
+    """Suggest the next item to work on (#575): your own in-progress item first
+    (the one in progress longest), else the top item of list --pickable.
+
+    Offline and advisory: it reads the local tree, and claim is the authoritative
+    gate (or use claim --next). With no identity at all, only unassigned items are
+    considered. With --json, nothing to offer prints null and exits 7.
+    """
     service = get_service()
-
-    item = service.suggest_next_item(assignee=agent)
-
-    if not item:
-        console.print("[dim]No ready items to work on.[/dim]")
+    try:
+        actor = advisory_actor(agent, cwd=service.repo_root)
+    except InputRefused as e:
+        _refuse(e)
+    found = service.next_item(actor)
+    if found is None:
+        if as_json:
+            click.echo("null")
+            sys.exit(NOTHING_PICKABLE)
+        console.print("[dim]Nothing pickable.[/dim]")
         return
-
-    console.print("[bold]Suggested next item:[/bold]")
-    render_item_detail(item, console, status_label=service.status_label)
+    item, kind, reason = found
+    if as_json:
+        click.echo(json.dumps({"id": item.id, "kind": kind, "reason": reason}))
+    else:
+        click.echo(f"{item.id} — {reason}")
 
 
 def _id_csv(value: str | None) -> list[str] | None:

@@ -11,6 +11,7 @@ This service provides the business logic for:
 from __future__ import annotations
 
 import copy
+import dataclasses
 import fnmatch
 import json
 import logging
@@ -23,7 +24,7 @@ import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
@@ -96,6 +97,19 @@ class _Claimed:
     new_status: str
     assignee: str
     old_assignee: str = ""
+
+
+@dataclass
+class DepNode:
+    """One unmet dependency, as `unmet_dependencies` walks it (#575): `status` is its
+    native status (None when it is on no board), `state` its `dependency_state`
+    and `children` its own unmet dependencies. #577 renders it."""
+
+    id: str
+    status: str | None
+    assignee: str | None
+    state: str
+    children: list[DepNode] = dataclasses.field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -4442,7 +4456,8 @@ class KanbanService:
     ) -> Change | NoOp | Refuse:
         """`claim`'s `mutate` (#574 §3): the claim rules, in order, against the
         item as `read` has it — already yours; held by another (a `holder`, so a
-        lost race says "lost to"); in progress with no holder; then legality,
+        lost race says "lost to"); in progress with no holder; `pickable`'s
+        clauses (#575: ready, dependencies met in `read`'s tree); then legality,
         workflow rules, WIP (counted in `read`'s tree) and gates on the PROPOSED
         item (#586). `take_over` overrides the two holder refusals and records
         `kb:takenOverFrom`; an item already in progress then changes holder only."""
@@ -4460,13 +4475,37 @@ class KanbanService:
 
         if mine and old_status == in_progress:
             return NoOp(f"{item.id} is already yours ({judge.status_label(item)})")
+        # the one pickable predicate (#575), dependencies judged in `read`'s tree;
+        # #574's two holder refusals keep their wording and carry its reason
+        try:
+            index = self._dep_index_at(read) if item.depends_on else None
+        except _TreeUnreadableError as e:
+            return Refuse(str(e))
+        _, reason = judge._pickable(item, actor, index=index)
         if holder and not mine and not take_over:
+            also = "" if reason == f"held by {holder}" else f" ({reason})"
             return Refuse(
-                f"{item.id} is held by {holder}; to take it over use claim --take-over",
+                f"{item.id} is held by {holder}{also}; to take it over use claim --take-over",
                 holder=holder,
             )
         if not holder and old_status == in_progress and not take_over:
-            return Refuse(f"{item.id} is in progress with no holder; use claim --take-over")
+            return Refuse(
+                f"{item.id} is in progress with no holder; use claim --take-over ({reason})"
+            )
+        # --take-over skips clause 2 and accepts an item in progress ([steer] 2)
+        ok, reason = judge._pickable(item, actor, take_over=take_over, index=index)
+        if not ok:
+            message = f"Can't claim {item.id}: {reason}"
+            if old_status not in (WorkItemStatus.READY, in_progress):
+                # and where it may go from here, as `move` says (#574)
+                try:
+                    valid, error = judge._validate_transition(
+                        replace(item, assignee=actor), in_progress
+                    )
+                except _TreeUnreadableError as e:
+                    return Refuse(str(e))
+                message += "" if valid else f"; {error}"
+            return Refuse(message)
 
         proposed = replace(item, status=in_progress, assignee=actor, updated=datetime.now())
         if old_status != in_progress:
@@ -5050,11 +5089,16 @@ class KanbanService:
         }
         shown = {s for s, targets in nexts.items() if targets or s.value in reverse}
         shown.update(t for targets in nexts.values() for t in targets)
+        closed = self._closed_columns(theme)
         return [
             {
                 "name": reverse.get(s.value, s.value),
                 "canonical": s.value,
                 "terminal": not nexts[s],
+                # `is_finished` for an item in this state (#575)
+                "finished": s == WorkItemStatus.DONE or bool(
+                    closed & {s.value, _fold_status_name(reverse.get(s.value, s.value))}
+                ),
                 "next": [
                     {
                         "name": reverse.get(t.value, t.value),
@@ -5773,22 +5817,226 @@ class KanbanService:
         """Get items assigned to a specific person."""
         return self.get_items(assignee=assignee)
 
-    def suggest_next_item(self, assignee: str | None = None) -> WorkItem | None:
-        """Suggest the next highest-priority item to work on."""
-        items = self.get_items(status=WorkItemStatus.READY)
+    # --- finished, the dependency walk and pickable (#575) -----------------------
 
-        if assignee:
-            # Prefer items assigned to this person
-            my_items = [i for i in items if i.assignee == assignee]
-            if my_items:
-                items = my_items
+    def _native_status(self, item: WorkItem, theme: dict | None) -> str:
+        """The status name `item`'s file gives, when it is one of its theme's names for
+        its status; else its theme's name for that status (`status_label`)."""
+        original = item.metadata.get("_original_status")
+        if isinstance(original, str) and (
+            _status_names(theme).get(_fold_status_name(original)) == item.status
+        ):
+            return original
+        return self.status_label(item)
 
-        if not items:
+    @staticmethod
+    def _closed_columns(theme: dict | None) -> set[str]:
+        """The folded names of `theme`'s columns marked `closed: true` (#575)."""
+        columns = (theme or {}).get("columns") or {}
+        return {_fold_status_name(k) for k, d in columns.items() if d.get("closed") is True}
+
+    def is_finished(self, item: WorkItem) -> bool:
+        """Canonical done, or a native status whose theme column is marked
+        `closed: true`, e.g. hdd `abandoned` (#575)."""
+        if item.status == WorkItemStatus.DONE:
+            return True
+        _, theme = self._item_theme(item)
+        closed = self._closed_columns(theme)
+        native = _fold_status_name(self._native_status(item, theme))
+        return bool(closed & {item.status.value, native})
+
+    def _dep_index(self) -> dict[str, WorkItem]:
+        """Every board's items by folded ID (`fold_id`): where a dependency is found."""
+        if not self._items:
+            self.scan()
+        return {fold_id(i.id): i for i in self._items.values()}
+
+    def _dep_index_at(self, read: Read) -> dict[str, WorkItem]:
+        """`_dep_index` in `read`'s tree: every board at the fetched commit, as its
+        own config places them (`_judge_at`), else the working tree's. Raises
+        `_TreeUnreadableError` when that tree can't be read."""
+        if read.rev is None:
+            return self._dep_index()
+        judge = self._judge_at(read.rev)
+        boards = judge.config.boards if judge.config.is_multi_board else [None]
+        return {fold_id(i.id): i for b in boards for i in judge._items_at(read.rev, b)}
+
+    def _dep_graph(self, index: dict[str, WorkItem]) -> dict[str, list[str]]:
+        """`dependency_graph` over `index`'s items."""
+        return {key: self._id_list(item.depends_on) for key, item in index.items()}
+
+    def _dep_state(
+        self, dep_id: str, index: dict[str, WorkItem], graph: dict[str, list[str]]
+    ) -> tuple[str, WorkItem | None, list[str] | None]:
+        """(state, the item, the cycle when `cycle`) of dependency `dep_id`."""
+        key = fold_id(dep_id.strip())
+        dep = index.get(key)
+        if dep is None:
+            return "unknown", None, None
+        if self.is_finished(dep):
+            return ("met" if dep.status == WorkItemStatus.DONE else "dead"), dep, None
+        cycle = self.find_cycle(key, graph)  # #576's walk; cycle beats unfinished
+        if cycle:
+            return "cycle", dep, cycle
+        return "unfinished", dep, None
+
+    def dependency_state(self, dep_id: str) -> str:
+        """`met` (finished and done), `dead` (finished, not done: hdd `abandoned`),
+        `unknown` (on no board), `cycle` (on a dependency cycle) or `unfinished`,
+        looked up across every board, IDs folded (#575)."""
+        index = self._dep_index()
+        return self._dep_state(dep_id, index, self._dep_graph(index))[0]
+
+    def unmet_dependencies(self, item: WorkItem) -> list[DepNode]:
+        """`item`'s dependencies that are not `met`, each with its own unmet ones
+        below it (#575). Cycle-safe: a node already on the path is listed, not
+        walked again. #577 renders this; it adds no logic of its own."""
+        index = self._dep_index()
+        return self._unmet(item, index, self._dep_graph(index), {fold_id(item.id)})
+
+    def _unmet(
+        self, item: WorkItem, index: dict[str, WorkItem],
+        graph: dict[str, list[str]], path: set[str],
+    ) -> list[DepNode]:
+        nodes = []
+        for dep_id in self._id_list(item.depends_on):
+            state, dep, _ = self._dep_state(dep_id, index, graph)
+            if state == "met":
+                continue
+            node = DepNode(
+                id=dep.id if dep else dep_id,
+                status=self.status_label(dep) if dep else None,
+                assignee=dep.assignee if dep else None,
+                state=state,
+            )
+            if dep is not None and state in ("unfinished", "cycle") and dep_id not in path:
+                node.children = self._unmet(dep, index, graph, path | {dep_id})
+            nodes.append(node)
+        return nodes
+
+    def pickable(self, item: WorkItem, actor: str | None) -> tuple[bool, str]:
+        """Whether `actor` (None: no identity) may pick `item` up, and why not (#575).
+        The one predicate `claim`, `claim --next`, `next`, `list --pickable` and
+        MCP `kanban_suggest_next` share. Clauses in order, the first failing one's
+        reason returned:
+
+        1. canonical status `ready` (hdd has none: never pickable);
+        2. no assignee, or `actor` is it (`same_actor`);
+        3. every `depends_on` is `met`.
+        """
+        return self._pickable(item, actor)
+
+    def _pickable(
+        self, item: WorkItem, actor: str | None, *, take_over: bool = False,
+        index: dict[str, WorkItem] | None = None,
+        graph: dict[str, list[str]] | None = None,
+    ) -> tuple[bool, str]:
+        """`pickable`, with dependencies looked up in `index` (default: every board
+        here). `take_over` (`claim --take-over`) skips clause 2 and accepts an
+        in-progress item under clause 1 (#575 [steer] 2)."""
+        allowed = {WorkItemStatus.READY}
+        if take_over:
+            allowed.add(WorkItemStatus.IN_PROGRESS)
+        if item.status not in allowed:
+            return False, f"status {self.status_label(item)} is not a ready status"
+        held = item.assignee
+        holder = (held if isinstance(held, str) else str(held or "")).strip()
+        if holder and not take_over and not (actor and same_actor(holder, actor)):
+            return False, f"held by {holder}"
+        deps = self._id_list(item.depends_on)
+        if deps:
+            index = self._dep_index() if index is None else index
+            graph = self._dep_graph(index) if graph is None else graph
+            for dep_id in deps:
+                state, dep, cycle = self._dep_state(dep_id, index, graph)
+                if state == "met":
+                    continue
+                detail = {
+                    "unfinished": "unfinished",
+                    "unknown": "unknown ID",
+                    "dead": f"dead: {self.status_label(dep)}" if dep else "dead",
+                    "cycle": f"cycle: {' → '.join(cycle or [])}",
+                }[state]
+                return False, f"waiting on {dep.id if dep else dep_id} ({detail})"
+        return True, "pickable"
+
+    @staticmethod
+    def pick_order(item: WorkItem) -> tuple[bool, int, int, int, str]:
+        """The pick order (#575 §5): `priority_rank` ascending (unranked last), then
+        priority descending, then the oldest numeric ID, then the ID."""
+        rank = item.priority_rank
+        return (
+            rank is None, rank if rank is not None else 0,
+            -item.priority_score, item.numeric_id, item.id,
+        )
+
+    def pick_report(
+        self, actor: str | None, items: list[WorkItem] | None = None
+    ) -> tuple[list[WorkItem], list[tuple[WorkItem, str]]]:
+        """(the pickable items, each canonical-`ready` item that is not with its
+        reason), both in pick order, of `items` (default: every board) (#575)."""
+        index = self._dep_index()
+        graph = self._dep_graph(index)
+        picks: list[WorkItem] = []
+        refused: list[tuple[WorkItem, str]] = []
+        for item in sorted(self.get_items() if items is None else items, key=self.pick_order):
+            ok, reason = self._pickable(item, actor, index=index, graph=graph)
+            if ok:
+                picks.append(item)
+            elif item.status == WorkItemStatus.READY:
+                refused.append((item, reason))
+        return picks, refused
+
+    @staticmethod
+    def _as_datetime(value: Any) -> datetime | None:
+        """A frontmatter date or datetime (or ISO text) as a naive UTC datetime."""
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.strip())
+            except ValueError:
+                return None
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time())
+        return None
+
+    def _entered_order(self, item: WorkItem) -> tuple[bool, datetime, int, str]:
+        """Oldest first by when `item` entered its current status (#575 [steer] 3):
+        its status history (`kb:at`), else frontmatter `updated:`, else `created:`,
+        then the numeric ID. `WorkItem.updated` is only the parse time."""
+        names = self.legal_status_names(item)
+        entered = [
+            at for entry in self.get_status_history(item.id)
+            if names.get(_fold_status_name(str(entry["status"]))) == item.status
+            and (at := self._as_datetime(entry["at"])) is not None
+        ]
+        when = max(entered) if entered else (
+            self._as_datetime(item.metadata.get("updated")) or self._as_datetime(item.created)
+        )
+        return (when is None, when or datetime.min, item.numeric_id, item.id)
+
+    def next_item(self, actor: str | None) -> tuple[WorkItem, str, str] | None:
+        """(item, kind, reason) for `next` (#575 §6), or None: `actor`'s own
+        in-progress item first (`resume`, the one that entered in progress first;
+        `review` waits on a reviewer), else the first pickable item (`pick`).
+        Offline and advisory: `claim` is the authoritative gate."""
+        if actor:
+            own = [
+                i for i in self.get_items(status=WorkItemStatus.IN_PROGRESS)
+                if isinstance(i.assignee, str) and i.assignee.strip()
+                and same_actor(i.assignee, actor)
+            ]
+            if own:
+                return min(own, key=self._entered_order), "resume", "resume your in-progress item"
+        picks, _ = self.pick_report(actor)
+        if not picks:
             return None
-
-        # Sort by priority
-        items.sort(key=lambda i: -i.priority_score)
-        return items[0]
+        top = picks[0]
+        rank = f"rank {top.priority_rank}, " if top.priority_rank is not None else ""
+        return top, "pick", f"top pickable: {rank}priority {top.priority or 'medium'}"
 
     def update_item(
         self,

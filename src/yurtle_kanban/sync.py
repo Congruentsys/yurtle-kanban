@@ -27,6 +27,11 @@ class ExitCode(IntEnum):
     PUSH_REFUSED = 6
 
 
+# `next --json` and `claim --next` with nothing to offer (#575): an exit code, not an
+# outcome of `sync_and_push`, so it stays out of `ExitCode`
+NOTHING_PICKABLE = 7
+
+
 _EXIT_CODES: dict[str, ExitCode] = {
     "won": ExitCode.OK,
     "local": ExitCode.OK,
@@ -97,4 +102,6 @@ class Read(Protocol):
 
 Mutate = Callable[[Read, int], "Change | NoOp | Refuse"]
 
-__all__ = ["Change", "ExitCode", "Mutate", "NoOp", "Outcome", "Read", "Refuse"]
+__all__ = [
+    "NOTHING_PICKABLE", "Change", "ExitCode", "Mutate", "NoOp", "Outcome", "Read", "Refuse",
+]

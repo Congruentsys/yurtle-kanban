@@ -20,7 +20,7 @@ from typing import Any
 from .. import __version__
 from .._logging import get_logger
 from ..config import KanbanConfig
-from ..inputs import resolve_actor
+from ..inputs import advisory_actor, resolve_actor
 from ..models import (
     PRIORITIES,
     InputRefused,
@@ -217,13 +217,20 @@ class KanbanMCPServer:
             },
             {
                 "name": "kanban_suggest_next",
-                "description": "Suggest the next highest-priority item to work on.",
+                "description": (
+                    "Suggest the next item to work on, as `next` does: your own "
+                    "in-progress item first, else the top pickable item (ready, "
+                    "unassigned or yours, every dependency met)."
+                ),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "assignee": {
                             "type": "string",
-                            "description": "Optional: prefer items assigned to this person",
+                            "description": (
+                                "Optional: who is asking; default $YURTLE_AGENT, "
+                                "then git user.name"
+                            ),
                         },
                     },
                 },
@@ -594,15 +601,15 @@ class KanbanMCPServer:
         }
 
     def _suggest_next(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Suggest the next item to work on."""
-        item = self.service.suggest_next_item(assignee=args.get("assignee"))
-
-        if not item:
-            return {"suggestion": None, "message": "No ready items to work on"}
-
+        """Suggest the next item to work on: the item `next` gives (#575)."""
+        actor = advisory_actor(args.get("assignee"), cwd=self.repo_root, flag="assignee")
+        found = self.service.next_item(actor)
+        if found is None:
+            return {"suggestion": None, "message": "Nothing pickable"}
+        item, kind, reason = found
         return {
-            "suggestion": item.to_dict(),
-            "message": f"Suggested: {item.id} - {item.title}",
+            "suggestion": {**item.to_dict(), "kind": kind, "reason": reason},
+            "message": f"Suggested: {item.id} - {item.title} ({reason})",
         }
 
     def _add_comment(self, args: dict[str, Any]) -> dict[str, Any]:

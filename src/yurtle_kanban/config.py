@@ -133,6 +133,10 @@ def _is_str(value: Any) -> bool:
     return isinstance(value, str)
 
 
+def _is_bool(value: Any) -> bool:
+    return isinstance(value, bool)
+
+
 def _shape(value: Any) -> str:
     """`int 5`: a wrong value as a refusal names it."""
     return f"{type(value).__name__} {value!r}"
@@ -327,6 +331,7 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
     for section, key, ok, want in (
         ("columns", "wip_limit", _is_int_or_none, "a whole number, 0 or more"),
         ("columns", "order", _is_int, "a whole number"),
+        ("columns", "closed", _is_bool, "true or false"),  # finished, not done (#575)
         ("item_types", "path", _is_str, "text"),
         ("item_types", "id_prefix", _is_str, "text"),
     ):
