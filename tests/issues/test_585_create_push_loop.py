@@ -501,20 +501,8 @@ def test_fetch_timeout_is_a_clear_message(world, monkeypatch) -> None:
     assert porcelain(world.a) == []
 
 
-def test_push_timeout_says_it_may_have_landed(world, monkeypatch) -> None:
-    rec = GitRecorder({"push": _push_then_timeout})
-    monkeypatch.setattr(subprocess, "run", rec)
-    result = run_create(world, monkeypatch)
-    out = output_of(result)
-
-    _no_traceback(result, out)
-    assert rec.count("push") == 1, "a push that may have landed was retried"
-    assert result.exit_code != 0, out
-    flat = " ".join(out.split())
-    assert re.search(r"timed out", flat, re.I), out
-    assert re.search(r"may have|might have", flat, re.I), out
-    assert "origin/main" in flat, out
-    assert porcelain(world.a) == []
+# test_push_timeout_says_it_may_have_landed is retired (#995): the push runs with
+# no timeout since #925, so its "Timed out pushing…" message can't be reached.
 
 
 # --- 9. feature branch: the CLI says to pull, and shows no missing File: ------------------
