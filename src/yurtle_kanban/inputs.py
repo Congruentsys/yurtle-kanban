@@ -93,6 +93,17 @@ def resolve_actor(
     raise InputRefused(f"No actor: set --agent or {AGENT_ENV}")
 
 
+def advisory_actor(
+    explicit: str | None, *, cwd: Path | str | None = None, flag: str = "--agent"
+) -> str | None:
+    """`resolve_actor` with the git fallback, for the advisory reads (`next`,
+    `list --pickable`, MCP `kanban_suggest_next`, #575), or None when there is no
+    identity at all. A given but bad value is still refused."""
+    if explicit is None and os.environ.get(AGENT_ENV) is None and _git_user_name(cwd) is None:
+        return None
+    return resolve_actor(explicit, cwd=cwd, flag=flag)
+
+
 def same_actor(a: str, b: str) -> bool:
     """Whether two identities name the same actor (surrounding space and case ignored)."""
     return a.strip().casefold() == b.strip().casefold()

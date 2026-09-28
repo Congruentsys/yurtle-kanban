@@ -75,6 +75,7 @@ columns:
   abandoned:
     name: "Abandoned"
     order: 4
+    closed: true  # finished, but not done: a dependency on it is dead (#575)
     description: "Superseded or paper dropped"
 
 # Valid state transitions (for research integrity)
