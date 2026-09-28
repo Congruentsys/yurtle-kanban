@@ -23,17 +23,37 @@ def json_requested(ctx: click.Context | None = None) -> bool:
     return False
 
 
-def argv_requests_json(args: list[str]) -> bool:
+def argv_requests_json(args: list[str], root: click.Command | None = None) -> bool:
     """True when `--json` is among the options of `args` (before any `--`): for a
-    refusal before the command has parsed its own options (#877)."""
-    return "--json" in (args[: args.index("--")] if "--" in args else args)
+    refusal before the command has parsed its own options (#877). Given the
+    `root` command, `args` is walked as click reads it, so a `--json` that is the
+    value of the option before it (`--assignee --json`) is no request (#929)."""
+    args = args[: args.index("--")] if "--" in args else args
+    if root is None:
+        return "--json" in args
+    cmd, i = root, 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--json":
+            return True
+        if arg.startswith("-") and "=" not in arg:
+            takes_value = any(
+                arg in p.opts + p.secondary_opts and not p.is_flag and not p.count
+                for p in cmd.params if isinstance(p, click.Option)
+            )
+            i += 1 if takes_value else 0  # its value is never an option
+        elif isinstance(cmd, click.Group) and arg in cmd.commands:
+            cmd = cmd.commands[arg]
+        i += 1
+    return False
 
 
-def json_refusal(message: object, **extra: Any) -> NoReturn:
+def json_refusal(message: object, *, exit_code: int = 1, **extra: Any) -> NoReturn:
     """A `--json` refusal: exactly one JSON object on stdout,
-    `{"success": false, "error": <message>}` plus `extra`, and exit 1 (#877)."""
+    `{"success": false, "error": <message>}` plus `extra`, and exit 1 (#877), or
+    `exit_code`: 2 for a usage error, as click exits (#929)."""
     click.echo(json.dumps({"success": False, "error": str(message), **extra}))
-    sys.exit(1)
+    sys.exit(exit_code)
 
 
 class Command(click.Command):
@@ -63,6 +83,14 @@ class Group(click.Group):
             return super().invoke(ctx)
         except InputRefused as e:
             raise click.ClickException(str(e)) from None
+        except click.UsageError as e:
+            # a bad option, value or subcommand under --json: click's message as
+            # the JSON refusal, still exit 2 (#929); the argv the root recorded
+            root = ctx.find_root()
+            argv = root.meta.get("yurtle_kanban.argv")
+            if argv is None or not argv_requests_json(argv, root.command):
+                raise
+            json_refusal(e.format_message(), exit_code=e.exit_code)
 
 
 def safe(value: object) -> str:
