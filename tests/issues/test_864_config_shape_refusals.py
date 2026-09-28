@@ -354,3 +354,29 @@ def test_control_cli_list_valid_config_exits_zero(
     result = CliRunner().invoke(main, ["list"])
     assert "Traceback" not in (result.output or "")
     assert result.exit_code == 0, result.output
+
+
+# --- round 2 (PR #898 review): a type folder under paths must be a path string ---
+
+
+@pytest.mark.parametrize("key", ["features", "bugs", "epics", "tasks"])
+@pytest.mark.parametrize("bad", ["5", "[a]"])
+def test_type_folder_path_shapes_refused(tmp_path: Path, key: str, bad: str) -> None:
+    text = f"kanban:\n  paths:\n    {key}: {bad}\n"
+    with pytest.raises(InputRefused, match=key):
+        KanbanConfig.from_text(text, tmp_path)
+
+
+def test_claim_with_origin_type_folder_int_is_refused(world: World) -> None:
+    """Round 2: `paths.features: 5` on origin crashed later in get_work_paths()."""
+    b_push(world, {CONFIG: "kanban:\n  paths:\n    features: 5\n"})
+    base = world.remote_sha()
+
+    try:
+        out = claim(world.a, A)
+    except Exception as e:  # noqa: BLE001 — a crash is the bug under test
+        pytest.fail(f"claim crashed with {type(e).__name__}: {e}")
+
+    assert out.kind in ("refused", "push_refused"), f"{out.kind}: {out.message}"
+    assert out.exit_code == 1
+    assert world.remote_sha() == base, "nothing may be pushed"

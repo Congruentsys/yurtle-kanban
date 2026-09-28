@@ -852,14 +852,18 @@ class KanbanConfig:
                 if key == "scan_paths":
                     scan_where = "in kanban"
         root = _str_or_none(paths_data.get("root"), f"{where}paths.root", "a path string")
+
+        def folder(key: str) -> str | None:  # a type's folder is a path too (#864)
+            return _str_or_none(paths_data.get(key), f"{where}paths.{key}", "a path string")
+
         paths = PathConfig(
             root="work/" if root is None else root,
             scan_paths=_scan_list(paths_data, scan_where),
             ignore=_ignore_list(paths_data),
-            features=paths_data.get("features"),
-            bugs=paths_data.get("bugs"),
-            epics=paths_data.get("epics"),
-            tasks=paths_data.get("tasks"),
+            features=folder("features"),
+            bugs=folder("bugs"),
+            epics=folder("epics"),
+            tasks=folder("tasks"),
         )
 
         return cls(
