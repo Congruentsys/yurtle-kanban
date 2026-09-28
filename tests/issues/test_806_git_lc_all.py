@@ -168,6 +168,10 @@ def test_parent_link_blob_cat_file_is_c_locale(world, spy) -> None:
     git(world.a, "fetch", "origin")
     base = git(world.a, "rev-parse", f"origin/{world.default}").strip()
     svc = service(world)
+    # the relation is checked before origin is read (#777): give `expedition` one,
+    # so the parent's blob is read and its cat-file is what this test sees
+    relation = next(iter(type(svc)._INVERSE_RELATIONS.values()))
+    svc._INVERSE_RELATIONS = {**type(svc)._INVERSE_RELATIONS, "expedition": relation}
     spy.calls.clear()
     svc._parent_link_blob(base, "EXP-001", "expedition", "EXP-002")
     assert_all_c(spy, ("cat-file", "blob"), only=True)
