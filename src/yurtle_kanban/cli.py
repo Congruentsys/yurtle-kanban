@@ -198,14 +198,22 @@ def main():
 
 def _default_prefix(type_id: str) -> str:
     """A template prefix for a theme type with no `id_prefix` (#840): the type
-    key's letters and digits from its first letter, upper-cased, at most four;
-    `ITEM` when that leaves no prefix the grammar accepts."""
-    # composed first: `e` + a combining acute is the letter `é` (#875)
-    kept = "".join(
-        c for c in unicodedata.normalize("NFC", type_id) if c.isalpha() or c.isdigit()
-    )
-    start = next((i for i, c in enumerate(kept) if c.isalpha()), len(kept))
-    return id_prefix(kept[start:].upper()[:4]) or "ITEM"
+    key's letters and digits from its first letter, folded as IDs are (`fold_id`),
+    at most four; `ITEM` when that leaves no prefix the grammar accepts. A kept
+    letter keeps the combining marks after it, and counts with them as one (#907):
+    `हिन्दी` keeps its vowel signs, and `ΐ` is one of the four however it folds."""
+    units: list[str] = []
+    after_letter = False  # the last character was a kept letter or one of its marks
+    # folded first: `e` + a combining acute is the letter `é` (#875)
+    for c in fold_id(type_id):
+        if unicodedata.category(c).startswith("M"):
+            if after_letter:
+                units[-1] += c
+            continue
+        if c.isalpha() or (c.isdigit() and units):
+            units.append(c)
+        after_letter = c.isalpha()
+    return id_prefix(unicodedata.normalize("NFC", "".join(units[:4]))) or "ITEM"
 
 
 def _generate_template(prefix: str, type_name: str, sections: list[str]) -> str:
