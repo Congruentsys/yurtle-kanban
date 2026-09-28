@@ -2738,8 +2738,11 @@ class KanbanService:
         ]
         if not rels:
             return [], []
-        listed = self._git_run("ls-tree", "-r", "--name-only", "--full-tree", rev, "--", *rels)
-        names = [name for name in listed.stdout.splitlines() if name.endswith(".md")]
+        # -z: names raw, never quoted (a quoted `"d/\303\237.md"` isn't `.md`, #808)
+        listed = self._git_run(
+            "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", *rels
+        )
+        names = [name for name in listed.stdout.split("\0") if name.endswith(".md")]
         # frontmatter ids too: `notes.md` may say `id: EXP-007` (#590)
         specs = [
             f":(top,glob){'' if rel in ('', '.') else rel.rstrip('/') + '/'}**/*.md"
@@ -4126,9 +4129,11 @@ class KanbanService:
         })
         if not rels:
             return []
-        listed = self._git_run("ls-tree", "-r", "--name-only", "--full-tree", rev, "--", *rels)
+        listed = self._git_run(  # -z: names raw, never quoted (#808)
+            "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", *rels
+        )
         names = []
-        for name in dict.fromkeys(listed.stdout.splitlines()):
+        for name in dict.fromkeys(n for n in listed.stdout.split("\0") if n):
             path = top / name
             if not name.endswith(".md") or (
                 self._should_ignore_for_board(path, board_config) if board_config
