@@ -1,4 +1,3 @@
-# ruff: noqa: F811  -- the `world` fixture imported from the claim tests is re-bound as an arg
 """Issue #574, PR C: ``move``'s holder guard and ``--take-over`` (spec §4).
 
 The [steer] on #574 splits the build into four PRs; this is C. It is local and
@@ -70,7 +69,6 @@ from tests.issues.test_574_claim import (
     ITEM_ID,
     A,
     B,
-    _env,  # noqa: F401  (autouse: clean env, theme cache)
     frontmatter,
     item_text,
     native_in_progress,
@@ -79,13 +77,15 @@ from tests.issues.test_574_claim import (
     seed,
     service,
     set_gates,
-    world,  # noqa: F401  (fixture)
 )
 from tests.issues.test_574_sync_and_push import snapshot
 from tests.issues.test_585_create_push_loop import World, git
 from yurtle_kanban.cli import main
 from yurtle_kanban.mcp import server as mcp_server
 from yurtle_kanban.models import InputRefused, WorkItemStatus
+
+# the #574 claim tests' clean env (tests/issues/conftest.py), as they have it
+pytestmark = pytest.mark.usefixtures("claim_env")
 
 S = WorkItemStatus
 

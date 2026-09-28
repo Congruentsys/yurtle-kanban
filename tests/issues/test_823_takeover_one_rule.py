@@ -1,4 +1,3 @@
-# ruff: noqa: F811  -- the `world` fixture imported from the claim tests is re-bound as an arg
 """Issue #823: one take-over rule for ``claim`` and ``move``.
 
 #574 PR B (``claim --take-over``) and PR C (``move --take-over``) record
@@ -52,18 +51,19 @@ from tests.issues.test_574_claim import (
     ITEM_ID,
     A,
     B,
-    _env,  # noqa: F401  (autouse: clean env, theme cache)
     claim,
     frontmatter,
     history_nodes,
     seed,
     service,
-    world,  # noqa: F401  (fixture)
 )
 from tests.issues.test_574_sync_and_push import snapshot
 from tests.issues.test_585_create_push_loop import World
 from yurtle_kanban.cli import main
 from yurtle_kanban.models import WorkItemStatus
+
+# the #574 claim tests' clean env (tests/issues/conftest.py), as they have it
+pytestmark = pytest.mark.usefixtures("claim_env")
 
 S = WorkItemStatus
 TAKEN = re.compile(r'kb:takenOverFrom\s+"((?:[^"\\]|\\.)*)"')

@@ -1,4 +1,3 @@
-# ruff: noqa: F811  -- the `world` fixture imported from the claim tests is re-bound as an arg
 """Issue #574, PR C: after ``move --take-over``, the actor holds the item.
 
 ``claim --take-over`` (PR B) makes the actor the assignee. ``move --take-over``
@@ -20,16 +19,17 @@ from tests.issues.test_574_claim import (
     ITEM_ID,
     A,
     B,
-    _env,  # noqa: F401  (autouse: clean env, theme cache)
     frontmatter,
     nodes_by,
     seed,
     service,
-    world,  # noqa: F401  (fixture)
 )
 from tests.issues.test_585_create_push_loop import World
 from yurtle_kanban.cli import main
 from yurtle_kanban.models import WorkItemStatus
+
+# the #574 claim tests' clean env (tests/issues/conftest.py), as they have it
+pytestmark = pytest.mark.usefixtures("claim_env")
 
 S = WorkItemStatus
 

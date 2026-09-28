@@ -98,7 +98,6 @@ from tests.issues.test_574_sync_and_push import (
 )
 from tests.issues.test_585_create_push_loop import EXP_DIR, World, git
 from tests.issues.test_590_next_id_and_hdd_ids import b_push
-from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 from yurtle_kanban.models import WorkItemStatus
@@ -142,21 +141,9 @@ def push_from_a(world: World, files: dict[str, str], message: str) -> None:
     git(world.b, "reset", "--hard", f"origin/{world.default}")
 
 
-@pytest.fixture(autouse=True)
-def _env(monkeypatch: pytest.MonkeyPatch) -> Any:
-    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
-    monkeypatch.delenv("YURTLE_AGENT", raising=False)
-    config_mod._theme_cache.clear()
-    yield
-    config_mod._theme_cache.clear()
-
-
-@pytest.fixture
-def world(tmp_path: Path) -> World:
-    """Origin and both clones hold EXP-001 at `ready`, unassigned."""
-    w = World(tmp_path)
-    push_from_a(w, {ITEM: item_text("ready")}, "seed EXP-001")
-    return w
+# `claim_env` (clean env, theme cache) and `world` live in tests/issues/conftest.py
+# (#892), shared with the modules that borrowed them from here.
+pytestmark = pytest.mark.usefixtures("claim_env")
 
 
 def seed(world: World, status: str, assignee: str | None = None) -> None:
