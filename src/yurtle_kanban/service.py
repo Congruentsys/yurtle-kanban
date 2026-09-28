@@ -2917,9 +2917,10 @@ class KanbanService:
         return decomposed[width:] if fold_id(decomposed[:width]) == want else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
-        """The file under the work paths at commit `rev` that holds `item_id`, or
-        None (#634). Ids are the same when the text before their number, separator
-        included, and the number are: `EXP-3` is `EXP-003` (#641), but `EXP3` is not
+        """The file under the roots a scan walks (`_rev_roots`: the work paths and
+        placement dirs) at commit `rev` that holds `item_id`, or None (#634). Ids
+        are the same when the text before their number, separator included, and
+        the number are: `EXP-3` is `EXP-003` (#641), but `EXP3` is not
         (#661). The file whose frontmatter `id:` is the ID wins; a filename counts
         only for a file with no `id:` of its own, since the board names an item by
         its `id:` and never by a lookalike outline or another item's file (#788)."""
@@ -3046,18 +3047,28 @@ class KanbanService:
                     )
         return None
 
+    def _rev_roots(self, board_config: BoardConfig | None = None) -> list[str]:
+        """The folders a scan walks, relative to the work tree's top, sorted: the
+        board's path, or on a single board (None) its work paths and placement
+        dirs; one computation for every reader of a fetched tree, so they can't
+        drift apart (#954, #986). A root outside the repository is left out."""
+        top = self._git_toplevel()
+        if board_config is not None:
+            roots = [_under(self.repo_root, board_config.path)]
+        else:
+            roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
+            roots += sorted(self._placement_dirs())
+        return sorted({
+            rel.as_posix() for root in roots
+            if (rel := self._repo_relative(root, top)) is not None
+        })
+
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
         """The `.md` files under the work paths and placement dirs at commit `rev`
         (the roots a scan walks, as `_items_at` reads them, #954), and each `id:` in
         the leading frontmatter block of one as (path, id) (#590, #634); an `id:`
         line in the body or a code block is not an id (#641)."""
-        top = self._git_toplevel()
-        roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
-        roots += sorted(self._placement_dirs())
-        rels = sorted({
-            rel.as_posix() for root in roots
-            if (rel := self._repo_relative(root, top)) is not None
-        })
+        rels = self._rev_roots()
         if not rels:
             return [], []
         # -z: names raw, never quoted (a quoted `"d/\303\237.md"` isn't `.md`, #808)
@@ -3175,8 +3186,9 @@ class KanbanService:
 
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
         """Next id number for `prefix` as commit `rev` sees it: item filenames and
-        frontmatter ids under the work paths, plus the allocation records committed
-        there (#585, #590)."""
+        frontmatter ids under the roots a scan walks (`_rev_roots`: the work paths
+        and placement dirs), plus the allocation records committed there (#585,
+        #590)."""
         import json
 
         top = self._git_toplevel()
@@ -4767,15 +4779,7 @@ class KanbanService:
         applied (#574). Raises `_TreeUnreadableError` when they can't all be read
         (#814): a short list would under-count."""
         top = self._git_toplevel()
-        if board_config is not None:
-            roots = [_under(self.repo_root, board_config.path)]
-        else:
-            roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
-            roots += sorted(self._placement_dirs())
-        rels = sorted({
-            rel.as_posix() for root in roots
-            if (rel := self._repo_relative(root, top)) is not None
-        })
+        rels = self._rev_roots(board_config)
         if not rels:
             return []
         listed = self._git_z(  # -z: names raw, never quoted (#808)
