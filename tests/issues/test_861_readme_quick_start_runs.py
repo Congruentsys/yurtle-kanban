@@ -109,9 +109,11 @@ def run_quick_start(tmp_path: Path, readme_text: str) -> tuple[subprocess.Comple
         ("push", "-q", "-u", "origin", "main"),
     ):
         subprocess.run(["git", *args], cwd=work, check=True, env=env, capture_output=True)
-    text = script(body)
+    # a file, not `bash -c`: bash 3.2 (macOS) counts $LINENO one low under -c (#913)
+    runner = tmp_path / "quickstart.sh"
+    runner.write_text(script(body), encoding="utf-8")
     result = subprocess.run(
-        ["bash", "-c", text],
+        ["bash", str(runner)],
         cwd=work,
         env=env,
         capture_output=True,
