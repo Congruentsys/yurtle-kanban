@@ -78,13 +78,14 @@ def _parse(line):
     """The argv words after `yurtle-kanban` in a printed command, or None.
 
     Quoted arguments collapse to one placeholder word, so a value that looks like
-    a flag is not read as one.
+    a flag is not read as one. A synopsis's optional brackets are dropped, so
+    `[--priority <p>]` is checked as `--priority <p>` (#899).
     """
     m = INVOCATION.match(line)
     if not m:
         return None
     rest = SHELL_COMMENT.sub("", QUOTED.sub("ARG", m.group(1)))
-    return tuple(rest.split())
+    return tuple(w for word in rest.split() if (w := word.lstrip("[").rstrip("]")))
 
 
 def _commands_in(line):
@@ -384,7 +385,8 @@ DOC_FILES = [REPO_DIR / "README.md", REPO_DIR / "AGENT-QUICK-REF.md"]
 BASH_FENCE = re.compile(r"^\s*`{3,}\s*(?:bash|sh|shell|console)\s*$")
 CLOSE_FENCE = re.compile(r"^\s*`{3,}\s*$")
 # `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`: the body up to the terminator is data.
-HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# Never a here-string `<<<word` (#899).
+HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 
 
 def _shell_code(line):
@@ -434,7 +436,10 @@ def _block_commands(lines, first_lineno):
         parts.append(code)
         text = " ".join(p.strip() for p in parts if p.strip())
         i += 1
-        heredoc = HEREDOC.search(text)
+        # a `<<EOF` inside quotes is text, not a heredoc (#899)
+        heredoc = next(
+            (m for m in HEREDOC.finditer(text) if not _shell_code(text[: m.start()])[1]), None
+        )
         if heredoc:
             strip_tabs, terminator = heredoc.group(1), heredoc.group(3)
             while i < len(lines):

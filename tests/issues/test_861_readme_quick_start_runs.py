@@ -76,7 +76,11 @@ def script(body: list[str]) -> str:
 
 
 def _env(home: Path) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k != "YURTLE_AGENT"}
+    # no inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE (a git hook sets them): the
+    # only GIT_* are the ones set below (#899)
+    env = {
+        k: v for k, v in os.environ.items() if k != "YURTLE_AGENT" and not k.startswith("GIT_")
+    }
     env.update(
         HOME=str(home),
         GIT_CONFIG_GLOBAL=os.devnull,
