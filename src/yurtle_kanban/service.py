@@ -1901,7 +1901,7 @@ class KanbanService:
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
         self._check_no_comments_heading(description)
-        self._check_no_comments_heading(content, self._RENDERED)  # templated (#666)
+        self._check_no_comments_heading(content, rendered=True)  # templated (#666)
         # Generate or use provided ID
         if item_id is None:
             prefix = self._get_type_prefix(item_type)
@@ -2021,7 +2021,7 @@ class KanbanService:
             title=title, description=description, assignee=assignee, tags=tags, content=content
         )
         self._check_no_comments_heading(description)
-        self._check_no_comments_heading(content, self._RENDERED)  # templated (#666)
+        self._check_no_comments_heading(content, rendered=True)  # templated (#666)
         # a duplicated parent: which copy gets the link is ambiguous; refused before
         # anything is written, on every path (#754)
         if parent is not None and (held := self.get_item(parent)) is not None:
@@ -4896,20 +4896,18 @@ class KanbanService:
                 fence = None
         return opened if fence is not None else None
 
-    _RENDERED = "The rendered content"  # a templated create's whole text (#666, #787)
-
-    def _check_no_comments_heading(self, text: str | None, what: str = "A description") -> None:
+    def _check_no_comments_heading(self, text: str | None, *, rendered: bool = False) -> None:
         """Refuse text with a `## Comments` line outside fenced code: it would become
-        the item's comments section (#605), on update or create (#644). `what` names
-        the text, as a message's subject: "A description", or "The rendered content"
-        of a templated create, which is
-        checked whole, since a user field can reach its body raw (#666). No shipped
+        the item's comments section (#605), on update or create (#644). The text is a
+        description, or with `rendered` a templated create's whole rendered content,
+        which is checked whole, since a user field can reach its body raw (#666). No shipped
         template has a `## Comments` line, so such a line always came from input.
         Refuse one with an unclosed fence too: it would swallow the status-history
         block, and the next body edit would delete the history (#720)."""
+        what = "The rendered content" if rendered else "A description"
         if text is not None and (line := self._unclosed_fence_line(text)):
             # a rendered item's line counts the template's lines too: say so (#787)
-            of = " of the rendered item file" if what == self._RENDERED else ""
+            of = " of the rendered item file" if rendered else ""
             raise InputRefused(
                 f"{what} can't leave a code fence open (the fence on line {line}{of} "
                 "is never closed): close it, or it would swallow the status history."
@@ -4926,7 +4924,7 @@ class KanbanService:
         """The checks a templated create's content gets, run again on each re-render
         (per fetched base, #590): writable text (#641), no forged comments (#666)."""
         self._check_text(content=content)
-        self._check_no_comments_heading(content, self._RENDERED)
+        self._check_no_comments_heading(content, rendered=True)
 
     def add_comment(
         self,
