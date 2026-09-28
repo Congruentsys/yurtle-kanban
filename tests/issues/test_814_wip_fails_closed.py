@@ -39,12 +39,12 @@ e. "The assignee changes" is compared as stored text. A claim of an item already
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.issues._git_shims import break_git_in
 from tests.issues.test_574_claim import (
     ITEM_ID,
     OTHER,
@@ -131,23 +131,7 @@ def break_cat_file(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
 def break_blobs_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
     """The `ls-tree` that lists the board's blobs exits 128. Since #880 that is
     `_items_at`'s one listing, whose object ids `_blobs_at` reads."""
-    seen: list[tuple[str, ...]] = []
-    real_git_run = KanbanService._git_run
-
-    def git_run(self: KanbanService, *args: str, **kwargs: Any) -> Any:
-        # the caller, past the `-z` reader `_git_z` (#859)
-        caller = sys._getframe(1)
-        if caller.f_code.co_name == "_git_z":
-            caller = caller.f_back
-        if args[:1] == ("ls-tree",) and caller.f_code.co_name == "_items_at":
-            seen.append(args)
-            return subprocess.CompletedProcess(
-                ["git", *args], 128, "", "fatal: ls-tree failed (#832 test)"
-            )
-        return real_git_run(self, *args, **kwargs)
-
-    monkeypatch.setattr(KanbanService, "_git_run", git_run)
-    return seen
+    return break_git_in(monkeypatch, "_items_at", "ls-tree", "fatal: ls-tree failed (#832 test)")
 
 
 def assert_refused_clean(

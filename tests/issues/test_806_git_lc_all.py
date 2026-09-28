@@ -9,7 +9,9 @@ Decided spec (the [steer] on #806): every git subprocess whose output the code p
 runs with ``LC_ALL=C`` and ``LANGUAGE=`` (empty) in its environment. That is
 ``KanbanService._git_run`` and every direct ``subprocess.run(["git", ...])`` in src:
 ``git_toplevel`` (rev-parse), ``inputs._git_user_name`` (config), the ``git cat-file``
-readers in ``_reader_at`` and ``_parent_link_blob``, ``git ls-tree`` / ``git cat-file --batch`` in ``_blobs_at``,
+readers in ``_reader_at`` and ``_parent_link_blob``, ``git cat-file --batch`` in
+``_blobs_at`` (since #880 the board's ``git ls-tree`` runs in ``_items_at``, through
+``_git_run``),
 and ``git hook run`` (through ``_git_run``).
 
 1. Structural: ``subprocess.run`` is spied on (the real git still runs) while the

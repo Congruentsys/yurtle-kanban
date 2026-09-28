@@ -1,4 +1,3 @@
-# ruff: noqa: F811  -- the `world` fixture imported from the claim tests is re-bound as an arg
 """Issue #860: the auto-close workflow moves a held item and reports why a move fails.
 
 When a PR merges, ``.github/workflows/kanban-auto-close.yml`` moves the linked items
@@ -54,16 +53,17 @@ from tests.issues.test_574_claim import (
     ITEM,
     ITEM_ID,
     A,
-    _env,  # noqa: F401  (autouse: clean env, theme cache)
     frontmatter,
     item_text,
     push_from_a,
     seed,
     service,
-    world,  # noqa: F401  (fixture)
 )
 from tests.issues.test_585_create_push_loop import World
 from yurtle_kanban.models import WorkItemStatus
+
+# the #574 claim tests' clean env (tests/issues/conftest.py), as they have it
+pytestmark = pytest.mark.usefixtures("claim_env")
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "kanban-auto-close.yml"

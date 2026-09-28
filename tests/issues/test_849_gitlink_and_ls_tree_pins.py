@@ -7,9 +7,10 @@
    in-repo item both succeed.
 2. ``_items_at``'s own ``git ls-tree`` fails. The fetched-tree read refuses: the
    claim is refused (exit 1), nothing is pushed, and the message names ``ls-tree``.
-   (tests/issues/test_814_wip_fails_closed.py's ``break_blobs_ls_tree`` breaks only
-   the ``ls-tree`` that ``_blobs_at`` runs; ``_items_at``'s listing still succeeds
-   there, so this case was not pinned.)
+   (When this was written, tests/issues/test_814_wip_fails_closed.py's
+   ``break_blobs_ls_tree`` broke only an ``ls-tree`` that ``_blobs_at`` ran. Since
+   #880 ``_blobs_at`` runs none: both tests break ``_items_at``'s one listing,
+   through tests/issues/_git_shims.py's ``break_git_in`` (#892).)
 
 Harness: the #585 ``World`` and the #574 claim helpers, as in
 tests/issues/test_814_symlink_on_board.py.
@@ -32,13 +33,12 @@ c. The ls-tree failure is injected only in the ``ls-tree`` that ``_items_at``
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.issues._git_shims import break_git_in
 from tests.issues.test_574_claim import (
     ITEM,
     ITEM_ID,
@@ -59,7 +59,6 @@ from tests.issues.test_574_sync_and_push import Recorder, commit_files, snapshot
 from tests.issues.test_585_create_push_loop import EXP_DIR, World, git
 from tests.issues.test_590_next_id_and_hdd_ids import b_push
 from yurtle_kanban import config as config_mod
-from yurtle_kanban.service import KanbanService
 
 GITLINKS = [f"{EXP_DIR}/vendored.md", f"{EXP_DIR}/EXP-003-sub.md"]
 READ_FAILURE = ("ls-tree", "does not list", "can't read", "cat-file", "left out")
@@ -196,25 +195,10 @@ def test_update_push_add_dep_with_gitlink_on_board(world, monkeypatch, pulled) -
 
 
 def break_items_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
-    """The `ls-tree` that `_items_at` itself runs exits 128; every other git call,
-    including `_blobs_at`'s own `ls-tree`, runs for real."""
-    seen: list[tuple[str, ...]] = []
-    real_git_run = KanbanService._git_run
-
-    def git_run(self: KanbanService, *args: str, **kwargs: Any) -> Any:
-        # the caller, past the `-z` reader `_git_z` (#859)
-        caller = sys._getframe(1)
-        if caller.f_code.co_name == "_git_z":
-            caller = caller.f_back
-        if args[:1] == ("ls-tree",) and caller.f_code.co_name == "_items_at":
-            seen.append(args)
-            return subprocess.CompletedProcess(
-                ["git", *args], 128, "", "fatal: ls-tree failed (#849 test)"
-            )
-        return real_git_run(self, *args, **kwargs)
-
-    monkeypatch.setattr(KanbanService, "_git_run", git_run)
-    return seen
+    """The `ls-tree` that `_items_at` runs exits 128; every other git call runs for
+    real. Since #880 it is the only `ls-tree` of the board: `_blobs_at` reads the
+    object ids it lists."""
+    return break_git_in(monkeypatch, "_items_at", "ls-tree", "fatal: ls-tree failed (#849 test)")
 
 
 @pytest.mark.parametrize("wip_full", [False, True], ids=["wip-not-full", "wip-full"])
