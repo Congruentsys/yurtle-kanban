@@ -39,10 +39,11 @@ b. Parse is pinned through the claim's outcome: a ready-alias status only origin
 c. "Where origin's config places it" is pinned leniently: the new file is under
    origin's board root (``kanban-moved/``), not under the old local one.
 d. ``test_claim_writes_origins_native_in_progress_name`` goes one step past the letter
-   of the spec: once origin's theme (hdd) judges the claim, the status it writes must
-   read back as in progress under that theme (hdd ``active``, or the canonical
-   ``in_progress``). Writing nautical's ``underway`` would put the item back in
-   backlog on origin's board. Split out so it can be challenged on its own.
+   of the spec: once origin's theme (spec; hdd before #575) judges the claim, the
+   status it writes must read back as in progress under that theme (spec
+   ``implementing``, or the canonical ``in_progress``). Writing nautical's
+   ``underway`` would put the item back in backlog on origin's board. Split out so it
+   can be challenged on its own.
 e. The WIP count of OTHER items at the fetched rev already goes through the judge
    (#831), so a WIP-full slot held under an origin-only status name is a control
    (green today), kept to guard the parse change.
@@ -318,24 +319,28 @@ def test_control_wip_counts_other_item_by_origins_status_name(world) -> None:
 # --- 2. legality: origin's theme and workflows judge the claim's move ----------------------
 
 
-def _hdd_on_origin(world: World, tmp_path: Path) -> None:
-    """Origin's config picks the hdd theme (draft -> active is legal); EXP-001 is a
-    `draft` there. A keeps nautical, where backlog -> in_progress is illegal."""
+def _spec_on_origin(world: World, tmp_path: Path) -> None:
+    """Origin's config picks the spec theme (proposed -> implementing is legal);
+    EXP-001 is `proposed` there. A keeps nautical, where `proposed` is no status (it
+    falls back to backlog) and backlog -> in_progress is illegal.
+
+    #575: this was hdd `draft`, but hdd has no ready column, so claim now refuses
+    every hdd item (not pickable). spec's `proposed` maps to canonical ready."""
     b_change(world, {
-        CONFIG: config_yaml(tmp_path, KanbanConfig(theme="hdd", paths=world_paths())),
-        ITEM: item_text("draft"),
+        CONFIG: config_yaml(tmp_path, KanbanConfig(theme="spec", paths=world_paths())),
+        ITEM: item_text("proposed"),
     })
-    assert "hdd" not in local_config(world)
+    assert "spec" not in local_config(world)
 
 
 def test_origins_theme_allows_the_claim(world, tmp_path) -> None:
-    _hdd_on_origin(world, tmp_path)
+    _spec_on_origin(world, tmp_path)  # a pickable item under origin's theme (#575)
     base = world.remote_sha()
 
     out = claim(world.a, A)
 
     assert out.kind == "won", (
-        f"origin's hdd theme allows draft -> active: {out.kind}: {out.message}"
+        f"origin's spec theme allows proposed -> implementing: {out.kind}: {out.message}"
     )
     tip = world.remote_sha()
     assert git(world.remote, "rev-list", f"{base}..{tip}").split() == [tip]
@@ -343,15 +348,16 @@ def test_origins_theme_allows_the_claim(world, tmp_path) -> None:
 
 
 def test_claim_writes_origins_native_in_progress_name(world, tmp_path) -> None:
-    """Ambiguity d: the status written reads back as in progress under origin's hdd
-    theme (`active` or canonical `in_progress`), never nautical's `underway`."""
-    _hdd_on_origin(world, tmp_path)
+    """Ambiguity d: the status written reads back as in progress under origin's theme
+    (spec `implementing` or canonical `in_progress`), never nautical's `underway`.
+    (#575: origin's theme is spec, not hdd, whose items are never pickable.)"""
+    _spec_on_origin(world, tmp_path)
     base = world.remote_sha()
 
     out = claim(world.a, A)
 
     assert out.kind == "won", f"{out.kind}: {out.message}"
-    assert_one_claim_commit(world, base, {"active", "in_progress"})
+    assert_one_claim_commit(world, base, {"implementing", "in_progress"})
 
 
 def test_origins_theme_transitions_forbid_the_claim(world) -> None:
