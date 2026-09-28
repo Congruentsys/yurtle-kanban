@@ -168,7 +168,8 @@ def main() -> None:
 
     def issue_blockers(i: dict) -> list[str]:
         why = held(issue_labels[i["number"]])
-        waits = sorted((depends_on(i.get("body") or "") & open_nums) - {i["number"]})
+        # `depends on #<PR>` waits while that PR is open too (#996)
+        waits = sorted((depends_on(i.get("body") or "") & (open_nums | open_prs)) - {i["number"]})
         if waits:
             why.append("waits on " + ",".join(f"#{n}" for n in waits))
         return why
@@ -176,9 +177,16 @@ def main() -> None:
     fixed_by_open_pr: set[int] = set()
     for pr in prs:
         fixed_by_open_pr |= issues_fixed_by(pr)
+    # an open PR whose TITLE names #N works on it, `Fixes` or not ("(#967, part 1)", #996);
+    # a body mention doesn't count: bodies cite rulings and sibling issues all the time
+    in_progress: dict[int, str] = {}
+    for pr in prs:
+        for n in map(int, re.findall(r"#(\d+)\b", pr.get("title") or "")):
+            in_progress.setdefault(n, f"in progress in PR #{pr['number']} by {pr['author']['login']}")
+    open_prs = {pr["number"] for pr in prs}
 
     if a.skip_prs:
-        return claim(a, me, issues, fixed_by_open_pr, issue_blockers, issue_labels)
+        return claim(a, me, issues, fixed_by_open_pr, issue_blockers, issue_labels, in_progress)
 
     # 1. my own open PRs — a draft or a held PR (or one whose issue is held) is parked, not resumed
     mine = []
@@ -213,7 +221,7 @@ def main() -> None:
             print(f"\nRESUME ISSUE #{i['number']} — {i['title']}")
             return
 
-    claim(a, me, issues, fixed_by_open_pr, issue_blockers, issue_labels)
+    claim(a, me, issues, fixed_by_open_pr, issue_blockers, issue_labels, in_progress)
 
 
 def claim(
@@ -223,6 +231,7 @@ def claim(
     fixed_by_open_pr: set[int],
     issue_blockers: Callable[[dict], list[str]],
     issue_labels: dict[int, set[str]],
+    in_progress: dict[int, str],
 ) -> None:
     """Claim the first eligible issue (step 4); every claim rule applies."""
     # 4. claim a new one
@@ -233,6 +242,8 @@ def claim(
             why.append("assigned to " + ",".join(x["login"] for x in i["assignees"]))
         if i["number"] in fixed_by_open_pr:
             why.append("an open PR fixes it")
+        elif i["number"] in in_progress:
+            why.append(in_progress[i["number"]])
         why += issue_blockers(i)
         cands.append((0 if "bug" in issue_labels[i["number"]] else 1, i["number"], i, why))
     cands.sort(key=lambda c: c[:2])
