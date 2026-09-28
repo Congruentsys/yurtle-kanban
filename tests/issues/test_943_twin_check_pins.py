@@ -45,5 +45,6 @@ def test_twin_under_a_case_twin_folder_gets_the_folder_message(world) -> None:
     msg = result.get("message", "")
     assert result["success"] is False, result
     assert FOLDER_TWIN_MSG in msg, result
+    assert "research/Experiments/" in msg, result  # origin's spelling, not the board's (#982)
     for needle in FILE_TWIN_MSG:
         assert needle not in msg, result
