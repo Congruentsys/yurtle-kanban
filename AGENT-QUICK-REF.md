@@ -21,9 +21,9 @@ yurtle-kanban stats                   # Board statistics
 
 ```bash
 /work EXP-XXX                  # Start work on expedition
-# OR manually:
-yurtle-kanban move EXP-XXX in_progress
-git checkout -b expedition/exp-XXX-description
+# OR manually (a race-free claim; name yourself with --agent or YURTLE_AGENT):
+yurtle-kanban claim EXP-XXX --agent <your-agent-name>
+git fetch origin && git checkout -b expedition/exp-XXX-description origin/main
 ```
 
 ## Create New Work
@@ -42,7 +42,7 @@ yurtle-kanban next-id EXP --json      # Get next ID atomically
 git add -A && git commit -m "feat(exp-XXX): Description"
 git push origin HEAD
 gh pr create --title "feat(exp-XXX): Title" --body "..."
-yurtle-kanban move EXP-XXX review
+yurtle-kanban move EXP-XXX review --agent <your-agent-name>   # the holder moves it
 ```
 
 ## Review Work

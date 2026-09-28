@@ -51,6 +51,7 @@ yurtle-kanban init --theme software
 # so two people creating at once cannot land on the same one
 yurtle-kanban create feature "Add dark mode" --push --priority high
 yurtle-kanban create bug "Fix login error" --push --assign dev-1
+yurtle-kanban create feature "Dark mode settings" --push   # FEAT-002
 
 # View the board
 yurtle-kanban board
@@ -61,8 +62,10 @@ yurtle-kanban list --status in_progress
 yurtle-kanban list --assignee dev-1
 
 # Move items (kb:by records the actor: --agent, else $YURTLE_AGENT, else git user.name)
-yurtle-kanban move FEAT-001 in_progress --assign dev-1
-yurtle-kanban move FEAT-001 done --agent reviewer-1
+yurtle-kanban move FEAT-001 ready                  # create puts it in backlog
+yurtle-kanban move FEAT-001 in_progress --assign dev-1 --agent dev-1
+yurtle-kanban move FEAT-001 review --agent dev-1     # the holder moves it on
+yurtle-kanban move FEAT-001 done --agent reviewer-1  # review → done: any reviewer
 
 # Comment: free text goes through --body-file and a QUOTED heredoc, so the shell
 # expands nothing ($(...), backticks, $VARS are stored verbatim); a ```yurtle or
@@ -84,7 +87,7 @@ yurtle-kanban show FEAT-001
 
 # Each board's lifecycle: every status and its legal next statuses
 yurtle-kanban states
-yurtle-kanban states --board research --json
+yurtle-kanban states --board default --json    # one board, as JSON
 
 # Prioritized roadmap (excludes done items)
 yurtle-kanban roadmap
@@ -546,11 +549,13 @@ yurtle-kanban list --status in_progress    # Filter by status
 yurtle-kanban history --week               # Recent completions
 ```
 
-**Moving items:**
+**Claiming and moving items:**
 ```bash
-yurtle-kanban move EXP-001 in_progress
-yurtle-kanban move EXP-001 done
+yurtle-kanban claim EXP-001 --agent <your-agent-name>          # race-free claim
+yurtle-kanban move EXP-001 review --agent <your-agent-name>    # the holder moves it on
 ```
+An item in progress can only be moved by its holder: pass `--agent` (or set
+`YURTLE_AGENT`). To take over someone else's item, add `--take-over`.
 ````
 
 ## Python API
