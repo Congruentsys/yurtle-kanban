@@ -2201,14 +2201,23 @@ class KanbanService:
                 raise _CasRefusedError(
                     f"{item.file_path} is outside the git repository at {self._git_toplevel()}"
                 )
-            # whatever the ids say, never replace a file the base already has there:
-            # a name like another item's is not proof it's free (#788)
-            if self._git_run(
-                "cat-file", "-e", f"{base}:{item_rel.as_posix()}"
-            ).returncode == 0:
+            # whatever the ids say, never replace a file the base already has there,
+            # nor sit beside one whose name differs only in case: on a
+            # case-insensitive filesystem they are one file (#788)
+            folder = item_rel.parent.as_posix()
+            listed = self._git_run(
+                "ls-tree", "--name-only", "-z", base, "--",
+                f"{folder}/" if folder not in ("", ".") else ".",
+            ).stdout.split("\0")
+            twin = next(
+                (p for p in listed if p and p.casefold() == item_rel.as_posix().casefold()),
+                None,
+            )
+            if twin is not None:
                 raise _CasRefusedError(
-                    f"{item_rel.as_posix()} already exists on the default branch "
-                    f"(creating {current_id} would replace it); nothing was created"
+                    f"{twin} already exists on the default branch (creating "
+                    f"{current_id} as {item_rel.as_posix()} would replace it); "
+                    "nothing was created"
                 )
             blobs = {item_rel: text, **self._allocation_blob(base, current_id, actor)}
             linked, parent_state = ({}, None) if parent is None else self._parent_link_blob(
