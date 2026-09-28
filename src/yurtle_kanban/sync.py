@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any
+from typing import Any, Protocol
 
 
 class ExitCode(IntEnum):
@@ -84,7 +84,17 @@ class Refuse:
     holder: str | None = None
 
 
-Read = Callable[[str], "str | None"]
+class Read(Protocol):
+    """What `mutate` reads through: `read(path)` is the file's LF text in the tree
+    being changed (None when absent). `rev` is that tree's commit, the fetched
+    `origin/<default>`, or None for the working tree (no remote), so a mutate can
+    look past the paths it names, e.g. count WIP there (#574)."""
+
+    rev: str | None
+
+    def __call__(self, rel: str) -> str | None: ...
+
+
 Mutate = Callable[[Read, int], "Change | NoOp | Refuse"]
 
 __all__ = ["Change", "ExitCode", "Mutate", "NoOp", "Outcome", "Read", "Refuse"]
