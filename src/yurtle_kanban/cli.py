@@ -58,6 +58,7 @@ from .models import (
     WorkItemType,
     check_encodable,
     fold_id,
+    id_prefix,
     unknown_priority_message,
 )
 from .service import KanbanService, git_toplevel
@@ -186,6 +187,15 @@ def main():
     pass
 
 
+def _default_prefix(type_id: str) -> str:
+    """A template prefix for a theme type with no `id_prefix` (#840): the type
+    key's letters and digits from its first letter, upper-cased, at most four;
+    `ITEM` when that leaves no prefix the grammar accepts."""
+    kept = "".join(c for c in type_id if c.isalpha() or c.isdigit())
+    start = next((i for i, c in enumerate(kept) if c.isalpha()), len(kept))
+    return id_prefix(kept[start:].upper()[:4]) or "ITEM"
+
+
 def _generate_template(prefix: str, type_name: str, sections: list[str]) -> str:
     """Generate a _TEMPLATE.md file for an item type."""
     section_text = "\n\n".join(f"## {s}\n" for s in sections)
@@ -291,7 +301,7 @@ def init(theme: str, path: str | None):
             dirs_created.append(type_path)
 
             # Create _TEMPLATE.md in each directory
-            prefix = type_def.get("id_prefix", type_id[:4].upper())
+            prefix = type_def.get("id_prefix") or _default_prefix(type_id)
             sections = _TEMPLATE_SECTIONS.get(type_id, ["Description"])
             template_path = type_dir / "_TEMPLATE.md"
             if not template_path.exists():
