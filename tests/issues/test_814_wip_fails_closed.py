@@ -5,11 +5,11 @@ The [steer] on #814 keeps two of its four items (the config and gate-read items
 moved to #831):
 
 1. ``claim_item`` counts WIP in origin's fetched tree through ``_items_at`` /
-   ``_blobs_at``, which read the blobs with ``git archive``. If the archive fails,
-   or its member set differs from ``git ls-tree -r -z --name-only``'s ``.md``
-   listing for the board (a ``.gitattributes`` ``export-ignore`` drops files from an
-   archive), the claim is REFUSED (exit 1) with a message naming the cause. It never
-   counts zero. Nothing is pushed and nothing is written.
+   ``_blobs_at``. If that tree can't be read, the claim is REFUSED (exit 1) with a
+   message naming the cause. It never counts zero. Nothing is pushed and nothing is
+   written. (#832: ``_blobs_at`` reads the blobs with ``ls-tree`` + ``cat-file
+   --batch``, no longer ``git archive``, so a ``.gitattributes`` ``export-ignore``
+   no longer hides board files: the count sees them and judges WIP as usual.)
 2. On a claim, ``ASSIGNED`` fires only when the assignee changes. ``STATUS_CHANGE``
    still fires when the status changes.
 
@@ -18,21 +18,19 @@ Harness: the #585 ``World`` and the #574 claim seam/hook helpers
 
 Ambiguities resolved here (the test partner's reading; the driver may challenge):
 
-a. The archive failure is injected by making ``git archive`` exit 128 at BOTH
-   places a service could run it: ``KanbanService._git_run`` (the steer's named
-   seam) and ``subprocess.run`` for an argv starting ``git archive`` (where
-   ``_blobs_at`` runs it today). So the test does not pin which of the two the fix
-   routes through.
-b. "A message naming the cause": an archive failure's message contains
-   ``archive``. A member-set mismatch's message contains one of ``export-ignore``,
-   ``.gitattributes`` or ``archive`` (the service may not know WHICH attribute
-   dropped the file, only that the archive and ``ls-tree`` disagree).
+a. The read failure is injected by making ``git cat-file --batch`` exit 128 at
+   BOTH places a service could run it: ``KanbanService._git_run`` and
+   ``subprocess.run`` (where ``_blobs_at`` runs it today), so the test does not pin
+   which of the two it routes through. A variant fails ``_blobs_at``'s own
+   ``ls-tree`` (#832).
+b. "A message naming the cause": the message names the git command that failed
+   (``cat-file`` or ``ls-tree``).
 c. Fail-closed is pinned with WIP full on origin (the fail-open bug: a claim that
    must lose wins) AND with WIP not full (an unreadable tree never counts, so a
    limit that would have passed is still refused).
-d. Controls that must stay green: ``export-ignore`` on paths outside the board, or
-   on non-``.md`` files inside it, leaves the ``.md`` member set equal to
-   ``ls-tree``'s, so the claim wins.
+d. ``export-ignore`` anywhere (on the board or off it) changes nothing (#832):
+   with WIP full on origin the claim is refused ON WIP, and with WIP not full it
+   wins.
 e. "The assignee changes" is compared as stored text. A claim of an item already
    assigned to the actor, spelled exactly as the actor, fires no ASSIGNED. A
    case-variant spelling (``Agent-a`` vs ``agent-A``) is NOT pinned here.
@@ -41,6 +39,7 @@ e. "The assignee changes" is compared as stored text. A claim of an item already
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -102,32 +101,48 @@ def attributes_on_origin(world: World, text: str) -> None:
     push_from_a(world, {".gitattributes": text}, "attributes")
 
 
-def break_archive(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
-    """`git archive` exits 128 whether it runs through `_git_run` or `subprocess.run`.
-    Returns the list of archive calls seen, so a test can check one was attempted."""
+def break_cat_file(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """`git cat-file --batch` exits 128 whether it runs through `_git_run` or
+    `subprocess.run`. Returns the calls seen, so a test can check one was attempted."""
     seen: list[tuple[str, ...]] = []
     real_git_run = KanbanService._git_run
     real_run = subprocess.run
+    err = "fatal: cat-file failed (#832 test)"
 
     def git_run(self: KanbanService, *args: str, **kwargs: Any) -> Any:
-        if args and args[0] == "archive":
+        if args[:2] == ("cat-file", "--batch"):
             seen.append(("_git_run", *args))
-            return subprocess.CompletedProcess(
-                ["git", *args], 128, "", "fatal: archive failed (#814 test)"
-            )
+            return subprocess.CompletedProcess(["git", *args], 128, "", err)
         return real_git_run(self, *args, **kwargs)
 
     def run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
-        if isinstance(cmd, (list, tuple)) and list(cmd[:2]) == ["git", "archive"]:
+        if isinstance(cmd, (list, tuple)) and list(cmd[:3]) == ["git", "cat-file", "--batch"]:
             seen.append(("subprocess", *map(str, cmd)))
             text = kwargs.get("text") or kwargs.get("universal_newlines")
             empty: Any = "" if text else b""
-            err: Any = "fatal: archive failed (#814 test)"
             return subprocess.CompletedProcess(cmd, 128, empty, err if text else err.encode())
         return real_run(cmd, *args, **kwargs)
 
     monkeypatch.setattr(KanbanService, "_git_run", git_run)
     monkeypatch.setattr(subprocess, "run", run)
+    return seen
+
+
+def break_blobs_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """The `ls-tree` that `_blobs_at` itself runs exits 128 (`_items_at`'s listing
+    still succeeds, so the failure is the blob read's own)."""
+    seen: list[tuple[str, ...]] = []
+    real_git_run = KanbanService._git_run
+
+    def git_run(self: KanbanService, *args: str, **kwargs: Any) -> Any:
+        if args[:1] == ("ls-tree",) and sys._getframe(1).f_code.co_name == "_blobs_at":
+            seen.append(args)
+            return subprocess.CompletedProcess(
+                ["git", *args], 128, "", "fatal: ls-tree failed (#832 test)"
+            )
+        return real_git_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(KanbanService, "_git_run", git_run)
     return seen
 
 
@@ -144,40 +159,55 @@ def assert_refused_clean(
     assert snapshot(world.a) == before, "the refused claim wrote to A's checkout"
 
 
-# --- 1. archive failure fails closed ---------------------------------------------------------
+# --- 1. a failed blob read fails closed ----------------------------------------------------
 
 
-def test_archive_failure_with_wip_full_on_origin_is_refused(world, monkeypatch, tmp_path) -> None:
+def test_cat_file_failure_with_wip_full_on_origin_is_refused(world, monkeypatch, tmp_path) -> None:
     wip_full_on_origin(world)
     marker = install_hooks(world, tmp_path)
     base = world.remote_sha()
     before = snapshot(world.a)
-    seen = break_archive(monkeypatch)
+    seen = break_cat_file(monkeypatch)
     rec = Recorder()
 
     out = claim(world.a, A, rec)
 
-    assert seen, "no `git archive` was attempted: the WIP count did not read the fetched tree"
-    assert_refused_clean(world, out, base, before, rec, ("archive",))
+    assert seen, "no `git cat-file --batch` was attempted: WIP did not read the fetched tree"
+    assert_refused_clean(world, out, base, before, rec, ("cat-file",))
     assert fired(marker) == []
 
 
-def test_archive_failure_with_wip_not_full_is_still_refused(world, monkeypatch) -> None:
+def test_cat_file_failure_with_wip_not_full_is_still_refused(world, monkeypatch) -> None:
     """An unreadable fetched tree never counts as zero, even when the real count
     would have passed."""
     wip_limit_1(world)
     base = world.remote_sha()
     before = snapshot(world.a)
-    seen = break_archive(monkeypatch)
+    seen = break_cat_file(monkeypatch)
     rec = Recorder()
 
     out = claim(world.a, A, rec)
 
-    assert seen, "no `git archive` was attempted"
-    assert_refused_clean(world, out, base, before, rec, ("archive",))
+    assert seen, "no `git cat-file --batch` was attempted"
+    assert_refused_clean(world, out, base, before, rec, ("cat-file",))
 
 
-# --- 1. export-ignore drops board files: the member set differs -> fails closed ---------------
+def test_blobs_ls_tree_failure_with_wip_not_full_is_still_refused(world, monkeypatch) -> None:
+    wip_limit_1(world)
+    base = world.remote_sha()
+    before = snapshot(world.a)
+    seen = break_blobs_ls_tree(monkeypatch)
+    rec = Recorder()
+
+    out = claim(world.a, A, rec)
+
+    assert seen, "`_blobs_at` ran no `git ls-tree`"
+    assert_refused_clean(world, out, base, before, rec, ("ls-tree",))
+
+
+# --- 1. export-ignore hides nothing from the count (#832) ------------------------------------
+
+NOT_THE_CAUSE = ("export-ignore", ".gitattributes", "archive")
 
 
 @pytest.mark.parametrize(
@@ -190,7 +220,9 @@ def test_archive_failure_with_wip_not_full_is_still_refused(world, monkeypatch) 
     ],
     ids=["board-root", "board-folder", "one-item", "all-md"],
 )
-def test_export_ignore_with_wip_full_on_origin_is_refused(world, tmp_path, attributes) -> None:
+def test_export_ignore_does_not_hide_items_wip_full_refused_on_wip(
+    world, tmp_path, attributes
+) -> None:
     attributes_on_origin(world, attributes)
     wip_full_on_origin(world)
     marker = install_hooks(world, tmp_path)
@@ -200,27 +232,23 @@ def test_export_ignore_with_wip_full_on_origin_is_refused(world, tmp_path, attri
 
     out = claim(world.a, A, rec)
 
-    assert_refused_clean(
-        world, out, base, before, rec, ("export-ignore", ".gitattributes", "archive")
-    )
+    assert_refused_clean(world, out, base, before, rec, ("wip",))
+    assert not any(c in out.message.lower() for c in NOT_THE_CAUSE), out.message
     assert fired(marker) == []
 
 
-def test_export_ignore_with_wip_not_full_is_still_refused(world) -> None:
+def test_export_ignore_does_not_hide_items_wip_not_full_wins(world) -> None:
     attributes_on_origin(world, "kanban-work/** export-ignore\n")
     wip_limit_1(world)
     base = world.remote_sha()
-    before = snapshot(world.a)
-    rec = Recorder()
 
-    out = claim(world.a, A, rec)
+    out = claim(world.a, A)
 
-    assert_refused_clean(
-        world, out, base, before, rec, ("export-ignore", ".gitattributes", "archive")
-    )
+    assert out.kind == "won", out.message
+    assert_claimed_by(world, A, base)
 
 
-def test_cli_export_ignore_exits_1(world, monkeypatch) -> None:
+def test_cli_export_ignore_does_not_hide_items_exits_1_on_wip(world, monkeypatch) -> None:
     attributes_on_origin(world, "kanban-work/** export-ignore\n")
     wip_full_on_origin(world)
     base = world.remote_sha()
@@ -232,7 +260,8 @@ def test_cli_export_ignore_exits_1(world, monkeypatch) -> None:
         f"claim crashed instead of refusing: {result.exception!r}"
     )
     assert result.exit_code == 1, out
-    assert any(c in out.lower() for c in ("export-ignore", ".gitattributes", "archive")), out
+    assert "wip" in out.lower(), out
+    assert not any(c in out.lower() for c in NOT_THE_CAUSE), out
     assert world.remote_sha() == base
 
 
@@ -271,8 +300,8 @@ def test_control_wip_not_full_wins(world) -> None:
     ids=["outside-board", "non-md-anywhere", "non-md-in-board"],
 )
 def test_control_export_ignore_off_the_board_md_set_wins(world, attributes) -> None:
-    """export-ignore that drops no board `.md` file leaves the member set equal to
-    ls-tree's: WIP is counted as usual and the claim wins."""
+    """export-ignore off the board changes nothing: WIP is counted as usual and the
+    claim wins."""
     push_from_a(
         world,
         {

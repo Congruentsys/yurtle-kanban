@@ -148,10 +148,10 @@ def _parse_allocations(text: str | None, where: str) -> list[Any]:
 
 
 class _TreeUnreadableError(ValueError):
-    """A commit's board files can't all be read (#814): `git archive` failed, its
-    output isn't a tar, or it left out a file `ls-tree` lists (an `export-ignore`).
-    A count taken from such a read would be short, so the caller refuses instead;
-    its message names the cause. A ValueError, so `update --push`'s refusal path
+    """A commit's board files can't all be read (#814): `git ls-tree` or `git
+    cat-file` failed, or a board file couldn't be read as a blob (#832). A count
+    taken from such a read would be short, so the caller refuses instead; its
+    message names the cause. A ValueError, so `update --push`'s refusal path
     reports it as it reports a bad dependency."""
 
 
@@ -4489,7 +4489,7 @@ class KanbanService:
                 "refusing rather than judge an empty board"
             )
         # only regular files are items (#814): a symlink (120000) or gitlink is
-        # skipped, as a scan skips it, and never expected in the archive
+        # skipped, as a scan skips it, and never read as a blob
         regular = []
         for entry in listed.stdout.split("\0"):
             meta, tab, name = entry.partition("\t")
@@ -4514,60 +4514,76 @@ class KanbanService:
 
     def _blobs_at(self, rev: str, names: list[str]) -> dict[str, str]:
         """Each of `names` (paths from the work tree's top) as commit `rev` holds it,
-        its text as a file read with `newline=""` gives it: one `git archive`, since
-        git never reads stdin (#580). A non-UTF-8 file is left out.
+        its text as a file read with `newline=""` gives it. A non-UTF-8 file is
+        left out.
 
-        Fails closed (#814): raises `_TreeUnreadableError` when the archive fails,
-        its output isn't a tar, or it lacks any of `names` (the regular files from
-        `ls-tree`) — an `export-ignore` in `.gitattributes` drops files from an
-        archive, and a dropped file would silently not be counted."""
-        import io
-        import tarfile
+        Read as the blobs themselves (#832): `ls-tree` names each file's object and
+        one `cat-file --batch` prints them, fed the object names from a temporary
+        file since git never reads our stdin (#580). No `.gitattributes` applies,
+        so an `export-subst` or `export-ignore` can't change what is counted, as
+        they could through `git archive`.
+
+        Fails closed (#814): raises `_TreeUnreadableError` when git fails or any of
+        `names` can't be read — a missing file would silently not be counted."""
+        import tempfile
 
         if not names:
             return {}
-        top = sorted({str(Path(n).parent.as_posix()) for n in names})
-        done = subprocess.run(
-            ["git", "archive", "--format=tar", rev, "--", *top],
-            cwd=self._git_toplevel(),
-            capture_output=True,
-            timeout=60,
-            stdin=subprocess.DEVNULL,
-            env={**os.environ, **GIT_ENV},
-        )
-        wanted, blobs = set(names), {}
         refusing = "refusing rather than judge a partial board"
+        top = sorted({str(Path(n).parent.as_posix()) for n in names})
+        listed = self._git_run("ls-tree", "-r", "-z", "--full-tree", rev, "--", *top)
+        if listed.returncode != 0:
+            raise _TreeUnreadableError(
+                f"Can't read the board files at {rev}: git ls-tree failed "
+                f"({listed.stderr.strip() or f'exit {listed.returncode}'}); {refusing}"
+            )
+        oids: dict[str, str] = {}
+        for entry in listed.stdout.split("\0"):
+            meta, tab, name = entry.partition("\t")
+            parts = meta.split(" ")
+            if tab and len(parts) == 3 and parts[1] == "blob":
+                oids[name] = parts[2]
+        missing = [n for n in names if n not in oids]
+        if missing:
+            raise _TreeUnreadableError(
+                f"Can't read the board files at {rev}: git ls-tree does not list "
+                f"{len(missing)} of them (e.g. {missing[0]}); {refusing}"
+            )
+        wanted = list(dict.fromkeys(oids[n] for n in names))
+        with tempfile.TemporaryFile() as feed:
+            feed.write("".join(f"{o}\n" for o in wanted).encode("ascii"))
+            feed.seek(0)
+            done = subprocess.run(
+                ["git", "cat-file", "--batch"],
+                cwd=self._git_toplevel(),
+                capture_output=True,
+                timeout=60,
+                stdin=feed,
+                env={**os.environ, **GIT_ENV},
+            )
         if done.returncode != 0:
             err = done.stderr.decode("utf-8", "replace").strip() if done.stderr else ""
             raise _TreeUnreadableError(
-                f"Can't read the board files at {rev}: git archive failed "
+                f"Can't read the board files at {rev}: git cat-file failed "
                 f"({err or f'exit {done.returncode}'}); {refusing}"
             )
-        seen: set[str] = set()
-        try:
-            with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
-                for member in tar:
-                    if member.name not in wanted or not member.isfile():
-                        continue
-                    seen.add(member.name)
-                    handle = tar.extractfile(member)
-                    if handle is None:
-                        continue
-                    with suppress(UnicodeDecodeError):
-                        blobs[member.name] = handle.read().decode("utf-8")
-        except tarfile.TarError as e:  # every path export-ignored: an empty tar
-            raise _TreeUnreadableError(
-                f"Can't read the board files at {rev}: the git archive is empty or "
-                "unreadable; an export-ignore in .gitattributes may cover the whole "
-                f"board; {refusing}"
-            ) from e
-        missing = sorted(wanted - seen)
-        if missing:
-            raise _TreeUnreadableError(
-                f"Can't read the board files at {rev}: git archive left out "
-                f"{len(missing)} file(s) git ls-tree lists (e.g. {missing[0]}); "
-                f"an export-ignore in .gitattributes? {refusing}"
-            )
+        contents: dict[str, bytes] = {}
+        out, at = done.stdout, 0
+        for oid in wanted:  # "<oid> blob <size>\n<content>\n", in the order asked
+            end = out.find(b"\n", at)
+            header = out[at:end].split(b" ") if end >= 0 else []
+            if len(header) != 3 or header[1] != b"blob" or not header[2].isdigit():
+                raise _TreeUnreadableError(
+                    f"Can't read the board files at {rev}: git cat-file could not "
+                    f"read object {oid}; {refusing}"
+                )
+            size = int(header[2])
+            contents[oid] = out[end + 1:end + 1 + size]
+            at = end + 1 + size + 1
+        blobs: dict[str, str] = {}
+        for name in names:
+            with suppress(UnicodeDecodeError):
+                blobs[name] = contents[oids[name]].decode("utf-8")
         return blobs
 
     def _fire_claim_hooks(self, claimed: _Claimed) -> None:

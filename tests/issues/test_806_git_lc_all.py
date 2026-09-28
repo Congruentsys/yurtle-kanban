@@ -9,7 +9,7 @@ Decided spec (the [steer] on #806): every git subprocess whose output the code p
 runs with ``LC_ALL=C`` and ``LANGUAGE=`` (empty) in its environment. That is
 ``KanbanService._git_run`` and every direct ``subprocess.run(["git", ...])`` in src:
 ``git_toplevel`` (rev-parse), ``inputs._git_user_name`` (config), the ``git cat-file``
-readers in ``_reader_at`` and ``_parent_link_blob``, ``git archive`` in ``_blobs_at``,
+readers in ``_reader_at`` and ``_parent_link_blob``, ``git ls-tree`` / ``git cat-file --batch`` in ``_blobs_at``,
 and ``git hook run`` (through ``_git_run``).
 
 1. Structural: ``subprocess.run`` is spied on (the real git still runs) while the
@@ -186,12 +186,14 @@ def test_parent_link_blob_cat_file_is_c_locale(world, spy) -> None:
     assert_all_c(spy, ("cat-file", "blob"), only=True)
 
 
-def test_blobs_at_archive_is_c_locale(world, spy) -> None:
+def test_blobs_at_reads_are_c_locale(world, spy) -> None:
+    """`_blobs_at` reads blobs with `ls-tree` + `cat-file --batch` (#832): both C."""
     svc = service(world)
     spy.calls.clear()
     blobs = svc._blobs_at("HEAD", [ITEM])
     assert blobs.get(ITEM) == ITEM_TEXT, blobs
-    assert_all_c(spy, ("archive",), only=True)
+    assert_all_c(spy, ("cat-file", "--batch"), ("ls-tree",), only=True)
+    assert not spy.not_c("ls-tree"), spy.not_c("ls-tree")
 
 
 # --- 2. behavioural: a German locale still retries a lost race -----------------------------

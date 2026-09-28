@@ -2,7 +2,8 @@
 
 The PR #835 review found that ``_items_at`` takes its candidate names from
 ``ls-tree -r --name-only``, which also lists symlinks (mode 120000), while
-``_blobs_at`` marks a tar member as seen only when ``member.isfile()``. So a tracked
+``_blobs_at`` (then reading through ``git archive``; blobs directly since #832)
+marks a tar member as seen only when ``member.isfile()``. So a tracked
 symlink on a board lands in ``missing`` and the claim (or a dependency-editing
 ``update --push``) is refused with a misleading export-ignore message. main simply
 skipped it. The fleet hits this: nusy-product-team tracks
@@ -189,7 +190,9 @@ def test_update_push_add_dep_with_symlink_on_board(world, monkeypatch, target) -
 # --- controls ----------------------------------------------------------------------------------
 
 
-def test_control_real_export_ignore_still_refused(world) -> None:
+def test_control_export_ignore_does_not_hide_items_refused_as_wip(world) -> None:
+    """#832: blobs are read directly, so an export-ignored in-progress item still
+    counts: WIP full on origin refuses ON WIP, never on a misleading read cause."""
     push_from_a(world, {".gitattributes": f"{OTHER} export-ignore\n"}, "attributes")
     wip_full_on_origin(world)
     base = world.remote_sha()
@@ -200,13 +203,17 @@ def test_control_real_export_ignore_still_refused(world) -> None:
 
     assert out.kind == "refused", f"{out.kind}: {out.message}"
     assert out.exit_code == 1
-    assert any(m in out.message.lower() for m in MISLEADING[:3] + ("archive",)), out.message
+    msg = out.message.lower()
+    assert "wip" in msg, out.message
+    assert not any(m in msg for m in MISLEADING), f"misleading cause: {out.message}"
     assert world.remote_sha() == base
     assert rec.seams == []
     assert snapshot(world.a) == before
 
 
-def test_control_real_export_ignore_refuses_update_push_add_dep(world, monkeypatch) -> None:
+def test_control_export_ignore_does_not_hide_dep_update_push_add_dep(world, monkeypatch) -> None:
+    """#832: an export-ignored EXP-002 is still read on origin, so it is a valid
+    dependency and `update --push --add-dep` lands."""
     push_from_a(
         world,
         {
@@ -219,8 +226,13 @@ def test_control_real_export_ignore_refuses_update_push_add_dep(world, monkeypat
 
     result = invoke(world, monkeypatch, ["update", ITEM_ID, "--add-dep", "EXP-002", "--push"])
 
-    assert result.exit_code == 1, output_of(result)
-    assert world.remote_sha() == base
+    out = output_of(result)
+    assert result.exit_code == 0, out
+    assert not any(m in out.lower() for m in MISLEADING), out
+    tip = world.remote_sha()
+    assert git(world.remote, "rev-list", f"{base}..{tip}").split() == [tip]
+    assert commit_files(world.remote, tip) == [ITEM]
+    assert frontmatter(world.remote_show(ITEM)).get("depends_on") == ["EXP-002"]
 
 
 def test_control_normal_claim_wins(world) -> None:
