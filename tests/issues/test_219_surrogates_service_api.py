@@ -198,9 +198,10 @@ class TestAllocateNextId:
         )
 
     def test_good_prefix_accepted(self, sw: Path) -> None:
-        result = _service(sw).allocate_next_id(GOOD, sync_remote=False, commit_allocation=True)
+        # a well-formed non-ASCII prefix: `GOOD` has a space, which #802 refuses
+        result = _service(sw).allocate_next_id("CAFÉ", sync_remote=False, commit_allocation=True)
         assert result["success"], result
-        assert result["id"].startswith(GOOD.upper())
+        assert result["id"].startswith("CAFÉ")
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +306,8 @@ class TestMcp:
         _assert_unchanged(sw, before)
 
     def test_next_id_good_prefix(self, sw: Path) -> None:
-        result = _mcp(sw).handle_tool_call("kanban_next_id", {"prefix": GOOD, "sync_remote": False})
+        # a well-formed non-ASCII prefix (#802)
+        result = _mcp(sw).handle_tool_call("kanban_next_id", {"prefix": "CAFÉ", "sync_remote": False})
         assert "error" not in result, result
         assert result["success"], result
 

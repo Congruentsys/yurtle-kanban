@@ -3558,6 +3558,7 @@ class KanbanService:
         import json
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
+        self._check_prefix(prefix)  # a malformed prefix allocates nothing (#802)
         prefix = prefix.upper()
         actor = ""
         if commit_allocation:
@@ -4928,6 +4929,19 @@ class KanbanService:
             raise InputRefused("The title is empty: give a title")
         if "\n" in title or "\r" in title:
             raise InputRefused("The title has a line break: a title is one line")
+
+    # letters and digits in any script (#193, #219): `[^\W\d_]` is a letter
+    _PREFIX_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*\.?")
+
+    @classmethod
+    def _check_prefix(cls, prefix: str) -> None:
+        """Refuse a prefix no ID could have (#802)."""
+        if not cls._PREFIX_RE.fullmatch(prefix):
+            raise InputRefused(
+                f"{prefix!r} is not an ID prefix: a prefix is a letter, then letters "
+                "or digits, in dash-separated segments, with an optional trailing '.' "
+                "(EXP, IDEA-R, H130.)"
+            )
 
     @staticmethod
     def _id_list(ids: list[Any]) -> list[str]:
