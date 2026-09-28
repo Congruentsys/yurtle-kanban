@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from ._logging import get_logger
-from .models import ID_PREFIX_RE, InputRefused, WorkItemStatus
+from .models import ID_PREFIX_FORM, InputRefused, WorkItemStatus, id_prefix
 
 logger = get_logger("yurtle-kanban")
 
@@ -323,13 +323,17 @@ def _drop_bad_sections(data: dict[str, Any], theme_path: Path) -> dict[str, Any]
     # stands, as `next-id` refuses it (#802, #816)
     for entry, definition in data.get("item_types", {}).items():
         prefix = definition.get("id_prefix")
-        if isinstance(prefix, str) and not ID_PREFIX_RE.fullmatch(prefix):
-            definition.pop("id_prefix")
-            logger.warning(
-                f"theme file {theme_path}: `item_types.{entry}.id_prefix` {prefix!r} "
-                "is not an ID prefix (a letter, then letters or digits, in "
-                "dash-separated segments); ignored, using the default prefix"
-            )
+        if not isinstance(prefix, str):
+            continue
+        normal = id_prefix(prefix)
+        if normal is not None:
+            definition["id_prefix"] = normal  # one NFC spelling (#817)
+            continue
+        definition.pop("id_prefix")
+        logger.warning(
+            f"theme file {theme_path}: `item_types.{entry}.id_prefix` {prefix!r} "
+            f"is not an ID prefix ({ID_PREFIX_FORM}); ignored, using the default prefix"
+        )
     # no columns is no column section: the board falls back to the defaults
     # instead of drawing zero columns and hiding every item (#391)
     if "columns" in data and not data["columns"]:

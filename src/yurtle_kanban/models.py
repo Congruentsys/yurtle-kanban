@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
@@ -33,9 +34,46 @@ def unknown_priority_message(value: object) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
-# an ID prefix: a letter, then letters or digits (any script), in dash-separated
-# segments, with an optional trailing `.` for paper-scoped ids (#802, #816)
-ID_PREFIX_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*\.?")
+ID_PREFIX_FORM = (
+    "a letter, then letters or digits, in dash-separated segments, with an optional "
+    "trailing '.' after a final ASCII digit and no dash (EXP, IDEA-R, H130.)"
+)
+
+
+def fold_id(text: str) -> str:
+    """The one fold for comparing IDs and prefixes: NFC(upper(NFC(text))) (#817).
+
+    Case folded, so `exp-3` is `EXP-3` (#732), and NFC on both sides of the upper
+    case, since upper-casing can undo NFC (`ΐ` upper-cases to a decomposed `Ϊ́`):
+    every spelling of one ID folds to one string. Idempotent; ASCII digits are
+    never changed, so a folded ID's number is where it was."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).upper())
+
+
+def id_prefix(prefix: str) -> str | None:
+    """`prefix` NFC-normalized when it is an ID prefix, else None (#802, #816, #817).
+
+    A prefix is dash-separated segments of letters, digits and combining marks (any
+    script: a decomposed `ÉXP` is `ÉXP`, a Devanagari vowel sign is part of its
+    word). Each segment starts with a letter or digit, the first with a letter.
+    A trailing `.` marks a paper-scoped space (`H130.`): only after a final digit
+    and with no dash, so `H-1.` never lands in the dashed `H-` space."""
+    text = unicodedata.normalize("NFC", prefix)
+    dotted = text.endswith(".")
+    body = text[:-1] if dotted else text
+    # the paper number before a dot is an ASCII int: `H٣.` and `H１３.` are not `H3.`
+    if dotted and ("-" in body or not body or body[-1] not in "0123456789"):
+        return None
+    segments = body.split("-")
+    for n, segment in enumerate(segments):
+        if not segment:
+            return None
+        first = unicodedata.category(segment[0])
+        if not (first.startswith("L") or (n and first.startswith("N"))):
+            return None
+        if not all(unicodedata.category(c)[0] in "LNM" for c in segment):
+            return None
+    return text
 
 
 class InputRefused(ValueError):  # noqa: N818 — the name #666 specifies
