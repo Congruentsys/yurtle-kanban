@@ -103,10 +103,10 @@ EXP-XXX: [Title]"
 
 ```bash
 # Move to review (for changes needing review)
-yurtle-kanban move EXP-XXX review
+yurtle-kanban move EXP-XXX review --agent <your-agent-name>
 
 # Or if self-contained, fully tested, and ready to merge:
-yurtle-kanban move EXP-XXX done
+yurtle-kanban move EXP-XXX done --agent <your-agent-name>
 ```
 
 ### 7. Show Next Work

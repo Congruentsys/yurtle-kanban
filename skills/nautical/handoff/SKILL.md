@@ -118,7 +118,7 @@ If the work is paused, optionally move to a waiting status:
 
 ```bash
 # Only if work is blocked waiting for the other agent
-yurtle-kanban move EXP-XXX blocked
+yurtle-kanban move EXP-XXX blocked --agent <your-agent-name>
 ```
 
 ### 7. Confirm Handoff
