@@ -3297,36 +3297,42 @@ class KanbanService:
             return {}, state
         return {Path(held): eol.apply(new_content)}, None
 
+    # a prefixed name's local part this writes: PN_LOCAL's plain subset (#812)
+    _PLAIN_LOCAL_RE = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.\-]*[A-Za-z0-9_\-])?")
+    _BASE_DECL_RE = re.compile(r"^\s*(?:@base\b|(?i:base)\s*<)", re.MULTILINE)
+
     def _modify_turtle_block(
         self,
         turtle_content: str,
         predicate_uri: Any,
         child_uri: Any,
     ) -> tuple[str, str | None]:
-        """Parse a turtle block, add a triple, and serialize back.
+        """A turtle block's inner text with `<subject> <predicate> <child> .`
+        appended as one line (#812).
 
-        Uses rdflib for correct Turtle parsing and serialization.
-        Handles relative URIs like <#PAPER-130> via a synthetic base URI.
-
-        Note: rdflib's Turtle serializer may reorder triples and change
-        indentation compared to the original hand-written block. This is
-        the correct trade-off (correctness over formatting).
+        rdflib parses the block, to find its subject and to see whether the triple
+        is already there; the block itself is never re-serialized, so every
+        original line stays as written. The subject is written `<#ID>` when it is
+        `urn:yurtle:block#ID` (and the block declares no base), in full otherwise;
+        the predicate and child use a prefix the block declares for their
+        namespace, else the full IRI.
 
         Args:
             turtle_content: Inner content of a fenced turtle block (between
-                            the ``` fences, not including them).
+                            the ``` fences, not including them), LF.
             predicate_uri: rdflib URIRef for the predicate to add.
             child_uri: rdflib URIRef for the child object to add.
 
         Returns:
             Tuple of (new_content, state). state is None when the triple was
             added, 'linked' when it already exists, and 'unparseable' when the
-            block can't be parsed or has no URI subject (#737).
+            block can't be parsed or has no URI subject (#737). new_content does
+            not end in a newline: the caller puts one before the fence.
         """
-        base_uri = URIRef("urn:yurtle:block")
-        g = Graph()
+        base_uri = "urn:yurtle:block"
+        g = Graph(bind_namespaces="none")  # only the prefixes the block declares
         try:
-            g.parse(data=turtle_content, format="turtle", publicID=str(base_uri))
+            g.parse(data=turtle_content, format="turtle", publicID=base_uri)
         except Exception as e:
             # the CLI says it (parent_link_state), no warning as well (#737)
             logger.debug(f"Failed to parse turtle block for modification: {e}")
@@ -3344,22 +3350,35 @@ class KanbanService:
         if (subject, predicate_uri, child_uri) in g:
             return turtle_content, "linked"
 
-        # Add the inverse triple
-        g.add((subject, predicate_uri, child_uri))
+        declared = [
+            (name, str(ns))
+            for name, ns in g.namespaces()
+            if re.search(
+                rf"(?:@prefix|(?i:prefix))\s+{re.escape(name)}:\s*<{re.escape(str(ns))}>",
+                turtle_content,
+            )
+        ]
 
-        # Bind all HDD prefixes for clean serialization
-        for name, uri in PREFIXES.items():
-            g.bind(name, Namespace(uri))
+        def term(uri: URIRef) -> str:
+            for name, ns in declared:
+                local = str(uri)[len(ns):]
+                if str(uri).startswith(ns) and self._PLAIN_LOCAL_RE.fullmatch(local):
+                    return f"{name}:{local}"
+            return f"<{uri}>"
 
-        # Serialize with base to preserve <#ID> relative URIs
-        result = g.serialize(format="turtle", base=base_uri)
-        if isinstance(result, bytes):
-            result = result.decode("utf-8")
+        fragment = str(subject)[len(base_uri) + 1:]
+        if (
+            str(subject).startswith(base_uri + "#")
+            and ">" not in fragment
+            and not self._BASE_DECL_RE.search(turtle_content)
+        ):
+            subject_text = f"<#{fragment}>"
+        else:
+            subject_text = f"<{subject}>"
 
-        # Strip @base declaration (original blocks don't have it)
-        lines = result.strip().split("\n")
-        lines = [line for line in lines if not line.startswith("@base ")]
-        return "\n".join(lines), None
+        line = f"{subject_text} {term(predicate_uri)} {term(child_uri)} ."
+        head = turtle_content if turtle_content.endswith("\n") else turtle_content + "\n"
+        return head + line, None
 
     def _merge_into_existing_block(
         self, content: str, match: re.Match, missing: Graph

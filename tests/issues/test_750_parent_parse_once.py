@@ -33,7 +33,15 @@ import pytest
 
 from tests.issues.test_585_create_push_loop import World, git
 from tests.issues.test_603_push_failure_messages import invoke
-from tests.issues.test_645_parent_in_cas import HYP, KINDS, PAPER, Kind, seed_on_origin
+from tests.issues.test_645_parent_in_cas import (
+    HYP,
+    KINDS,
+    PAPER,
+    Kind,
+    links,
+    seed_on_origin,
+    turtle_block,
+)
 from tests.issues.test_674_parent_edges import (  # noqa: F401  (fixtures)
     _clean_theme_cache,
     drop_remote,
@@ -264,7 +272,7 @@ def test_link_parent_twice_is_linked(world, monkeypatch) -> None:
     svc = service(world)
     assert svc.link_parent("PAPER-130", "hypothesis", CHILD) == "added"
     text = (world.a / PAPER).read_text()
-    assert f"hyp:{CHILD}" in text, text
+    assert links(turtle_block(text), HYP, CHILD), text
     assert svc.link_parent("PAPER-130", "hypothesis", CHILD) == "linked"
     assert (world.a / PAPER).read_text() == text  # the second call writes nothing
 

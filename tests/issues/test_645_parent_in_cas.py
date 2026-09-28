@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from rdflib import Graph, URIRef
 
 from tests.issues.test_584_scoped_commit import _git, _head, _remote_head
 from tests.issues.test_584_scoped_commit import _run as _run_584
@@ -61,6 +62,7 @@ from tests.issues.test_614_registry_push import (  # noqa: F401  (fixtures)
 from yurtle_kanban import config as config_mod
 from yurtle_kanban import service as service_mod
 from yurtle_kanban.service import KanbanService
+from yurtle_kanban.turtle_builder import PREFIXES
 
 UNRELATED = "unrelated unpushed work 645"
 RIVAL_NOTE = "Rival note 645: kept across the retry."
@@ -196,7 +198,14 @@ def frontmatter_id(text: str) -> str:
 
 
 def links(block: str, kind: Kind, child_id: str) -> bool:
-    return kind.predicate in block and f"{kind.child_prefix}:{child_id}" in block
+    """The block parses and holds `<parent> kind.predicate <child>`: prefixed or in
+    full, however the link was written (#812)."""
+    ns, local = kind.predicate.split(":", 1)
+    predicate = URIRef(PREFIXES[ns] + local)
+    child = URIRef(PREFIXES[kind.child_prefix] + child_id)
+    g = Graph()
+    g.parse(data=block, format="turtle", publicID="urn:yurtle:block")
+    return (None, predicate, child) in g
 
 
 def commits_since(world: World, base: str) -> list[str]:
