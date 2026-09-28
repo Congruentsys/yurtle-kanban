@@ -555,6 +555,7 @@ class KanbanService:
         # Files that look like items (start with `---`) but don't parse, with a
         # reason; the CLI reports them instead of dropping them silently (#139)
         self.parse_warnings: list[tuple[Path, str]] = []
+        self._parse_warned: set[tuple[Path, str]] = set()  # the same, for lookups (#921)
         self._git_top: Path | None = None  # `git rev-parse --show-toplevel`, cached
         self._board: Board | None = None
         self._workflow_parser = WorkflowParser(self.repo_root / ".kanban")
@@ -1038,8 +1039,14 @@ class KanbanService:
     def _warn_parse(self, file_path: Path, reason: str) -> None:
         """Record a file's parse warning once: a file read again (an outside
         board's, on each push attempt) says it once, not per read (#879)."""
-        if (file_path, reason) not in self.parse_warnings:
-            self.parse_warnings.append((file_path, reason))
+        warning = (file_path, reason)
+        # a set beside the list, so a board of thousands of broken files isn't
+        # quadratic (#921); rebuilt whenever the list was reset without it
+        if len(self._parse_warned) != len(self.parse_warnings):
+            self._parse_warned = set(self.parse_warnings)
+        if warning not in self._parse_warned:
+            self._parse_warned.add(warning)
+            self.parse_warnings.append(warning)
 
     def _parse_failed(
         self, file_path: Path, e: Exception, raw: str | None = None

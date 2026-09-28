@@ -444,7 +444,7 @@ kanban:
 
 def _warn_unparseable(service: KanbanService) -> None:
     """Print one stderr line per file that looks like an item but didn't parse (#139)."""
-    for path, reason in dict.fromkeys(service.parse_warnings):
+    for path, reason in service.parse_warnings:  # each recorded once (#879)
         try:
             shown = path.relative_to(service.repo_root)
         except ValueError:
