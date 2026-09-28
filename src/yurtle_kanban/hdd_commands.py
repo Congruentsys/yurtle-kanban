@@ -163,8 +163,9 @@ def _push_only_head_or_exit(service, what: str) -> None:
     other unpushed commits: a bare `git push` would publish them too. With no
     upstream to push to it pushes nothing and warns, like a failed push (the #192 /
     #478 contract). The commit stays local either way."""
+    import subprocess
     import sys
-    from typing import NoReturn
+    from typing import Any, NoReturn
 
     kept = f"The {what} commit is kept locally"
 
@@ -182,17 +183,25 @@ def _push_only_head_or_exit(service, what: str) -> None:
             soft_wrap=True,
         )
 
-    branch = service._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
+    def git(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        # a timeout is a refusal like any other failure, never a traceback (#888)
+        try:
+            return service._git_run(*args, **kwargs)
+        except subprocess.TimeoutExpired as e:
+            after = f" after {e.timeout:g}s" if e.timeout is not None else ""
+            refuse(f"git {args[0]} timed out{after}")
+
+    branch = git("symbolic-ref", "--quiet", "--short", "HEAD")
     name = branch.stdout.strip()
     if branch.returncode != 0 or not name:
         return no_upstream("HEAD is detached, so there is no upstream branch to push to")
-    remote = service._git_run("config", "--get", f"branch.{name}.remote").stdout.strip()
-    merge = service._git_run("config", "--get", f"branch.{name}.merge").stdout.strip()
-    upstream = service._git_run("rev-parse", "--verify", "--quiet", "@{u}")
+    remote = git("config", "--get", f"branch.{name}.remote").stdout.strip()
+    merge = git("config", "--get", f"branch.{name}.merge").stdout.strip()
+    upstream = git("rev-parse", "--verify", "--quiet", "@{u}")
     if not remote or not merge or upstream.returncode != 0:
         return no_upstream(f"branch {name} has no upstream (set one with `git push -u`)")
-    head = service._git_run("rev-parse", "HEAD").stdout.strip()
-    listed = service._git_run("log", "--format=%H %h %s", "@{u}..HEAD")
+    head = git("rev-parse", "HEAD").stdout.strip()
+    listed = git("log", "--format=%H %h %s", "@{u}..HEAD")
     if listed.returncode != 0:
         refuse(f"could not list unpushed commits: {service._git_output(listed)}")
     others = [
@@ -205,8 +214,8 @@ def _push_only_head_or_exit(service, what: str) -> None:
             f"branch {name} has {len(others)} other unpushed commit(s) that a push "
             f"would publish too: {'; '.join(others)}"
         )
-    # runs the user's pre-push; its output is only shown (#848)
-    done = service._git_run("push", remote, f"HEAD:{merge}", user_locale=True)
+    # runs the user's pre-push, so no timeout (#584, #888); its output is only shown (#848)
+    done = git("push", remote, f"HEAD:{merge}", user_locale=True, timeout=None)
     if done.returncode != 0:
         console.print(
             # git's multi-line stderr folded onto one line, as #603 does (#623)
