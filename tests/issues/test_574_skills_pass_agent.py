@@ -33,6 +33,12 @@ b. The fix may be ``--agent <name>`` or a ``YURTLE_AGENT=<name>`` prefix on the
    command. A session-wide ``export YURTLE_AGENT`` in the work skill alone does not
    pass the structural test: the follow-on skills are separate documents, run in
    separate shells.
+
+Issue #861 extends the structural check to the ```bash blocks of README.md and
+AGENT-QUICK-REF.md. A doc is not one skill's flow, so its rule is narrower: a
+``move`` that comes after a ``claim`` anywhere earlier in the same doc, or a
+``move ... --assign X``, passes ``--agent``. The first move of an unclaimed item
+(``move X ready``) names no holder and need not.
 """
 
 from __future__ import annotations
@@ -46,7 +52,12 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from tests.test_skill_commands_execute import BACKTICK_INVOCATION, INVOCATION
+from tests.test_skill_commands_execute import (
+    BACKTICK_INVOCATION,
+    DOC_FILES,
+    INVOCATION,
+    doc_commands,
+)
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
@@ -131,6 +142,64 @@ def test_skill_move_passes_agent(path: Path, n: int, cmd: str) -> None:
         f"{path.relative_to(SKILLS.parent)}:{n}: `{cmd}` runs after `claim --agent` but "
         "passes no --agent (nor a YURTLE_AGENT= prefix), so the holder guard refuses "
         "it as git user.name"
+    )
+
+
+# --- README.md and AGENT-QUICK-REF.md (issue #861) ------------------------------------
+
+# Doc moves allowed without --agent, each with its reason.
+DOC_MOVE_ALLOWED = {
+    ("README.md", 'yurtle-kanban move EXP-123 done --closed-by "https://github.com/owner/repo/pull/42"'):
+        "the auto-close section's manual review -> done, not the holder's flow; the "
+        "reviewer never claims (the skills' review allow-list above)",
+}
+
+
+def _assigns(argv: list[str]) -> bool:
+    return "--assign" in argv or any(a.startswith("--assign=") for a in argv)
+
+
+def doc_moves_needing_agent(path: Path) -> list[tuple[int, str]]:
+    """(lineno, command) for each doc `move` after a `claim` in the doc, or with --assign."""
+    found: list[tuple[int, str]] = []
+    claimed = False
+    for n, text in doc_commands(path):
+        if not INVOCATION.match(text):
+            continue
+        command = text.strip().lstrip("$").strip()
+        _, argv = split(command)
+        if argv[:1] == ["claim"]:
+            claimed = True
+        elif argv[:1] == ["move"] and (claimed or _assigns(argv)):
+            found.append((n, command))
+    return found
+
+
+DOC_MOVES = [(path, n, cmd) for path in DOC_FILES for n, cmd in doc_moves_needing_agent(path)]
+
+
+def test_doc_moves_are_found() -> None:
+    """Guard on the extraction: README's Quick Start assigns in a move, and both docs
+    claim and then move, so this can't pass vacuously."""
+    where = {p.name for p, _, _ in DOC_MOVES}
+    assert where == {"README.md", "AGENT-QUICK-REF.md"}, DOC_MOVES
+    assert any(_assigns(split(c)[1]) for _, _, c in DOC_MOVES), DOC_MOVES
+    # and every allow-list entry still earns its place
+    listed = {(p.name, c) for p, _, c in DOC_MOVES}
+    for key, reason in DOC_MOVE_ALLOWED.items():
+        assert key in listed, f"stale allow-list: {reason}"
+
+
+@pytest.mark.parametrize(
+    ("path", "n", "cmd"), DOC_MOVES, ids=[f"{p.name}:{n}" for p, n, _ in DOC_MOVES]
+)
+def test_doc_move_passes_agent(path: Path, n: int, cmd: str) -> None:
+    if (path.name, cmd) in DOC_MOVE_ALLOWED:
+        pytest.skip(DOC_MOVE_ALLOWED[(path.name, cmd)])
+    assert passes_agent(cmd), (
+        f"{path.name}:{n}: `{cmd}` comes after a claim or assigns a holder, but passes "
+        "no --agent (nor a YURTLE_AGENT= prefix), so the holder guard refuses it as "
+        "git user.name"
     )
 
 
