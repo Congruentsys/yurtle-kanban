@@ -94,15 +94,20 @@ jobs:
           MOVED=0
           for ITEM_ID in $ITEM_IDS; do
             echo "Moving $ITEM_ID to $TARGET_STATUS (closed by PR #$PR_NUMBER)"
-            yurtle-kanban move "$ITEM_ID" "$TARGET_STATUS" \
+            # the merged PR is the authority (#860): the bot closes the item even
+            # while an agent still holds it, and --take-over records whom it took
+            # it over from, so the holder stays in the item's history
+            if OUT=$(yurtle-kanban move "$ITEM_ID" "$TARGET_STATUS" \
               --no-commit \
+              --take-over --agent "github-actions[bot]" \
               --assign "github-actions[bot]" \
-              --closed-by "$PR_URL" 2>/dev/null && {
+              --closed-by "$PR_URL" 2>&1); then
               MOVED=$((MOVED + 1))
               echo "  ✓ $ITEM_ID moved to $TARGET_STATUS"
-            } || {
-              echo "::warning::Could not move $ITEM_ID to $TARGET_STATUS (may not exist or already in target status)"
-            }
+            else
+              # one annotation line, with the refusal's own reason
+              echo "::warning::Could not move $ITEM_ID to $TARGET_STATUS: $(echo "$OUT" | tr '\n' ' ')"
+            fi
           done
           echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
 
