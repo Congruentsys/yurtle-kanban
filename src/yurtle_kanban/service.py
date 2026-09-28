@@ -3715,8 +3715,9 @@ class KanbanService:
                 never the assignee, which is not defaulted either (#580).
             take_over: Move an item someone else holds in progress, recording
                 kb:takenOverFrom (#574 §4). It needs an explicit actor (`actor` or
-                $YURTLE_AGENT; git user.name is not enough). Gates, WIP and
-                legality still apply.
+                $YURTLE_AGENT; git user.name is not enough). The actor becomes
+                the holder unless `assignee` is given. Gates, WIP and legality
+                still apply.
 
         The holder guard (#574 §4): an item whose canonical status is in progress
         and whose assignee is not the actor is refused unless `take_over`; `--force`
@@ -3735,6 +3736,10 @@ class KanbanService:
 
         old_status = item.status
         taken_over_from = self._holder_guard(item, actor, take_over)
+        if taken_over_from is not None and not assignee:
+            # a take-over makes the actor the holder, as `claim --take-over` does;
+            # an explicit `--assign` still wins (#574 §4)
+            assignee = actor
 
         # Rules, gates and WIP judge the PROPOSED item — a copy carrying the new
         # status and assignee — so `--assign` can satisfy an assignee check; the
