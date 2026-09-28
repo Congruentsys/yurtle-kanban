@@ -639,6 +639,11 @@ jobs:
 All item prefixes are supported (EXP, CHORE, FEAT, VOY, BUG, EPIC, ISSUE, TASK,
 IDEA, DIR, HAZ, SIG, LIT, PAPER, H, EXPR, M).
 
+**Held items:** the merged PR is the authority. The workflow moves as
+`github-actions[bot]` with `--take-over`, so an item an agent still holds is
+closed too, and its history records `kb:takenOverFrom` the holder. A move that
+fails prints the reason in the step's warning.
+
 **Graph provenance:** Each auto-close records `kb:closedBy <PR-URL>` in the item's
 Turtle status history block, making PR→item relationships graph-queryable:
 
