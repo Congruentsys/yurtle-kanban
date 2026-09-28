@@ -33,9 +33,36 @@ def unknown_priority_message(value: object) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
-# an ID prefix: a letter, then letters or digits (any script), in dash-separated
-# segments, with an optional trailing `.` for paper-scoped ids (#802, #816)
-ID_PREFIX_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*\.?")
+ID_PREFIX_FORM = (
+    "a letter, then letters or digits, in dash-separated segments, with an optional "
+    "trailing '.' after a final digit and no dash (EXP, IDEA-R, H130.)"
+)
+
+
+def id_prefix(prefix: str) -> str | None:
+    """`prefix` NFC-normalized when it is an ID prefix, else None (#802, #816, #817).
+
+    A prefix is dash-separated segments of letters, digits and combining marks (any
+    script: a decomposed `ÉXP` is `ÉXP`, a Devanagari vowel sign is part of its
+    word). Each segment starts with a letter or digit, the first with a letter.
+    A trailing `.` marks a paper-scoped space (`H130.`): only after a final digit
+    and with no dash, so `H-1.` never lands in the dashed `H-` space."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFC", prefix)
+    body = text[:-1] if text.endswith(".") else text
+    if body is not text and ("-" in body or not body or not body[-1].isdigit()):
+        return None
+    segments = body.split("-")
+    for n, segment in enumerate(segments):
+        if not segment:
+            return None
+        first = unicodedata.category(segment[0])
+        if not (first.startswith("L") or (n and first.startswith("N"))):
+            return None
+        if not all(unicodedata.category(c)[0] in "LNM" for c in segment):
+            return None
+    return text
 
 
 class InputRefused(ValueError):  # noqa: N818 — the name #666 specifies

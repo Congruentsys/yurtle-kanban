@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from .config import BoardConfig
     from .gates import GateResult
 from .models import (
-    ID_PREFIX_RE,
+    ID_PREFIX_FORM,
     PRIORITIES,
     Board,
     Column,
@@ -50,6 +50,7 @@ from .models import (
     WorkItemStatus,
     WorkItemType,
     check_encodable,
+    id_prefix,
     turtle_string,
     turtle_unescape,
     unknown_priority_message,
@@ -3804,7 +3805,8 @@ class KanbanService:
         """
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
-        self._check_prefix(prefix)  # a malformed prefix allocates nothing (#802)
+        # a malformed prefix allocates nothing (#802); one NFC spelling (#817)
+        prefix = self._check_prefix(prefix)
         prefix = prefix.upper()
         actor = ""
         if commit_allocation:
@@ -5670,18 +5672,14 @@ class KanbanService:
         if "\n" in title or "\r" in title:
             raise InputRefused("The title has a line break: a title is one line")
 
-    # letters and digits in any script (#193, #219): `[^\W\d_]` is a letter
-    _PREFIX_RE = ID_PREFIX_RE  # one grammar, shared with theme loading (#816)
-
-    @classmethod
-    def _check_prefix(cls, prefix: str) -> None:
-        """Refuse a prefix no ID could have (#802)."""
-        if not cls._PREFIX_RE.fullmatch(prefix):
-            raise InputRefused(
-                f"{prefix!r} is not an ID prefix: a prefix is a letter, then letters "
-                "or digits, in dash-separated segments, with an optional trailing '.' "
-                "(EXP, IDEA-R, H130.)"
-            )
+    @staticmethod
+    def _check_prefix(prefix: str) -> str:
+        """`prefix`, NFC-normalized; refused when no ID could have it (#802, #817).
+        One grammar, shared with theme loading (#816)."""
+        normal = id_prefix(prefix)
+        if normal is None:
+            raise InputRefused(f"{prefix!r} is not an ID prefix: a prefix is {ID_PREFIX_FORM}")
+        return normal
 
     @staticmethod
     def _id_list(ids: list[Any]) -> list[str]:
