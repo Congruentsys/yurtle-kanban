@@ -78,26 +78,33 @@ def agent_name() -> str:
 
 
 def verdict_at_head(pr: dict) -> str | None:
-    """The PR head's verdict as safe_merge.sh judges it (#991), or None: the LATEST
-    decisive comment from the repo's own people decides, a verdict or the driver's fixes
-    comment. A verdict names the head exactly, or the head is unreviewed; a fixes comment
-    at the head, for an earlier verdict's sha that isn't the head, is `fixed` (#987).
+    """The PR head's verdict as safe_merge.sh judges it (#991), or None. Every member
+    comment whose body starts `reviewed-at-sha:` or `fixes-at-sha:` is decisive, and the
+    LATEST one decides: an `approve`/`changes` naming the head exactly, or the driver's
+    fixes comment at the head for an earlier `reviewed-at-sha:` line's sha that isn't the
+    head (`fixed`, #987). Any other decisive comment (a stale, prefix, uppercase or
+    malformed one) leaves the head unreviewed, as the gate refuses it. The gate's other
+    check, that the reviewed sha is an ancestor of the head, needs git and is left to it.
     (A comment without `authorAssociation`, as in tests, counts.)"""
     head = pr["headRefOid"]
     reviewed: set[str] = set()
     found = None
     for c in pr.get("comments") or []:
-        if c.get("authorAssociation", "MEMBER") not in MEMBERS:
+        body = c.get("body") or ""
+        if c.get("authorAssociation", "MEMBER") not in MEMBERS or not body.startswith(
+            ("reviewed-at-sha:", "fixes-at-sha:")
+        ):
             continue
-        lines = [line.removesuffix("\r") for line in (c.get("body") or "").split("\n")[:2]]
-        first_two = "\n".join(lines)
-        if m := VERDICT.fullmatch(first_two):
-            reviewed.add(m.group(1))
+        lines = [line.removesuffix("\r") for line in body.split("\n")[:2]]
+        if lines[0].startswith("reviewed-at-sha: "):
+            reviewed.add(lines[0].removeprefix("reviewed-at-sha: "))
+        found = None
+        if m := VERDICT.fullmatch("\n".join(lines)):
             found = m.group(2) if m.group(1) == head else None
-        elif (f := FIXES.fullmatch(first_two)) and (
+        elif (f := FIXES.fullmatch("\n".join(lines))) and (
             f.group(1) == head and f.group(2) != head and f.group(2) in reviewed
         ):
-            found = "fixed"  # (a fixes comment the gate wouldn't take changes nothing)
+            found = "fixed"
     return found
 
 

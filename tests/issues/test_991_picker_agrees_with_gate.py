@@ -45,8 +45,7 @@ def test_an_uppercase_sha_is_not_the_head(yk) -> None:
 
 def test_an_uppercase_fixes_comment_does_not_count(yk) -> None:
     p = pr(1, head=HEAD, comments=[v(R, "changes"), fx(HEAD.upper(), R.upper())])
-    assert yk.my_pr_state(p) == "changes-requested" or yk.my_pr_state(p) == "needs-review"
-    assert yk.my_pr_state(p) != "ready-to-merge"
+    assert yk.my_pr_state(p) == "needs-review"  # r1 F4: one deterministic state
 
 
 def test_a_non_member_verdict_does_not_count(yk) -> None:
