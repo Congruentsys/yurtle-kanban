@@ -3351,15 +3351,21 @@ class KanbanService:
         there (#645). A parent that exists nowhere is skipped, as it is locally.
         Also returns why nothing was added, read from `base`'s copy: 'missing',
         'no-relation', 'no-block', 'unparseable' or 'linked', else None (#724, #737).
-        A parent `base` holds in more than one file is refused (#754)."""
-        holders = self._holders_at(base, parent_id)
+        A parent `base` holds in more than one file is refused (#754). The
+        relation is checked first, as locally (#777); origin's ids are read once
+        (#796); and the parent is only a file whose frontmatter `id:` is it, never a
+        lookalike named after it, as the board sees it (#819)."""
+        if child_type not in self._INVERSE_RELATIONS:
+            return {}, "no-relation"
+        ids = self._ids_at(base)[1]
+        holders = self._holders_at(base, parent_id, ids)
         if len(holders) > 1:
             raise _CasRefusedError(
                 f"{parent_id} is on more than one board on origin/{self._default_branch()} "
                 f"({', '.join(holders)}): a parent link to it is ambiguous; fix the "
                 "duplicate ID first; nothing was created"
             )
-        held = self._holder_at(base, parent_id)
+        held = holders[0] if holders else None
         if held is None and self.get_item(parent_id) is None:
             # the CLI says it; no warning as well (#724)
             logger.debug(f"Parent {parent_id} not found — skipping inverse reference")
