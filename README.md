@@ -24,6 +24,8 @@ nusy-nano        ->  Optional: neurosymbolic reasoning
 
 ## Installation
 
+Requires **git 2.28 or later**: yurtle-kanban uses `git diff --no-relative`, and the test suite uses `git init -b`.
+
 ```bash
 pip install yurtle-kanban
 
