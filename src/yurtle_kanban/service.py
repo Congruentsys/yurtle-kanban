@@ -147,6 +147,13 @@ def _parse_allocations(text: str | None, where: str) -> list[Any]:
     return records
 
 
+def _twin_key(name: str) -> str:
+    """A path as a case- and normalization-insensitive filesystem (APFS) compares
+    it (#869): NFC, case folded, NFC again. `Café` NFC and NFD are one name, and
+    so are `Straße` and `STRASSE` (casefold's `ß` -> `ss`, as APFS folds it)."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).casefold())
+
+
 class _TreeUnreadableError(ValueError):
     """A commit's board files can't all be read (#814): `git ls-tree` or `git
     cat-file` failed, or a board file couldn't be read as a blob (#832). A count
@@ -2248,7 +2255,7 @@ class KanbanService:
                 f"{folder}/" if folder not in ("", ".") else ".",
             ).stdout.split("\0")
             twin = next(
-                (p for p in listed if p and p.casefold() == item_rel.as_posix().casefold()),
+                (p for p in listed if p and _twin_key(p) == _twin_key(item_rel.as_posix())),
                 None,
             )
             if twin is not None:
@@ -2930,12 +2937,12 @@ class KanbanService:
             parts = name.split("/")[:-1]
             for n in range(1, len(parts) + 1):
                 folder = "/".join(parts[:n])
-                folders.setdefault(folder.casefold(), folder)
+                folders.setdefault(_twin_key(folder), folder)
         for rel in rels:
             parts = rel.as_posix().split("/")[:-1]
             for n in range(1, len(parts) + 1):
                 folder = "/".join(parts[:n])
-                existing = folders.get(folder.casefold())
+                existing = folders.get(_twin_key(folder))
                 if existing is not None and existing != folder:
                     return existing
         return None
