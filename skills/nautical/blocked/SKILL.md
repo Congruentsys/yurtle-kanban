@@ -24,7 +24,7 @@ Mark an expedition as blocked with a clear reason so other agents know why and w
 ### 1. Move to Blocked Status
 
 ```bash
-yurtle-kanban move EXP-XXX blocked
+yurtle-kanban move EXP-XXX blocked --agent <your-agent-name>
 ```
 
 ### 2. Update Expedition File
@@ -83,4 +83,4 @@ When you unblock an item:
 
 1. Remove the `> **BLOCKED**` section from the file
 2. Add Ship's Log entry: "Unblocked: [what changed]"
-3. Move status: `yurtle-kanban move EXP-XXX in_progress`
+3. Move status: `yurtle-kanban move EXP-XXX in_progress --agent <your-agent-name>`

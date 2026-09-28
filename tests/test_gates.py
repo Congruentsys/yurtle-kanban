@@ -29,8 +29,10 @@ def base_item():
 
 
 @pytest.fixture
-def kanban_with_gates(tmp_path):
-    """Minimal kanban setup with gates configured on the dev board."""
+def kanban_with_gates(tmp_path, monkeypatch):
+    """Minimal kanban setup with gates configured on the dev board. Its moves are
+    made by the holder, Mini, so #574's holder guard lets them through."""
+    monkeypatch.setenv("YURTLE_AGENT", "Mini")
     config_path = tmp_path / ".kanban" / "config.yaml"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(

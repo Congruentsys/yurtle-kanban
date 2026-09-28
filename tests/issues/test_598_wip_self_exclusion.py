@@ -72,6 +72,7 @@ def _within_column_move(svc: KanbanService, item_id: str, assignee: str):
             assignee=assignee,
             validate_workflow=False,
             skip_wip_check=False,
+            actor="Mini",  # the holder, past #574's holder guard
         )
     except ValueError as e:
         pytest.fail(f"within-column move of {item_id} refused: {e}")

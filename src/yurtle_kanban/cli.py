@@ -643,6 +643,12 @@ def create(
 @click.option("--closed-by", help="URI recording what triggered this move (e.g., PR URL)")
 @click.option("--skip-gates", is_flag=True, help="Skip transition gate checks (Captain override)")
 @click.option("--self-reviewed", is_flag=True, help="Confirm self-review was performed")
+@click.option(
+    "--take-over",
+    is_flag=True,
+    help="Move an item someone else holds in progress (recorded as kb:takenOverFrom); "
+    "needs --agent or $YURTLE_AGENT; gates, WIP and legality still apply",
+)
 def move(
     item_id: str,
     new_status: str,
@@ -655,6 +661,7 @@ def move(
     closed_by: str | None,
     skip_gates: bool,
     self_reviewed: bool,
+    take_over: bool,
 ):
     """Move a work item to a new status.
 
@@ -666,13 +673,20 @@ def move(
         yurtle-kanban move EXP-123 done --closed-by "https://github.com/repo/pull/42"
         yurtle-kanban move EXP-123 review --self-reviewed  # Pass self-review gate
         yurtle-kanban move EXP-123 review --skip-gates  # Skip all transition gates
+        yurtle-kanban move EXP-123 review --take-over --agent Claude-M5
+
+    An item someone else holds in progress is refused unless you are its holder
+    (--agent / $YURTLE_AGENT) or pass --take-over; --force does not override that.
     """
     service = get_service()
     try:
         if assign is not None:
             assign = check_identity(assign, "--assign")
-        actor = resolve_actor(agent, cwd=service.repo_root)
+        # a take-over needs an explicit actor: git user.name is shared (#574 §4)
+        actor = resolve_actor(agent, allow_git_fallback=not take_over, cwd=service.repo_root)
     except ValueError as e:
+        if take_over:
+            _refuse(ValueError(f"--take-over needs an explicit actor: {e}"))
         _refuse(e)
 
     target = service.get_item(item_id.upper())
@@ -710,6 +724,7 @@ def move(
             closed_by=closed_by,
             skip_gates=skip_gates or force,
             gate_context=gate_context,
+            take_over=take_over,
         )
         # named the way the item's theme names it (hdd `active`) (#448)
         moved_to = safe(service.status_label(item))

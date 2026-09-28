@@ -24,7 +24,7 @@ Mark an item as blocked with a clear reason so other agents know why and who can
 ### 1. Move to Blocked Status
 
 ```bash
-yurtle-kanban move FEAT-XXX blocked
+yurtle-kanban move FEAT-XXX blocked --agent <your-agent-name>
 ```
 
 ### 2. Update Item File
@@ -83,4 +83,4 @@ When you unblock an item:
 
 1. Remove the `> **BLOCKED**` section from the file
 2. Add Change Log entry: "Unblocked: [what changed]"
-3. Move status: `yurtle-kanban move FEAT-XXX in_progress`
+3. Move status: `yurtle-kanban move FEAT-XXX in_progress --agent <your-agent-name>`
