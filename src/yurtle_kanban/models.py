@@ -33,6 +33,11 @@ def unknown_priority_message(value: object) -> str:
     return f"Unknown priority: {shown}; valid: {', '.join(PRIORITIES)}"
 
 
+# an ID prefix: a letter, then letters or digits (any script), in dash-separated
+# segments, with an optional trailing `.` for paper-scoped ids (#802, #816)
+ID_PREFIX_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*\.?")
+
+
 class InputRefused(ValueError):  # noqa: N818 — the name #666 specifies
     """A refusal of the user's input, never a bug: a CLI command shows it as a
     one-line `Error:` and exits 1, while any other `ValueError` keeps its traceback
