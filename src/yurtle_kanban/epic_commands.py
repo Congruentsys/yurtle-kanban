@@ -113,7 +113,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     """
     item = service.get_item(item_id)
     if item is None:
-        console.print(f"[yellow]Warning: Item {safe(item_id)} not found[/yellow]")
+        console.print(f"[yellow]Warning: Item {safe(fold_id(item_id))} not found[/yellow]")
         return False
     try:  # which copy would get the link is ambiguous (#742, #754)
         service.refuse_duplicate(item, "a link")
@@ -129,10 +129,10 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     if not isinstance(fm, dict):
         reason = service._unparseable_reason(item.file_path, content)
         if reason is None:
-            console.print(f"[yellow]Warning: No frontmatter in {safe(item_id)}[/yellow]")
+            console.print(f"[yellow]Warning: No frontmatter in {safe(item.id)}[/yellow]")
         else:  # it's there but broken: say why, as the scan does (#139, #188)
             console.print(
-                f"[yellow]Warning: {safe(item_id)}'s frontmatter doesn't parse "
+                f"[yellow]Warning: {safe(item.id)}'s frontmatter doesn't parse "
                 f"({safe(reason)}); not linked[/yellow]",
                 soft_wrap=True,
             )
@@ -145,7 +145,7 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         # a mapping or a number isn't a list of IDs; writing it back as
         # `["{...}"]` would corrupt it (#188)
         console.print(
-            f"[yellow]Warning: {safe(item_id)}'s `related:` is a "
+            f"[yellow]Warning: {safe(item.id)}'s `related:` is a "
             f"{type(related).__name__}, not a list of IDs; not linked[/yellow]",
             soft_wrap=True,
         )
@@ -287,7 +287,8 @@ def _do_show(epic_id: str):
     # Also check if the epic itself lists items in its related field
     # (bidirectional linking)
     linked_ids = {fold_id(i.id) for i in linked_items}
-    for rel_id in epic_item.related:
+    # a malformed `related:` (a mapping, #188) links nothing: its keys aren't IDs (#904)
+    for rel_id in epic_item.related if isinstance(epic_item.related, list) else []:
         rel_item = service.get_item(str(rel_id))
         if rel_item is not None and fold_id(rel_item.id) not in linked_ids | {folded_epic}:
             linked_items.append(rel_item)

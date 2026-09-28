@@ -905,8 +905,8 @@ class KanbanService:
             # Get required fields
             item_id = frontmatter.get("id")
             if not item_id:
-                # Generate from filename
-                item_id = file_path.stem.upper().replace("-", "_")
+                # Generate from filename, folded as every ID is compared (#904)
+                item_id = fold_id(file_path.stem).replace("-", "_")
             item_id = str(_scalar_text(item_id))  # `id: 42` / `id: true` are text (#179, #245)
 
             item_type_str = frontmatter.get("type", "task")
