@@ -882,10 +882,12 @@ def claim(item_id: str | None, agent: str | None, take_over: bool, next_: bool):
     another agent, 4 remote unreachable, 5 remote busy, 6 push refused by the
     remote, 7 nothing pickable (--next).
 
-    WIP limits, board paths and ignore patterns are judged by origin's
-    config (.kanban/config.yaml and the theme files it names under
-    .kanban/themes/) at the fetched commit, or by the local config when origin
-    has none (#831); gate checks still read the local working tree.
+    The fetched item is judged by origin's own config at the fetched commit
+    (.kanban/config.yaml, the theme files under .kanban/themes/ and the
+    workflows under .kanban/workflows/): how the item parses, whether the move
+    is legal, the status name written, WIP limits, board paths and ignore
+    patterns (#831, #865). With no config on origin, the local config judges.
+    Gate checks still read the local working tree.
 
     Examples:
         YURTLE_AGENT=Claude-M5 yurtle-kanban claim EXP-123
@@ -1540,7 +1542,8 @@ def update(
     closes a cycle is refused, and nothing is written.
 
     With --push the edit is made to the item as origin's default branch has it,
-    checked against that board, and pushed as one commit (a kanban-only commit);
+    checked against that board as origin's own config, themes and workflows
+    define it (#831, #865), and pushed as one commit (a kanban-only commit);
     your checkout is not touched. Exit codes as claim's: 0 updated (or nothing
     to change), 1 refused, 4 remote unreachable, 5 remote busy, 6 push refused.
 
