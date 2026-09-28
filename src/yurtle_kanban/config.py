@@ -133,6 +133,28 @@ def _is_str(value: Any) -> bool:
     return isinstance(value, str)
 
 
+def _shape(value: Any) -> str:
+    """`int 5`: a wrong value as a refusal names it."""
+    return f"{type(value).__name__} {value!r}"
+
+
+def _mapping(value: Any, field_name: str, what: str = "a mapping") -> dict[str, Any]:
+    """A config section that must be a mapping: null (a bare key) is empty (#194,
+    #204); any other shape is refused, naming the field (#864)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise InputRefused(f"`{field_name}` must be {what}, got {_shape(value)}")
+    return value
+
+
+def _str_or_none(value: Any, field_name: str, what: str = "a string") -> str | None:
+    """A config value that must be a string when given; null means unset (#864)."""
+    if value is not None and not isinstance(value, str):
+        raise InputRefused(f"`{field_name}` must be {what}, got {_shape(value)}")
+    return value
+
+
 def _clean_transitions(transitions: Any, where: str) -> dict[str, list[str]] | None:
     """`transitions` with every entry a list of status names: a lone name is a
     one-item list, as `item_types: expedition` is (#432); a name that isn't a
@@ -580,7 +602,26 @@ class BoardConfig:
         """
         # warnings name the board as it loads: an unnamed one is `default` (#535)
         board_name = _or_default(data, "name", "default")
+        if not isinstance(board_name, str):
+            raise InputRefused(f"a board's `name` must be a string, got {_shape(board_name)}")
+        on = f"on board {board_name!r}"
+        board_path = _str_or_none(data.get("path"), "path", f"a path string {on}")
         raw_wip = data.get("wip_limits", {})
+        if raw_wip is not None and not isinstance(raw_wip, dict):
+            # a whole `wip_limits` of the wrong shape is refused; one bad limit
+            # inside the mapping is still dropped with a warning (#411, #864)
+            raise InputRefused(
+                f"`wip_limits` {on} must be a mapping of column to limit (or null), "
+                f"got {_shape(raw_wip)}"
+            )
+        gates = _mapping(data.get("gates"), "gates", f"a mapping {on}")
+        exempt = data.get("wip_exempt_types")
+        if exempt is not None and (
+            not isinstance(exempt, list) or not all(isinstance(t, str) for t in exempt)
+        ):
+            raise InputRefused(
+                f"`wip_exempt_types` {on} must be a list of item types, got {_shape(exempt)}"
+            )
         # Preserve None (explicitly unlimited board); a bad limit is dropped (#411)
         wip_limits = (
             _clean_wip_limits(raw_wip, f"config.yaml board {board_name!r}")
@@ -593,13 +634,13 @@ class BoardConfig:
             preset=_theme_name(
                 data, "preset", f" for board {board_name!r}", repo_root, source
             ),
-            path=_or_default(data, "path", "work/"),
+            path="work/" if board_path is None else board_path,
             # a bare key (YAML null) means empty, never None (#194, #204)
-            scan_paths=_scan_list(data, f"on board {board_name!r}"),
+            scan_paths=_scan_list(data, on),
             wip_limits=wip_limits,
             raw_wip_limits=copy.deepcopy(raw_wip),
-            wip_exempt_types=data.get("wip_exempt_types") or [],
-            gates=data.get("gates") or {},
+            wip_exempt_types=exempt or [],
+            gates=gates,
             ignore=_ignore_list(data),
         )
 
@@ -743,7 +784,20 @@ class KanbanConfig:
         if not isinstance(data, dict):
             # the CLI reports a ValueError as an invalid config, not a traceback (#338)
             raise InputRefused(f"the config must be a mapping, got {type(data).__name__}")
+        try:
+            return cls._from_data(data, repo_root, theme_source)
+        except (TypeError, AttributeError, KeyError) as e:
+            # a shape no explicit check refuses is still a refusal, never a
+            # traceback: one bad config on origin must not break every clone (#864)
+            raise InputRefused(
+                f"config.yaml is not a valid kanban config: {type(e).__name__}: {e}"
+            ) from e
 
+    @classmethod
+    def _from_data(
+        cls, data: dict[str, Any], repo_root: Path, theme_source: ThemeSource | None
+    ) -> "KanbanConfig":
+        """`from_text`'s config from the parsed mapping."""
         # Check for v2 multi-board config
         version = data.get("version", CONFIG_VERSION_SINGLE)
         # a bare `boards:` is the same as none: fall back to v1 (#204)
@@ -772,7 +826,8 @@ class KanbanConfig:
     ) -> "KanbanConfig":
         """Load v1 single-board configuration."""
         # a bare key (YAML null) means empty, never None (#194, #204)
-        kanban_data = data.get("kanban", data) or {}
+        where = "kanban." if "kanban" in data else ""
+        kanban_data = _mapping(data.get("kanban", data), "kanban")
 
         # only a bare `paths:` (null) means empty; `0`, `''` or `[]` is a bad shape (#517)
         raw_paths = kanban_data.get("paths")
@@ -796,22 +851,27 @@ class KanbanConfig:
                 paths_data[key] = kanban_data[key]
                 if key == "scan_paths":
                     scan_where = "in kanban"
+        root = _str_or_none(paths_data.get("root"), f"{where}paths.root", "a path string")
+
+        def folder(key: str) -> str | None:  # a type's folder is a path too (#864)
+            return _str_or_none(paths_data.get(key), f"{where}paths.{key}", "a path string")
+
         paths = PathConfig(
-            root=_or_default(paths_data, "root", "work/"),
+            root="work/" if root is None else root,
             scan_paths=_scan_list(paths_data, scan_where),
             ignore=_ignore_list(paths_data),
-            features=paths_data.get("features"),
-            bugs=paths_data.get("bugs"),
-            epics=paths_data.get("epics"),
-            tasks=paths_data.get("tasks"),
+            features=folder("features"),
+            bugs=folder("bugs"),
+            epics=folder("epics"),
+            tasks=folder("tasks"),
         )
 
         return cls(
             version=CONFIG_VERSION_SINGLE,
             theme=_theme_name(kanban_data, "theme", "", repo_root, theme_source),
             paths=paths,
-            workflows=kanban_data.get("workflows") or {},
-            gates=kanban_data.get("gates") or {},
+            workflows=_mapping(kanban_data.get("workflows"), f"{where}workflows"),
+            gates=_mapping(kanban_data.get("gates"), f"{where}gates"),
         )
 
     @classmethod
@@ -820,11 +880,20 @@ class KanbanConfig:
         theme_source: ThemeSource | None = None,
     ) -> "KanbanConfig":
         """Load v2 multi-board configuration."""
+        raw_boards = [] if data.get("boards") is None else data["boards"]
+        if not isinstance(raw_boards, list):
+            raise InputRefused(
+                f"`boards` must be a list of board mappings, got {_shape(raw_boards)}"
+            )
         # a bare `- ` list entry is skipped, not a crash (#220)
-        boards = [
-            BoardConfig.from_dict(b, repo_root, theme_source)
-            for b in data.get("boards", []) if b is not None
-        ]
+        entries = [b for b in raw_boards if b is not None]
+        for n, b in enumerate(entries, 1):
+            if not isinstance(b, dict):
+                raise InputRefused(
+                    f"`boards` entry {n} must be a mapping with a `name` and `path`, "
+                    f"got {_shape(b)}"
+                )
+        boards = [BoardConfig.from_dict(b, repo_root, theme_source) for b in entries]
 
         # Aggregate scan_paths from all boards for Priority 3 fallback. Ignore
         # patterns stay per board: scan() applies each board's own (#124)
@@ -835,8 +904,8 @@ class KanbanConfig:
         return cls(
             version=CONFIG_VERSION_MULTI,
             boards=boards,
-            namespace=data.get("namespace"),
-            default_board=data.get("default_board"),
+            namespace=_str_or_none(data.get("namespace"), "namespace"),
+            default_board=_str_or_none(data.get("default_board"), "default_board", "a board name"),
             # Keep v1 fields for backward compatibility in code
             theme=boards[0].preset if boards else "software",
             paths=PathConfig(
