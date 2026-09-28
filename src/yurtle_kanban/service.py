@@ -11,6 +11,7 @@ This service provides the business logic for:
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import os
 import random
@@ -121,6 +122,24 @@ class _Edits:
 class _CasRefusedError(Exception):
     """A compare-and-swap commit (#585, #590) that can't be built; its message is
     the failure the caller reports."""
+
+
+def _parse_allocations(text: str | None, where: str) -> list[Any]:
+    """The records of an `_ID_ALLOCATIONS.json` read from `where`: `text` None (no
+    file) starts a fresh list; a file that exists but is not a JSON list is refused,
+    never replaced — rewriting it would drop every earlier allocation (#818)."""
+    if text is None:
+        return []
+    try:
+        records = json.loads(text)
+    except ValueError:
+        records = None
+    if not isinstance(records, list):
+        raise InputRefused(
+            f"{where} is not a valid JSON list of allocations: fix it or remove it "
+            "(a missing file starts a fresh list); nothing was created"
+        )
+    return records
 
 
 # HDD namespace objects (derived from turtle_builder.PREFIXES, single source of truth)
@@ -2030,7 +2049,6 @@ class KanbanService:
                 self.refuse_duplicate(held, "a parent link")
             except ValueError as e:
                 return self._push_failed(f"{e}; nothing was created")
-        import json as json_mod
 
         # A board outside the git repository can't be committed or pushed (#174):
         # create the item and stop, before any pull or ID-allocation record
@@ -2112,18 +2130,14 @@ class KanbanService:
             return self._push_failed(
                 f"{first} first, so the link's commit holds only the link; nothing was created"
             )
+        # a corrupt allocation file is refused before the item is written (#818)
+        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+        allocations = self._local_allocations(lock_file)
         file_path = item.file_path
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(text)
 
-        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
         lock_file.parent.mkdir(parents=True, exist_ok=True)
-        allocations = []
-        if lock_file.exists():
-            try:
-                allocations = json_mod.loads(lock_file.read_text())
-            except Exception:
-                allocations = []
         lock_file.write_text(self._with_allocation(allocations, current_id, actor))
 
         paths = [file_path, lock_file]
@@ -2883,7 +2897,6 @@ class KanbanService:
     def _allocation_blob(self, base: str, current_id: str, actor: str) -> dict[Path, str]:
         """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
         `current_id` allocated by `actor`, keyed by its repo-relative path."""
-        import json
 
         lock_rel = self._repo_relative(
             self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", self._git_toplevel()
@@ -2892,10 +2905,21 @@ class KanbanService:
             raise _CasRefusedError(f"{self.repo_root} is outside the git repository")
         shown = self._git_run("show", f"{base}:{lock_rel.as_posix()}")
         try:
-            allocations = json.loads(shown.stdout) if shown.returncode == 0 else []
-        except Exception:
-            allocations = []
+            allocations = _parse_allocations(
+                shown.stdout if shown.returncode == 0 else None,
+                f"{lock_rel.as_posix()} on the default branch",
+            )
+        except InputRefused as e:
+            raise _CasRefusedError(str(e)) from None  # nothing is pushed (#818)
         return {lock_rel: self._with_allocation(allocations, current_id, actor)}
+
+    @staticmethod
+    def _local_allocations(lock_file: Path) -> list[Any]:
+        """The checkout's own allocation records: none when `lock_file` is missing,
+        and a file that exists but isn't a JSON list is refused (#818)."""
+        return _parse_allocations(
+            lock_file.read_text() if lock_file.exists() else None, str(lock_file)
+        )
 
     def _git_run(
         self,
@@ -3756,7 +3780,6 @@ class KanbanService:
         Returns:
             dict with 'id', 'prefix', 'number', and 'success' keys
         """
-        import json
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
         self._check_prefix(prefix)  # a malformed prefix allocates nothing (#802)
@@ -3817,13 +3840,8 @@ class KanbanService:
 
         if commit_allocation:
             lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+            allocations = self._local_allocations(lock_file)  # corrupt: refused (#818)
             lock_file.parent.mkdir(parents=True, exist_ok=True)
-            allocations = []
-            if lock_file.exists():
-                try:
-                    allocations = json.loads(lock_file.read_text())
-                except (json.JSONDecodeError, Exception):
-                    allocations = []
             lock_file.write_text(self._with_allocation(allocations, item_id, actor))
             try:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
