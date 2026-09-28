@@ -134,13 +134,22 @@ def test_sync_and_push_no_remote_is_c_locale(world, spy) -> None:
 def test_sync_and_push_with_remote_is_c_locale(world, spy) -> None:
     out = run(world, Appender(sync_mod), Recorder())
     assert out.kind == "won", out.message
-    assert_all_c(spy, ("fetch",), ("push",), ("cat-file",), ("hook", "run"))
+    # every call under C but the pre-commit hook's, whose output is only shown
+    # and runs in the user's locale (#826)
+    assert spy.with_sub("hook", "run"), [c for c, _ in spy.calls]
+    bad = [line for line in spy.not_c() if not line.startswith("git hook run")]
+    assert not bad, "git calls not under LC_ALL=C / LANGUAGE=:\n" + "\n".join(bad)
+    for words in (("fetch",), ("push",), ("cat-file",)):
+        assert spy.with_sub(*words), [c for c, _ in spy.calls]
 
 
 def test_create_push_is_c_locale(world, spy, monkeypatch) -> None:
     result = run_create(world, monkeypatch)
     assert result.exit_code == 0, output_of(result)
-    assert_all_c(spy, ("push",))
+    assert spy.with_sub("push"), [c for c, _ in spy.calls]
+    # all under C but the pre-commit hook's, which runs in the user's locale (#826)
+    bad = [line for line in spy.not_c() if not line.startswith("git hook run")]
+    assert not bad, "git calls not under LC_ALL=C / LANGUAGE=:\n" + "\n".join(bad)
 
 
 # --- 1. structural: each direct subprocess.run(["git", ...]) site --------------------------
