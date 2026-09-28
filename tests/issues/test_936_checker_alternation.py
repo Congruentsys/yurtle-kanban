@@ -12,9 +12,11 @@ from tests.test_skill_commands_execute import _block_commands, _flags, _parse, _
 
 
 def test_alternation_after_a_value_is_checked() -> None:
+    """`list` has no `--all`: once the alternative is split off it is caught."""
     words = _parse("yurtle-kanban list [--status <s>|--all]")
     assert "--all" in _flags(words), words
-    assert _rejection(*words) is None, _rejection(*words)
+    problem = _rejection(*words)
+    assert problem is not None and "--all" in problem, problem
 
 
 def test_alternation_of_two_flags_is_two_flags() -> None:
