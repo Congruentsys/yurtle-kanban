@@ -2885,11 +2885,17 @@ class KanbanService:
             # --full-name: repo-rooted paths, as ls-tree gives, from a board in a
             # subdirectory too (#788)
             "grep", "-z", "-n", "-I", "--full-name", "-E", "^(---|id:[[:space:]])",
-            rev, "--", *specs
+            rev, "--", *specs, text=False,
         )
         ids = []
         state: dict[str, bool] = {}  # path -> still inside its frontmatter
-        for line in grep.stdout.splitlines():
+        # raw bytes, split on \n only: text mode turns a lone \r into \n, and
+        # splitlines() breaks on \x85 and U+2028/9 too, which YAML reads as line
+        # breaks but git grep does not (#830)
+        records = grep.stdout.decode("utf-8", "surrogateescape").split("\n")
+        for line in records:
+            if not line:
+                continue
             where, _, rest = line.partition("\0")
             number, _, text = rest.partition("\0")
             path = where.removeprefix(f"{rev}:")
@@ -2937,7 +2943,8 @@ class KanbanService:
         env: dict[str, str] | None = None,
         timeout: float | None = 30,
         user_locale: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
+        text: bool = True,
+    ) -> subprocess.CompletedProcess[Any]:
         """Run one git command in the repo root, capturing text output. Never
         interactive (#585): stdin is closed — always, so git can't eat text the CLI
         was piped (#580) — and git may not prompt for credentials, so a remote that
@@ -2953,7 +2960,7 @@ class KanbanService:
             ["git", *args],
             cwd=self.repo_root,
             capture_output=True,
-            text=True,
+            text=text,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
             env={**(os.environ if env is None else env), **fixed},
