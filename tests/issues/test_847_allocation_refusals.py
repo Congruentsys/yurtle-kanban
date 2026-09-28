@@ -46,7 +46,7 @@ from tests.issues.test_818_allocations_refuse_corrupt import (
 )
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
-from yurtle_kanban.models import InputRefused
+from yurtle_kanban.models import InputRefused, InvalidText
 from yurtle_kanban.service import _parse_allocations
 
 KEYS = {"success", "id", "prefix", "number", "message"}
@@ -329,9 +329,10 @@ def test_allocate_next_id_unencodable_prefix_raises(world, monkeypatch, sync: bo
     seed_local(world, "[]")
     monkeypatch.chdir(world.a)
     before = local_snapshot(world)
-    with pytest.raises(InputRefused) as info:
+    # the UTF-8 refusal itself, not the prefix-shape one that would follow it (#935)
+    with pytest.raises(InvalidText) as info:
         service(world).allocate_next_id("EXP\udcff", sync_remote=sync)
-    assert "prefix" in str(info.value), str(info.value)
+    assert "invalid UTF-8" in str(info.value), str(info.value)
     assert local_snapshot(world) == before, "the refused allocation wrote to A's checkout"
 
 
