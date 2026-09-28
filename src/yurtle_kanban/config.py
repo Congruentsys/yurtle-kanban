@@ -382,8 +382,8 @@ def _load_builtin_theme(
     """Load a theme from local .kanban/themes/ or package resources.
 
     With a `source`, the repo's own `.kanban/themes/` is read from it instead of
-    the working tree (the cwd's too, when that is the same repo): a commit's
-    overrides, then the built-ins (#831).
+    the working tree, and the cwd's is never read, whichever repo it is (#866): a
+    commit's overrides, then the built-ins (#831).
 
     The cache is keyed by the theme FILE that wins the lookup, not by the name:
     two repos with different `.kanban/themes/nautical.yaml` never share an entry,
@@ -403,7 +403,9 @@ def _load_builtin_theme(
                 _theme_cache[key] = _theme_from_text(text, Path(key))
             if _theme_cache[key] is not None:
                 return _theme_cache[key]
-        own = {(d / ".kanban" / "themes").resolve() for d in (repo_root,) if d}
+        # the commit's overrides replace the working tree's, the repo's and the
+        # cwd's alike: another repo the command runs from never judges (#866)
+        own = {(d / ".kanban" / "themes").resolve() for d in (repo_root, Path.cwd()) if d}
         dirs = [d for d in dirs if d.resolve() not in own]
     for theme_dir in dirs:
         theme_path = theme_dir / f"{theme_name}.yaml"
