@@ -4581,12 +4581,17 @@ class KanbanService:
                 f"Can't read {folder} at {rev}: git ls-tree failed "
                 f"({listed.stderr.strip() or f'exit {listed.returncode}'})"
             )
-        names = []
+        oids: dict[str, str] = {}  # the listing's object ids, read as they are (#880)
         for entry in listed.stdout.split("\0"):
             meta, tab, name = entry.partition("\t")
-            if tab and meta.split(" ")[0] in ("100644", "100755") and name.endswith(suffix):
-                names.append(name)
-        texts = self._blobs_at(rev, names)
+            parts = meta.split(" ")
+            if (
+                tab and len(parts) == 3 and parts[0] in ("100644", "100755")
+                and name.endswith(suffix)
+            ):
+                oids.setdefault(name, parts[2])
+        names = list(oids)
+        texts = self._blobs_at(rev, oids)
         for name in names:
             if name not in texts:
                 logger.warning(f"{name} at {rev} is not UTF-8 text; skipped")
