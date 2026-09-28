@@ -2875,21 +2875,48 @@ class KanbanService:
         return None
 
     def _holders_at(
-        self, rev: str, item_id: str, ids: list[tuple[str, str]] | None = None
+        self,
+        rev: str,
+        item_id: str,
+        ids: list[tuple[str, str]] | None = None,
+        *,
+        loaded: bool = False,
     ) -> list[str]:
-        """The files at commit `rev` the board would load as `item_id`: those whose
-        frontmatter `id:` is it (case folded, `EXP-3` is `EXP-003`). A filename is
-        not an id: a file without one is `STEM_WITH_UNDERSCORES` to the board, so
-        an outline or draft named after an item is no copy of it. More than one is
-        a duplicated ID there, as `duplicate_ids` counts it (#754)."""
+        """The files at commit `rev` whose frontmatter `id:` is `item_id` (case
+        folded, `EXP-3` is `EXP-003`). A filename is not an id: a file without one
+        is `STEM_WITH_UNDERSCORES` to the board, so an outline or draft named after
+        an item is no copy of it. More than one is a duplicated ID there, as
+        `duplicate_ids` counts it (#754). `loaded`: only those the board would
+        load, its ignore patterns applied as a scan applies them (#856) — for the
+        item acted on; the id space (allocation, collisions) sees every file."""
         if ids is None:
             ids = self._ids_at(rev)[1]
         key = self._id_key(item_id)
         folded = fold_id(item_id)
         return list(dict.fromkeys(
             path for path, found in ids
-            if fold_id(found) == folded or (key is not None and self._id_key(found) == key)
+            if (fold_id(found) == folded or (key is not None and self._id_key(found) == key))
+            and (not loaded or self._board_loads(path))
         ))
+
+    def _board_loads(self, rel: str) -> bool:
+        """Whether a scan would load the file at `rel` (from the work tree's top)
+        rather than ignore it (#856): on a multi-board config, a board whose root
+        holds it and whose own `ignore` doesn't cover it; else `paths.ignore`."""
+        top = self._git_toplevel()
+        path = top / rel
+        if not self.config.is_multi_board:
+            return not self._should_ignore(path)
+        for board in self.config.boards:
+            root = self._repo_relative(_under(self.repo_root, board.path), top)
+            if root is None:
+                continue
+            head = root.as_posix()
+            if head not in ("", ".") and not rel.startswith(head.rstrip("/") + "/"):
+                continue
+            if not self._should_ignore_for_board(path, board):
+                return True
+        return False
 
     def _folder_case_twin(self, rev: str, rels: list[Path]) -> str | None:
         """The folder at commit `rev`, in its own spelling, that one of `rels`'
@@ -3465,7 +3492,7 @@ class KanbanService:
         if child_type not in self._INVERSE_RELATIONS:
             return {}, "no-relation"
         ids = self._ids_at(base)[1]
-        holders = self._holders_at(base, parent_id, ids)
+        holders = self._holders_at(base, parent_id, ids, loaded=True)  # (#856)
         if len(holders) > 1:
             raise _CasRefusedError(
                 f"{parent_id} is on more than one board on origin/{self._default_branch()} "
@@ -4344,7 +4371,9 @@ class KanbanService:
             rel = Path(os.path.relpath(current.file_path, top)).as_posix()
         else:
             try:  # found where origin's config puts the boards (#831)
-                holders = self._judge_at(read.rev)._holders_at(read.rev, item_id)
+                holders = self._judge_at(read.rev)._holders_at(
+                    read.rev, item_id, loaded=True  # the board's item (#856)
+                )
             except _TreeUnreadableError as e:
                 return Refuse(str(e))
             if len(holders) > 1:
