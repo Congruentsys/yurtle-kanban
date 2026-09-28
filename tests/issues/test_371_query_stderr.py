@@ -6,9 +6,10 @@ Decided behaviour (click 8.5: `result.stdout` / `result.stderr` are separate,
 1. `query --json --verbose "<nl>"`: stdout is exactly valid JSON with the same ids
    as without `--verbose`; the "Parsed query:" block goes to stderr. Without
    `--json`, `--verbose` still shows the block (stream not pinned).
-2. Error paths under `--json` go to stderr, stdout stays empty:
-   - `query --json --semantic x` without the search extra: exit 1, hint on stderr.
-   - `query --json --sparql "<invalid>"`: exit 1 (today's code), message on stderr.
+2. Error paths under `--json` (superseded: since #877/#908 each is one JSON refusal
+   on stdout, pinned below and in test_908_semantic_json_refusal.py):
+   - `query --json --semantic x` without the search extra: exit 1.
+   - `query --json --sparql "<invalid>"`: exit 1 (today's code).
    Without `--json` the error text is still shown (checked on the combined output).
 3. `EmbeddingIndex._load_model` keeps the original ImportError text: a broken torch
    under sentence-transformers surfaces as "... (torch broken XYZ) ..." plus the
@@ -185,22 +186,8 @@ def test_control_plain_verbose_still_shows_parse_block(
 # ---------------------------------------------------------------------------
 
 
-def test_json_semantic_missing_extra_error_on_stderr(repo: Path, runner: CliRunner) -> None:
-    result = runner.invoke(main, ["query", "--json", "--semantic", "latency"])
-    _assert_clean(result)
-    assert result.exit_code == 1, result.output
-    assert result.stdout == "", f"stdout not empty:\n{result.stdout!r}"
-    assert _has_install_hint(result.stderr), f"stderr:\n{result.stderr!r}"
-
-
-def test_json_semantic_broken_extra_error_on_stderr(
-    broken_extra: Path, runner: CliRunner
-) -> None:
-    result = runner.invoke(main, ["query", "--json", "--semantic", "latency"])
-    _assert_clean(result)
-    assert result.exit_code == 1, result.output
-    assert result.stdout == "", f"stdout not empty:\n{result.stdout!r}"
-    assert _has_install_hint(result.stderr), f"stderr:\n{result.stderr!r}"
+# `query --json --semantic` without a working search extra: a JSON refusal on
+# stdout since #908 (tests/issues/test_908_semantic_json_refusal.py).
 
 
 def test_json_invalid_sparql_error_is_json_refusal(repo: Path, runner: CliRunner) -> None:
