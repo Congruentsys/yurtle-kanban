@@ -2541,7 +2541,10 @@ class KanbanService:
         outside, `mutate` is first asked against the working tree, and when it read
         or wrote a file outside, that answer (Change, NoOp or Refuse) stands, made
         here without touching origin; otherwise the compare-and-swap asks again
-        against origin's tree (mutate is pure), so an in-repo Change keeps it."""
+        against origin's tree (mutate is pure), so an in-repo Change keeps it.
+        So a `mutate` that reads a file on an external board, even one that turns
+        out missing, makes an in-repo write go local (#833): read external items
+        from the working tree directly, as `_dependency_board_at` does."""
         if not self._has_remote():
             return self._sync_locally(mutate)
         if self._board_outside_repo():
@@ -5802,17 +5805,38 @@ class KanbanService:
         if (judge := self._judge_at(rev)) is not self:
             return judge._dependency_board_at(rev)
         configs = list(self.config.boards) if self.config.is_multi_board else [None]
+        # origin can't hold a board outside the repository: its items are the
+        # working tree's, beside `rev`'s in-repo ones (#833)
+        outside = self._items_outside_repo()
         graph = {
             fold_id(i.id): self._id_list(i.depends_on)
             for c in configs for i in self._items_at(rev, c)
         }
+        graph.update((fold_id(i.id), self._id_list(i.depends_on)) for i in outside)
         top = self._git_toplevel()
         files: dict[str, list[Path]] = {}
-        for path, found in self._ids_at(rev)[1]:
+        found_at = [(top / path, found) for path, found in self._ids_at(rev)[1]]
+        for path, found in [*found_at, *((i.file_path, i.id) for i in outside)]:
             held = files.setdefault(fold_id(found), [])
-            if top / path not in held:
-                held.append(top / path)
+            if path not in held:
+                held.append(path)
         return graph, {i: f for i, f in files.items() if len(f) > 1}
+
+    def _items_outside_repo(self) -> list[WorkItem]:
+        """The working tree's items on boards that lie outside the git repository
+        (#833), each board applying its own ignore patterns as a scan does."""
+        items: list[WorkItem] = []
+        with self._scan_scope():
+            if self.config.is_multi_board:
+                for board in self.config.boards:
+                    if self._outside_git(_under(self.repo_root, board.path)):
+                        items += self._scan_board(board)
+            else:
+                for p in self.config.get_work_paths():
+                    root = _under(self.repo_root, p)
+                    if root.exists() and self._outside_git(root):
+                        items += self._scan_directory(root)
+        return items
 
     @staticmethod
     def _check_title(title: str) -> None:
