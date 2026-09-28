@@ -3702,7 +3702,7 @@ class KanbanService:
         # a blank-node label, skipped whole: `_:a.b` is no `b:` name (#1001)
         rf"|_:[\w][\w.{_PN_EXTRA}-]*(?<!\.)"
         # a keyword ends at a `.`: `true.x:B` is `true`, `.`, `x:B` (#1001)
-        r"|(?<![\w:-])(?:true|false)(?![\w:-])"
+        rf"|(?<![\w:-])(?:true|false)(?![\w:{_PN_EXTRA}-])"
         rf"|(?<![\w:-])({_PN_PREFIX})?:({_PN_LOCAL})"
     )
 

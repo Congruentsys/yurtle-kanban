@@ -340,3 +340,29 @@ def test_state_is_judged_on_the_first_written_subject(repo, inner, subject, writ
     assert svc.parent_link_state("PAPER-130", "hypothesis", "H130.1") == "linked"
     assert svc.link_parent("PAPER-130", "hypothesis", "H130.1") == "linked"
     assert path.read_bytes() == before
+
+
+# --- round 2 (PR #1019 review): a keyword-like prefix with a PN_CHARS extra ------------
+
+
+@pytest.mark.parametrize(
+    "prefix", ["tru" + "ë", "true·x", "false·y", "true‿y"],
+    ids=["true-decomposed-diaeresis", "true-middot", "false-middot", "true-undertie"],
+)
+def test_keyword_like_prefix_with_pn_extra_binds(prefix: str) -> None:
+    """`truë:` (a decomposed ë) and friends are prefixes, not the `true` keyword."""
+    from rdflib import Graph, URIRef
+
+    from yurtle_kanban.service import KanbanService
+
+    text = (
+        f"@prefix {prefix}: <https://m.org/> .\n"
+        f"{prefix}:Beta <https://p.org/p> 1 .\n"
+        "<https://a.org/Z> <https://p.org/p> 2 .\n"
+    )
+    g = Graph(bind_namespaces="none")
+    g.parse(data=text, format="turtle", publicID="urn:yurtle:block")
+    subjects = sorted({s for s in g.subjects() if isinstance(s, URIRef)}, key=str)
+    assert URIRef("https://m.org/Beta") in subjects, subjects
+    got = KanbanService._first_written(text, subjects, dict(g.namespaces()), "urn:yurtle:block")
+    assert str(got) == "https://m.org/Beta", got
