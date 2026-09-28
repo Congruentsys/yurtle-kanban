@@ -205,7 +205,8 @@ def _push_only_head_or_exit(service, what: str) -> None:
             f"branch {name} has {len(others)} other unpushed commit(s) that a push "
             f"would publish too: {'; '.join(others)}"
         )
-    done = service._git_run("push", remote, f"HEAD:{merge}")
+    # runs the user's pre-push; its output is only shown (#848)
+    done = service._git_run("push", remote, f"HEAD:{merge}", user_locale=True)
     if done.returncode != 0:
         console.print(
             # git's multi-line stderr folded onto one line, as #603 does (#623)

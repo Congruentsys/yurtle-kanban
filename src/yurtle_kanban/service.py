@@ -5265,7 +5265,10 @@ class KanbanService:
             raise GitCommitError(f"Git commit failed ({message}): {self._git_output(add)}")
         if self._git_run("diff", "--cached", "--quiet", "HEAD", "--", *rels).returncode == 0:
             return False  # nothing of ours changed
-        done = self._git_run("commit", "--only", "-m", message, "--", *rels, timeout=None)
+        done = self._git_run(
+            "commit", "--only", "-m", message, "--", *rels, timeout=None,
+            user_locale=True,  # runs the user's pre-commit; only shown (#848)
+        )
         if done.returncode != 0:
             raise GitCommitError(f"Git commit failed ({message}): {self._git_output(done)}")
         return True

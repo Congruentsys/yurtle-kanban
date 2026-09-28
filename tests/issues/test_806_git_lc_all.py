@@ -128,7 +128,11 @@ def test_sync_and_push_no_remote_is_c_locale(world, spy) -> None:
     _no_remote(world)
     out = run(world, Appender(sync_mod), Recorder())
     assert out.kind == "local", out.message
-    assert_all_c(spy, ("commit", "--only"))
+    # every call under C but the commit, whose pre-commit hook runs in the user's
+    # locale and whose output is only shown (#848)
+    assert spy.with_sub("commit", "--only"), [c for c, _ in spy.calls]
+    bad = [line for line in spy.not_c() if not line.startswith("git commit")]
+    assert not bad, "git calls not under LC_ALL=C / LANGUAGE=:\n" + "\n".join(bad)
 
 
 def test_sync_and_push_with_remote_is_c_locale(world, spy) -> None:
