@@ -40,6 +40,7 @@ from click.testing import CliRunner
 from rdflib import RDF, BNode, Literal, URIRef
 from rdflib.namespace import XSD
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_349_sparql_distinct import (  # noqa: F401 (fixtures)
     DUAL,
     engine,
@@ -77,7 +78,7 @@ _BLOCK = """
 
 
 def _item_file(repo: Path, item_id: str) -> Path:
-    (path,) = repo.rglob(f"{item_id}-*.md")
+    (path,) = glob_outside_git(repo, f"{item_id}-*.md")
     return path
 
 

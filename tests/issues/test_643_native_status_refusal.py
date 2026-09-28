@@ -37,6 +37,7 @@ import yaml
 from click.testing import CliRunner, Result
 from rich.console import Console
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban import cli
 from yurtle_kanban.cli import main
 from yurtle_kanban.mcp.server import KanbanMCPServer
@@ -133,7 +134,7 @@ def _single(buf: io.StringIO, theme: str) -> str:
 
 
 def _item_file(repo: Path, item_id: str) -> Path:
-    files = [p for p in repo.rglob(f"{item_id}-*.md") if ".git" not in p.parts]
+    files = list(glob_outside_git(repo, f"{item_id}-*.md"))
     assert len(files) == 1, files
     return files[0]
 

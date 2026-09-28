@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
 from yurtle_kanban import HookEngine
 from yurtle_kanban import hooks as hooks_mod
 from yurtle_kanban.hooks import HookContext, HookEvent
@@ -181,7 +182,7 @@ def test_relative_str_root_matches_relative_path_root(
     def written() -> list[str]:
         return sorted(
             p.relative_to(tmp_path).as_posix()
-            for p in tmp_path.rglob("*")
+            for p in paths_outside_git(tmp_path)
             if p.is_file() and p != hooks
         )
 

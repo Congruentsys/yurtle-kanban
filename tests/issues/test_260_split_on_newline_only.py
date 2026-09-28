@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts/assemble_changelog.py"
 DATE = "2026-09-25"
@@ -61,7 +63,7 @@ def release(tmp_path: Path) -> subprocess.CompletedProcess[str]:
 
 def snapshot(tmp_path: Path) -> dict[str, bytes]:
     return {str(p.relative_to(tmp_path)): p.read_bytes()
-            for p in sorted(tmp_path.rglob("*")) if p.is_file()}
+            for p in sorted(paths_outside_git(tmp_path)) if p.is_file()}
 
 
 def assert_refused(tmp_path: Path, before: dict[str, bytes],

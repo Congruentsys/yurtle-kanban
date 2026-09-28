@@ -47,6 +47,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 
@@ -291,8 +292,8 @@ def _normalized(result, repo: Path) -> str:
 def _tree(repo: Path) -> list[str]:
     return sorted(
         p.relative_to(repo).as_posix()
-        for p in repo.rglob("*.md")
-        if ".git" not in p.parts and ".kanban" not in p.parts
+        for p in glob_outside_git(repo, "*.md")
+        if ".kanban" not in p.parts
     )
 
 

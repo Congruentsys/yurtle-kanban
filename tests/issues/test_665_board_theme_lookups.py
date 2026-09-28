@@ -42,6 +42,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_633_per_board_column_map import (
     _multi_repo,
     _service,
@@ -91,12 +92,12 @@ def _create(repo: Path, monkeypatch: pytest.MonkeyPatch, args: list[str]) -> tup
     """Run `create`, return (id, file) of the one new file under the repo."""
     monkeypatch.chdir(repo)
     config_mod._theme_cache.clear()
-    before = set(repo.rglob("*.md"))
+    before = set(glob_outside_git(repo, "*.md"))
     result = CliRunner().invoke(main, ["create", *args])
     if result.exception is not None and not isinstance(result.exception, SystemExit):
         raise AssertionError(f"`create {' '.join(args)}` crashed: {result.exception!r}")
     assert result.exit_code == 0, result.output
-    new = [p for p in set(repo.rglob("*.md")) - before if ".kanban" not in p.parts]
+    new = [p for p in set(glob_outside_git(repo, "*.md")) - before if ".kanban" not in p.parts]
     assert len(new) == 1, f"expected one new item file, got {new}\n{result.output}"
     ids = [ln[3:].strip() for ln in new[0].read_text().splitlines() if ln.startswith("id:")]
     assert ids, f"no id in {new[0]}"

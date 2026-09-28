@@ -28,6 +28,7 @@ from click.testing import CliRunner
 from rdflib import Literal
 from rdflib.namespace import XSD
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_349_sparql_distinct import (  # noqa: F401 (fixtures)
     DUAL,
     engine,
@@ -50,7 +51,7 @@ item:{item_id} {body} .
 
 def _add_block(repo: Path, item_id: str, body: str) -> None:
     """Append a yurtle block with ``item:<item_id> <body> .`` to the item's file."""
-    (path,) = repo.rglob(f"{item_id}-*.md")
+    (path,) = glob_outside_git(repo, f"{item_id}-*.md")
     path.write_text(
         path.read_text(encoding="utf-8") + _BLOCK.format(item_id=item_id, body=body),
         encoding="utf-8",

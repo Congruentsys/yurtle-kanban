@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts/assemble_changelog.py"
 CONTRIBUTING = REPO / "CONTRIBUTING.md"
@@ -76,7 +78,7 @@ def release(tmp_path: Path, date: str = DATE) -> subprocess.CompletedProcess[str
 
 def snapshot(tmp_path: Path) -> dict[str, bytes]:
     return {str(p.relative_to(tmp_path)): p.read_bytes()
-            for p in sorted(tmp_path.rglob("*")) if p.is_file()}
+            for p in sorted(paths_outside_git(tmp_path)) if p.is_file()}
 
 
 def between(text: str, start: str, end: str) -> str:

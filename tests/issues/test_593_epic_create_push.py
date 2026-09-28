@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import glob_outside_git
+
 SRC = Path(__file__).resolve().parents[2] / "src"
 TITLE = "Chart the reef"
 
@@ -80,8 +82,8 @@ CASES = {
 
 def _new_files(repo: Path, prefix: str) -> list[Path]:
     return [
-        p for p in repo.rglob(f"{prefix}*.md")
-        if ".git" not in p.parts and ".kanban" not in p.parts
+        p for p in glob_outside_git(repo, f"{prefix}*.md")
+        if ".kanban" not in p.parts
     ]
 
 

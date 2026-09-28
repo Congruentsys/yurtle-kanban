@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.issues._snapshot import paths_outside_git
 from tests.issues.test_347_hooks_repo_cwd import (
     LOG_DEFAULT,
     _assert_cwd_untouched,
@@ -45,7 +46,7 @@ def _ctx(**kwargs: str) -> HookContext:
 
 
 def _files_under(root: Path) -> set[Path]:
-    return {p.resolve() for p in root.rglob("*") if p.is_file()}
+    return {p.resolve() for p in paths_outside_git(root) if p.is_file()}
 
 
 def _log_service(tmp_path: Path, path_template: str) -> tuple[Path, Path, KanbanService]:

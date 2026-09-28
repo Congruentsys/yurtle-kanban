@@ -27,6 +27,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_439_list_theme_status import (  # noqa: F401  (fixtures)
     THEMES_DIR,
     _clear_theme_cache,
@@ -199,7 +200,7 @@ N_RESEARCH = 60
 def _many_research_items(repo: Path, runner: CliRunner, wide: io.StringIO) -> None:
     _multiboard(runner)
     first = _created_id(runner, wide, ["create", "idea", "template"])
-    template = next(p for p in repo.rglob(f"{first}-*.md") if ".git" not in p.parts)
+    template = next(glob_outside_git(repo, f"{first}-*.md"))
     assert "research" in template.relative_to(repo).parts, template
     body = re.sub(r"(?m)^status: .*$", "status: active", template.read_text())
     template.write_text(body)
