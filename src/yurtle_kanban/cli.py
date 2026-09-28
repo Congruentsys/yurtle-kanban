@@ -25,7 +25,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import click
 from rich.console import Console
@@ -1330,6 +1330,11 @@ def _id_csv(value: str | None) -> list[str] | None:
     "--allow-unknown", is_flag=True, help="Accept dependency IDs that are on no board"
 )
 @click.option("--no-commit", is_flag=True, help="Write the file, but don't commit it")
+@click.option(
+    "--push",
+    is_flag=True,
+    help="Edit the item as origin has it and push one commit there, race-free (#574)",
+)
 def update(
     item_id: str,
     title: str | None,
@@ -1344,6 +1349,7 @@ def update(
     related: str | None,
     allow_unknown: bool,
     no_commit: bool,
+    push: bool,
 ):
     """Edit a work item's fields and dependencies (not its status: use move).
 
@@ -1352,6 +1358,11 @@ def update(
     alone and names each change. A dependency that points at the item itself,
     at an ID on no board (without --allow-unknown) or on two boards, or that
     closes a cycle is refused, and nothing is written.
+
+    With --push the edit is made to the item as origin's default branch has it,
+    checked against that board, and pushed as one commit (a kanban-only commit);
+    your checkout is not touched. Exit codes as claim's: 0 updated (or nothing
+    to change), 1 refused, 4 remote unreachable, 5 remote busy, 6 push refused.
 
     Examples:
 
@@ -1368,21 +1379,32 @@ def update(
         description = read_text_option(body, body_file, "body")
     except ValueError as e:
         _refuse(e)
+    if push and no_commit:
+        _refuse(ValueError("--push commits and pushes: it can't be used with --no-commit"))
     service = get_service()
+    edits: dict[str, Any] = dict(
+        title=title,
+        priority=priority,
+        description=description,
+        add_tags=list(add_tags),
+        remove_tags=list(remove_tags),
+        depends_on=_id_csv(depends_on),
+        add_depends_on=list(add_dep),
+        remove_depends_on=list(rm_dep),
+        related=_id_csv(related),
+        allow_unknown=allow_unknown,
+    )
+    if push:
+        try:
+            outcome = service.update_item_push(item_id.upper(), **edits)
+        except InputRefused as e:
+            _refuse(e)
+        color = "green" if outcome.exit_code == 0 else "red"
+        console.print(f"[{color}]{safe(outcome.message)}[/{color}]", soft_wrap=True)
+        sys.exit(int(outcome.exit_code))
     try:
         item, changes = service.update_item_changes(
-            item_id.upper(),
-            title=title,
-            priority=priority,
-            description=description,
-            add_tags=list(add_tags),
-            remove_tags=list(remove_tags),
-            depends_on=_id_csv(depends_on),
-            add_depends_on=list(add_dep),
-            remove_depends_on=list(rm_dep),
-            related=_id_csv(related),
-            allow_unknown=allow_unknown,
-            commit=not no_commit,
+            item_id.upper(), **edits, commit=not no_commit
         )
     except ValueError as e:
         _refuse(e)

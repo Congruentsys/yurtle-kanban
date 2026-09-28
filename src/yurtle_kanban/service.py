@@ -90,6 +90,33 @@ class _Claimed:
     assignee: str
 
 
+@dataclass(frozen=True)
+class _Edits:
+    """An `update`'s field-level edits (#576), as `update_item_changes` and
+    `update_item_push` take them (#574 §5)."""
+
+    title: str | None = None
+    priority: str | None = None
+    assignee: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    add_tags: list[str] | None = None
+    remove_tags: list[str] | None = None
+    depends_on: list[str] | None = None
+    add_depends_on: list[str] | None = None
+    remove_depends_on: list[str] | None = None
+    related: list[str] | None = None
+    allow_unknown: bool = False
+
+    @property
+    def editing_deps(self) -> bool:
+        return (
+            self.depends_on is not None
+            or bool(self.add_depends_on)
+            or bool(self.remove_depends_on)
+        )
+
+
 class _CasRefusedError(Exception):
     """A compare-and-swap commit (#585, #590) that can't be built; its message is
     the failure the caller reports."""
@@ -3935,7 +3962,7 @@ class KanbanService:
         workflow rules, WIP (counted in `read`'s tree) and gates on the PROPOSED
         item (#586). `take_over` overrides the two holder refusals and records
         `kb:takenOverFrom`; an item already in progress then changes holder only."""
-        found = self._claim_target(read, item_id)
+        found = self._item_target(read, item_id, "a claim")
         if isinstance(found, Refuse):
             return found
         rel, text, item = found
@@ -3987,17 +4014,18 @@ class KanbanService:
         )
         return Change({rel: new_text}, message, data=claimed)
 
-    def _claim_target(
-        self, read: Read, item_id: str
+    def _item_target(
+        self, read: Read, item_id: str, action: str
     ) -> tuple[str, str, WorkItem] | Refuse:
         """(path relative to the git work tree, LF text, parsed item) of `item_id`
         in `read`'s tree: the fetched commit's, else the working tree's (#574). An
         ID held by more than one file there is refused, as every writer refuses it
-        (#742, #754): which copy the claim meant is ambiguous."""
+        (#742, #754): which copy `action` ("a claim", "an update") meant is
+        ambiguous."""
         top = self._git_toplevel()
         if read.rev is None:
             try:
-                current = self._writable_item(item_id, "a claim")  # refuse_duplicate
+                current = self._writable_item(item_id, action)  # refuse_duplicate
             except ValueError as e:
                 return Refuse(str(e))
             rel = Path(os.path.relpath(current.file_path, top)).as_posix()
@@ -4005,8 +4033,8 @@ class KanbanService:
             holders = self._holders_at(read.rev, item_id)
             if len(holders) > 1:
                 return Refuse(
-                    f"{item_id} is on more than one board ({', '.join(holders)}): a claim "
-                    "to it is ambiguous; fix the duplicate ID first"
+                    f"{item_id} is on more than one board ({', '.join(holders)}): "
+                    f"{action} to it is ambiguous; fix the duplicate ID first"
                 )
             if not holders:
                 return Refuse(f"Item not found on origin: {item_id}")
@@ -5157,46 +5185,89 @@ class KanbanService:
         ID on no board (unless `allow_unknown`), or a step on a path back to this item
         (a cycle). Every refusal is a ValueError raised before anything is written.
         """
-        priority = self._normalize_priority(priority)
-        if title is not None:
-            self._check_title(title)
-        self._check_text(
-            title=title, description=description, assignee=assignee, tags=tags,
-            add_tags=add_tags, remove_tags=remove_tags, depends_on=depends_on,
+        edits = self._checked_edits(_Edits(
+            title=title, priority=priority, assignee=assignee, description=description,
+            tags=tags, add_tags=add_tags, remove_tags=remove_tags, depends_on=depends_on,
             add_depends_on=add_depends_on, remove_depends_on=remove_depends_on,
-            related=related,
-        )
-        self._check_no_comments_heading(description)
-        for tag in [*(tags or []), *(add_tags or [])]:
-            if not str(tag).strip():
-                raise InputRefused("A tag is empty: give a tag")
-        editing_deps = (
-            depends_on is not None or bool(add_depends_on) or bool(remove_depends_on)
-        )
-        if editing_deps:
+            related=related, allow_unknown=allow_unknown,
+        ))
+        if edits.editing_deps:
             self.scan()  # the whole graph as the files say now (#638)
         item = self._writable_item(item_id, "an update")
 
-        new_tags: list[str] | None = None
-        if tags is not None or add_tags or remove_tags:
-            new_tags = list(item.tags if tags is None else tags)
-            new_tags += [t for t in dict.fromkeys(add_tags or []) if t not in new_tags]
-            new_tags = [t for t in new_tags if t not in (remove_tags or [])]
-        new_deps: list[str] | None = None
-        if editing_deps:
-            new_deps = self._id_list(item.depends_on if depends_on is None else depends_on)
-            new_deps += [d for d in self._id_list(add_depends_on or []) if d not in new_deps]
-            dropped = set(self._id_list(remove_depends_on or []))
-            new_deps = [d for d in new_deps if d not in dropped]
-            self._check_new_dependencies(item, new_deps, allow_unknown)
-        new_related = None if related is None else self._id_list(related)
-
-        # Field-level edits only, like rank_item (#583): every line the update
-        # doesn't touch - unknown keys, the native status, the history block,
-        # comments - stays byte-for-byte, and so do the file's line endings.
         content, eol = self._read_item_text(item.file_path)
+        content, changes = self._edited_text(item, content, edits)
+        if not changes:
+            return item, []  # Nothing to update: no write, no commit
+
+        self._write_item_text(item.file_path, content, eol)
+        item = self._reread_item(item) or item  # the cache holds the file now (#638)
+
+        # Git commit if requested: the item file only (#584)
+        if commit:
+            self._git_commit(
+                item.file_path,
+                message or f"Update {item.id}: {', '.join(changes)}",  # (#751)
+            )
+
+        return item, changes
+
+    def _checked_edits(self, edits: _Edits) -> _Edits:
+        """`edits` with its priority normalized, after the checks that need no item
+        (#576, #721): a bad priority, title or text, a `## Comments` heading in the
+        body, a blank tag. Raises InputRefused."""
+        priority = self._normalize_priority(edits.priority)
+        if edits.title is not None:
+            self._check_title(edits.title)
+        self._check_text(
+            title=edits.title, description=edits.description, assignee=edits.assignee,
+            tags=edits.tags, add_tags=edits.add_tags, remove_tags=edits.remove_tags,
+            depends_on=edits.depends_on, add_depends_on=edits.add_depends_on,
+            remove_depends_on=edits.remove_depends_on, related=edits.related,
+        )
+        self._check_no_comments_heading(edits.description)
+        for tag in [*(edits.tags or []), *(edits.add_tags or [])]:
+            if not str(tag).strip():
+                raise InputRefused("A tag is empty: give a tag")
+        return replace(edits, priority=priority)
+
+    def _edited_text(
+        self,
+        item: WorkItem,
+        content: str,
+        edits: _Edits,
+        board: tuple[dict[str, list[str]], dict[str, list[Path]]] | None = None,
+    ) -> tuple[str, list[str]]:
+        """`content`, the LF text of `item`'s file, with `edits` applied, and the
+        changes as the commit message names them (empty when nothing changed). A
+        pure text-to-text edit: nothing is read or written (#574 §5). New
+        dependencies are checked against `board`, a (dependency graph, duplicated
+        IDs) pair, else against the scanned board (#576). Raises InputRefused.
+
+        Field-level edits only, like rank_item (#583): every line the update
+        doesn't touch - unknown keys, the native status, the history block,
+        comments - stays byte-for-byte."""
+        new_tags: list[str] | None = None
+        if edits.tags is not None or edits.add_tags or edits.remove_tags:
+            new_tags = list(item.tags if edits.tags is None else edits.tags)
+            new_tags += [t for t in dict.fromkeys(edits.add_tags or []) if t not in new_tags]
+            new_tags = [t for t in new_tags if t not in (edits.remove_tags or [])]
+        new_deps: list[str] | None = None
+        if edits.editing_deps:
+            new_deps = self._id_list(
+                item.depends_on if edits.depends_on is None else edits.depends_on
+            )
+            new_deps += [
+                d for d in self._id_list(edits.add_depends_on or []) if d not in new_deps
+            ]
+            dropped = set(self._id_list(edits.remove_depends_on or []))
+            new_deps = [d for d in new_deps if d not in dropped]
+            self._check_new_dependencies(item, new_deps, edits.allow_unknown, board)
+        new_related = None if edits.related is None else self._id_list(edits.related)
+
         original = content
         changes: list[str] = []
+        title, priority, assignee = edits.title, edits.priority, edits.assignee
 
         if title is not None and title != item.title:
             content = self._add_or_update_frontmatter_field(content, "title", yaml_quote(title))
@@ -5213,8 +5284,8 @@ class KanbanService:
             )
             changes.append("assignee")
 
-        if description is not None:
-            updated = self._replace_body(content, description)
+        if edits.description is not None:
+            updated = self._replace_body(content, edits.description)
             if updated != content:
                 content = updated
                 changes.append("description")
@@ -5232,19 +5303,93 @@ class KanbanService:
                 changes.append(self._list_change(key, old, new))
 
         if not changes or content == original:
-            return item, []  # Nothing to update: no write, no commit
+            return original, []
+        return content, changes
 
-        self._write_item_text(item.file_path, content, eol)
-        item = self._reread_item(item) or item  # the cache holds the file now (#638)
+    def update_item_push(
+        self,
+        item_id: str,
+        *,
+        title: str | None = None,
+        priority: str | None = None,
+        assignee: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        add_tags: list[str] | None = None,
+        remove_tags: list[str] | None = None,
+        depends_on: list[str] | None = None,
+        add_depends_on: list[str] | None = None,
+        remove_depends_on: list[str] | None = None,
+        related: list[str] | None = None,
+        allow_unknown: bool = False,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """`update_item_changes`' edits as one compare-and-swap commit on origin's
+        default branch (#574 §5), applied to the item as the FETCHED tree has it,
+        so a rival's change to another line survives and a rival's edit of the
+        same field is overwritten (last writer wins). Dependencies are checked
+        against the fetched board. Refusals are `refused` (there is no holder to
+        lose to); an edit the fetched item already has is `noop`. `seam`, `sleep`
+        and `jitter` are `sync_and_push`'s."""
+        try:
+            edits = self._checked_edits(_Edits(
+                title=title, priority=priority, assignee=assignee, description=description,
+                tags=tags, add_tags=add_tags, remove_tags=remove_tags, depends_on=depends_on,
+                add_depends_on=add_depends_on, remove_depends_on=remove_depends_on,
+                related=related, allow_unknown=allow_unknown,
+            ))
+        except ValueError as e:
+            return Outcome("refused", str(e))
 
-        # Git commit if requested: the item file only (#584)
-        if commit:
-            self._git_commit(
-                item.file_path,
-                message or f"Update {item.id}: {', '.join(changes)}",  # (#751)
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            return self._update_change(read, item_id, edits)
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        return outcome
+
+    def _update_change(self, read: Read, item_id: str, edits: _Edits) -> Change | NoOp | Refuse:
+        """`update --push`'s `mutate` (#574 §5): `edits` applied to the item as
+        `read`'s tree has it, new dependencies checked against that tree's board."""
+        if read.rev is None and edits.editing_deps:
+            self.scan()  # the whole graph as the files say now (#638)
+        found = self._item_target(read, item_id, "an update")
+        if isinstance(found, Refuse):
+            return found
+        rel, text, item = found
+        try:
+            board = (
+                self._dependency_board_at(read.rev)
+                if edits.editing_deps and read.rev is not None else None
             )
+            new_text, changes = self._edited_text(item, text, edits, board)
+        except ValueError as e:
+            return Refuse(str(e))
+        if not changes:
+            return NoOp(f"{item.id} already says so: no changes")
+        return Change({rel: new_text}, f"Update {item.id}: {', '.join(changes)}")  # (#751)
 
-        return item, changes
+    def _dependency_board_at(
+        self, rev: str
+    ) -> tuple[dict[str, list[str]], dict[str, list[Path]]]:
+        """(`dependency_graph`, `duplicate_ids`) as commit `rev` has the boards
+        (#574, #576): what `_check_new_dependencies` checks a pushed edit against."""
+        configs = list(self.config.boards) if self.config.is_multi_board else [None]
+        graph = {
+            i.id.upper(): self._id_list(i.depends_on)
+            for c in configs for i in self._items_at(rev, c)
+        }
+        top = self._git_toplevel()
+        files: dict[str, list[Path]] = {}
+        for path, found in self._ids_at(rev)[1]:
+            held = files.setdefault(found.upper(), [])
+            if top / path not in held:
+                held.append(top / path)
+        return graph, {i: f for i, f in files.items() if len(f) > 1}
 
     @staticmethod
     def _check_title(title: str) -> None:
@@ -5289,20 +5434,29 @@ class KanbanService:
         return " ".join([key, *edits])
 
     def _check_new_dependencies(
-        self, item: WorkItem, new_deps: list[str], allow_unknown: bool
+        self,
+        item: WorkItem,
+        new_deps: list[str],
+        allow_unknown: bool,
+        board: tuple[dict[str, list[str]], dict[str, list[Path]]] | None = None,
     ) -> None:
         """Refuse the targets this edit adds to `item.depends_on` (#576): the item
         itself, an ID on more than one board, an ID on no board (unless
         `allow_unknown`), or one that leads back to the item. Edges the item already
         has are not re-checked, so an unrelated edit on an item already in a cycle,
-        or with a dangling target, still goes through."""
+        or with a dangling target, still goes through. `board` is the (dependency
+        graph, duplicated IDs) to check against, e.g. a fetched commit's (#574);
+        default the scanned board's."""
         me = item.id.upper()
         had = set(self._id_list(item.depends_on))
         added = [d for d in new_deps if d not in had]
         if not added:
             return
-        graph = self.dependency_graph()
-        duplicated = {i.upper(): files for i, files in self.duplicate_ids.items()}
+        if board is None:
+            graph = self.dependency_graph()
+            duplicated = {i.upper(): files for i, files in self.duplicate_ids.items()}
+        else:
+            graph, duplicated = dict(board[0]), board[1]
         for target in added:
             if target == me:
                 raise InputRefused(f"{me} can't depend on itself")
