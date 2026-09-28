@@ -2347,7 +2347,9 @@ class KanbanService:
             self.scan()
             blobs, message = build(base)
 
-            sha, error = self._commit_on(base, blobs, message)
+            sha, error = self._commit_on(
+                base, blobs, message, refusal_suffix="(nothing was created)"
+            )
             if sha is None:
                 return failed(error or "Git commit failed")
 
@@ -2379,12 +2381,20 @@ class KanbanService:
         )
 
     def _commit_on(
-        self, base: str, blobs: dict[Path, str], message: str
+        self,
+        base: str,
+        blobs: dict[Path, str],
+        message: str,
+        *,
+        refusal_suffix: str,
+        skip_empty: bool = False,
     ) -> tuple[str | None, str | None]:
         """Build one commit on `base` writing `blobs` (repo-relative path -> text,
         its bytes exactly), without touching the worktree, the index or any ref
         (#585, #574): a temporary index, the user's pre-commit hook run against it
-        (#584), then `commit-tree -p base`. Returns (sha, None), or (None, why)."""
+        (#584), then `commit-tree -p base`. Returns (sha, None), or (None, why), why
+        ending in `refusal_suffix` when the hook refused (#805). With `skip_empty`,
+        a tree equal to `base`'s makes no commit and runs no hook: (base, None)."""
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2404,6 +2414,10 @@ class KanbanService:
                 )]
             tree = self._git_run("write-tree", env=env)
             steps.append(tree)
+            if skip_empty and all(s.returncode == 0 for s in steps):
+                was = self._git_run("rev-parse", f"{base}^{{tree}}")
+                if was.returncode == 0 and was.stdout.strip() == tree.stdout.strip():
+                    return base, None  # the base already holds it (#805)
             # commit-tree runs no hooks: run pre-commit against this index (#584)
             if all(s.returncode == 0 for s in steps):
                 hook = self._git_run(
@@ -2412,7 +2426,7 @@ class KanbanService:
                 if hook.returncode != 0:
                     return None, (
                         f"Git commit failed: the pre-commit hook refused it: "
-                        f"{self._git_output(hook)} (nothing was created)"
+                        f"{self._git_output(hook)} {refusal_suffix}"
                     )
             commit = self._git_run(
                 "commit-tree", tree.stdout.strip(), "-p", base, "-m", message
@@ -2455,16 +2469,23 @@ class KanbanService:
         `jitter(0.1, 1.0) * (attempt + 1)` and retries on a fresh base; after
         `attempts` it is "busy". A `Refuse` with a holder after such a rejection is
         "lost". Any other refusal is "push_refused" and a remote that can't be
-        reached "unreachable", neither retried. With no `origin`, or a board outside
-        the repository, the change is made and committed here only ("local")."""
-        if not self._has_remote() or self._board_outside_repo():
+        reached "unreachable", neither retried. A `Change` whose tree equals the
+        base's is "noop" (#805). With no `origin`, the change is made and committed
+        here only ("local"); so is a `Change` naming a file outside the repository,
+        decided per Change (#805): `mutate` is asked again against the working tree,
+        and an in-repo Change keeps the compare-and-swap even when another board is
+        external."""
+        if not self._has_remote():
             return self._sync_locally(mutate)
         branch = "main"
         rejected = False
         attempts = max(1, attempts)
+        tried = 1  # the attempt under way, for an outcome raised mid-attempt (#805)
+        local = False  # a Change naming a file outside the repository (#805)
         try:
             branch, known = self._resolve_default()
             for attempt in range(attempts):
+                tried = attempt + 1
                 fetch = self._fetch_default(branch, record=known)
                 if fetch.returncode != 0:
                     said = " ".join(self._git_output(fetch).split())
@@ -2480,13 +2501,26 @@ class KanbanService:
                 result = mutate(self._reader_at(base, eols), attempt)
                 if not isinstance(result, Change):
                     return self._not_changed(result, rejected, attempt + 1)
+                top = self._git_toplevel()
+                if any(self._outside_git(top / rel) for rel in result.files):
+                    local = True  # git can't push it: made here only, below (#805)
+                    break
                 blobs = {
                     Path(rel): eols[rel].apply(text) if rel in eols else text
                     for rel, text in result.files.items()
                 }
-                sha, error = self._commit_on(base, blobs, result.message)
+                sha, error = self._commit_on(
+                    base, blobs, result.message,
+                    refusal_suffix="(nothing was changed)", skip_empty=True,
+                )
                 if sha is None:
                     return Outcome("refused", error or "Git commit failed", attempts=attempt + 1)
+                if sha == base:
+                    return Outcome(
+                        "noop",
+                        f"{result.message}: origin/{branch} already holds it; nothing to push",
+                        attempts=attempt + 1, data=result.data,
+                    )
                 if seam is not None:
                     seam(attempt)
                 push = self._git_run("push", "origin", f"{sha}:refs/heads/{branch}")
@@ -2524,16 +2558,22 @@ class KanbanService:
                     "unreachable",
                     f"Timed out pushing to origin/{branch}: the push may have landed. "
                     f"Fetch origin/{branch} and check before trying again",
+                    attempts=tried,
                 )
             return Outcome(
                 "unreachable",
                 f"Timed out talking to origin ({' '.join(map(str, e.cmd or []))}); "
                 "nothing was changed",
+                attempts=tried,
             )
         except OSError as e:
             return Outcome(
-                "unreachable", f"Could not run git for origin/{branch}: {e}; nothing was changed"
+                "unreachable",
+                f"Could not run git for origin/{branch}: {e}; nothing was changed",
+                attempts=tried,
             )
+        if local:
+            return self._sync_locally(mutate)
         with suppress(subprocess.TimeoutExpired, OSError):
             self._fetch_default(branch, record=known)  # show what beat us
         return Outcome(
@@ -2598,8 +2638,10 @@ class KanbanService:
         return any(self._outside_git(r) for r in roots)
 
     def _sync_locally(self, mutate: Mutate) -> Outcome:
-        """`sync_and_push` with no remote (#574): `read` is the working tree, and a
-        `Change` is written, keeping line endings, and committed alone (#584)."""
+        """`sync_and_push` with no remote, or for a Change naming a file outside the
+        repository (#574, #805): `read` is the working tree, and a `Change` is
+        written, keeping line endings, and committed alone (#584). No commit made
+        is "noop"; a refused commit keeps the edit in the working tree (#805)."""
         top = self._git_toplevel()
         eols: dict[str, LineEndings] = {}
 
@@ -2628,8 +2670,17 @@ class KanbanService:
         try:
             made = self._commit_paths(paths, result.message)
         except GitCommitError as e:
-            return Outcome("refused", str(e), attempts=1)
-        sha = self._git_run("rev-parse", "HEAD").stdout.strip() if made else None
+            return Outcome(
+                "refused",
+                f"{e} (the edit is kept in the working tree, uncommitted)",
+                attempts=1,
+            )
+        if not made:
+            return Outcome(
+                "noop", f"{result.message}: the working tree already holds it",
+                attempts=1, data=result.data,
+            )
+        sha = self._git_run("rev-parse", "HEAD").stdout.strip()
         return Outcome(
             "local", f"{result.message}: no remote: committed here, local only",
             sha=sha, attempts=1, data=result.data,
