@@ -875,7 +875,7 @@ class KanbanConfig:
         raw_paths = {} if raw_paths is None else raw_paths
         if not isinstance(raw_paths, dict):
             raise InputRefused(
-                f"kanban.paths must be a mapping, got {type(raw_paths).__name__} {raw_paths!r}"
+                f"{where}paths must be a mapping, got {type(raw_paths).__name__} {raw_paths!r}"
             )
         paths_data = dict(raw_paths)
         # README long showed `ignore:` (and consumers wrote `scan_paths:`) beside
@@ -890,7 +890,7 @@ class KanbanConfig:
                 continue
             if key in paths_data:
                 logger.warning(
-                    f"config: `kanban.{key}` is ignored because `kanban.paths.{key}` is set"
+                    f"config: `{where}{key}` is ignored because `{where}paths.{key}` is set"
                 )
             else:
                 paths_data[key] = kanban_data[key]
