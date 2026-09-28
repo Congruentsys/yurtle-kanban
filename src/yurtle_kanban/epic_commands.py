@@ -19,7 +19,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from ._click import Group, pull_note, safe
-from .models import PRIORITIES, WorkItemStatus, WorkItemType, yaml_flow_list
+from .models import PRIORITIES, WorkItemStatus, WorkItemType, fold_id, yaml_flow_list
 from .service import KanbanService
 from .template_engine import TemplateEngine
 
@@ -97,14 +97,21 @@ def _detect_epic_type(service) -> tuple[WorkItemType, str]:
     )
 
 
+def _links(related: object, epic_id: str) -> bool:
+    """True when `related` lists epic_id under any spelling (`fold_id`, #868); a
+    malformed `related:` such as a number or a mapping never does (#188)."""
+    if not isinstance(related, list):
+        return False
+    return fold_id(epic_id) in {fold_id(str(r)) for r in related}
+
+
 def _update_item_related(service, item_id: str, epic_id: str) -> bool:
     """Add epic_id to an item's related list in its frontmatter.
 
+    Both IDs are looked up folded (#868); the link written is the epic's own ID.
     Returns True if the file was updated, False if epic_id was already present.
     """
-    if not service._items:
-        service.scan()
-    item = service._items.get(item_id)
+    item = service.get_item(item_id)
     if item is None:
         console.print(f"[yellow]Warning: Item {safe(item_id)} not found[/yellow]")
         return False
@@ -145,10 +152,11 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
         return False
     related = [str(r) for r in related]
 
-    if epic_id in related:
-        return False  # Already linked
+    if _links(related, epic_id):
+        return False  # Already linked, under any spelling (#868)
 
-    related.append(epic_id)
+    epic_item = service.get_item(epic_id)
+    related.append(epic_item.id if epic_item is not None else epic_id)
     # the shared writer keeps elements like `"a, b"` one element (#121, #148) and
     # replaces the whole old value, block-list lines included (#169)
     new_content = service._add_or_update_frontmatter_field(
@@ -161,11 +169,10 @@ def _update_item_related(service, item_id: str, epic_id: str) -> bool:
 
 
 def _already_linked(service, item_id: str, epic_id: str) -> bool:
-    """True when the item's `related` already lists epic_id (a malformed
-    `related:` such as a number or a mapping never does, #188)."""
-    item = service._items.get(item_id)
-    related = item.related if item is not None else None
-    return isinstance(related, list) and epic_id in related
+    """True when the item's `related` already lists epic_id, folded (#868; a
+    malformed `related:` such as a number or a mapping never does, #188)."""
+    item = service.get_item(item_id)
+    return item is not None and _links(item.related, epic_id)
 
 
 # ---------------------------------------------------------------------------
@@ -249,39 +256,42 @@ def _do_create(title: str, priority: str, items: str | None, push: bool, group: 
     # Link items if provided
     if item_ids:
         for linked_id in item_ids:
+            linked = service.get_item(linked_id)
+            shown = linked.id if linked is not None else linked_id
             if _update_item_related(service, linked_id, item.id):
-                console.print(f"  Linked {escape(linked_id)} → {escape(item.id)}")
+                console.print(f"  Linked {escape(shown)} → {escape(item.id)}")
             elif _already_linked(service, linked_id, item.id):
-                console.print(f"  {escape(linked_id)} already linked")
+                console.print(f"  {escape(shown)} already linked")
             # otherwise _update_item_related printed why it didn't link
 
 
 def _do_show(epic_id: str):
     """Show an epic/voyage with its linked items and progress."""
     service = _get_service()
-    if not service._items:
-        service.scan()
 
-    epic_item = service._items.get(epic_id)
+    # the folded lookup and membership (#868): `epic-001`, a decomposed spelling
+    epic_item = service.get_item(epic_id)
     if epic_item is None:
-        raise click.ClickException(f"{epic_id} not found")
+        raise click.ClickException(f"{fold_id(epic_id)} not found")
+    epic_id = epic_item.id
+    folded_epic = fold_id(epic_id)
 
     # Find all items with this epic in their related list
     linked_items = [
         item
         for item in service._items.values()
-        if epic_id in item.related and item.id != epic_id
+        if fold_id(item.id) != folded_epic and _links(item.related, epic_id)
     ]
     linked_items.sort(key=lambda i: (-i.priority_score, i.id))
 
     # Also check if the epic itself lists items in its related field
     # (bidirectional linking)
-    linked_ids = {i.id for i in linked_items}
+    linked_ids = {fold_id(i.id) for i in linked_items}
     for rel_id in epic_item.related:
-        if rel_id not in linked_ids:
-            rel_item = service._items.get(rel_id)
-            if rel_item:
-                linked_items.append(rel_item)
+        rel_item = service.get_item(str(rel_id))
+        if rel_item is not None and fold_id(rel_item.id) not in linked_ids | {folded_epic}:
+            linked_items.append(rel_item)
+            linked_ids.add(fold_id(rel_item.id))
 
     status_colors = {
         WorkItemStatus.DONE: "green",
@@ -343,12 +353,12 @@ def _do_show(epic_id: str):
 def _do_add(epic_id: str, item_id: str):
     """Link an item to an epic/voyage by adding it to the item's related field."""
     service = _get_service()
-    if not service._items:
-        service.scan()
 
-    # Verify epic exists
-    if epic_id not in service._items:
-        raise click.ClickException(f"{epic_id} not found")
+    # Verify epic exists: the folded lookup (#868)
+    epic_item = service.get_item(epic_id)
+    if epic_item is None:
+        raise click.ClickException(f"{fold_id(epic_id)} not found")
+    epic_id = epic_item.id
     if (item := service.get_item(item_id)) is not None:
         try:  # refused, exit 1, before anything is written (#754)
             service.refuse_duplicate(item, "a link")
@@ -356,13 +366,12 @@ def _do_add(epic_id: str, item_id: str):
             raise click.ClickException(str(e)) from None
 
     if _update_item_related(service, item_id, epic_id):
-        console.print(f"Linked [bold]{escape(item_id)}[/bold] → [bold]{escape(epic_id)}[/bold]")
+        console.print(f"Linked [bold]{escape(item.id)}[/bold] → [bold]{escape(epic_id)}[/bold]")
     else:
-        item = service._items.get(item_id)
         if item is None:
-            raise click.ClickException(f"Item {item_id} not found")
+            raise click.ClickException(f"Item {fold_id(item_id)} not found")
         elif _already_linked(service, item_id, epic_id):
-            console.print(f"{escape(item_id)} is already linked to {escape(epic_id)}")
+            console.print(f"{escape(item.id)} is already linked to {escape(epic_id)}")
         # otherwise _update_item_related printed why it didn't link
 
 

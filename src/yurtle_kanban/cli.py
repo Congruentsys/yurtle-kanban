@@ -712,9 +712,9 @@ def move(
             _refuse(ValueError(f"--take-over needs an explicit actor: {e}"))
         _refuse(e)
 
-    target = service.get_item(item_id.upper())
+    target = service.get_item(fold_id(item_id))
     if target is None:
-        console.print(f"[red]Error: Item not found: {safe(item_id.upper())}[/red]")
+        console.print(f"[red]Error: Item not found: {safe(fold_id(item_id))}[/red]")
         sys.exit(1)
     try:  # before its status is read off one of the copies (#742)
         service.refuse_duplicate(target, "a move")
@@ -736,7 +736,7 @@ def move(
 
     try:
         item = service.move_item(
-            item_id.upper(),
+            fold_id(item_id),
             status,
             commit=not no_commit,
             message=message,
@@ -797,7 +797,7 @@ def claim(item_id: str, agent: str | None, take_over: bool):
     try:
         # every session on a machine shares git user.name: no fallback (#574)
         actor = resolve_actor(agent, allow_git_fallback=False, cwd=service.repo_root)
-        outcome = service.claim_item(item_id.upper(), actor=actor, take_over=take_over)
+        outcome = service.claim_item(fold_id(item_id), actor=actor, take_over=take_over)
     except InputRefused as e:
         _refuse(e)
     _print_outcome(outcome)
@@ -810,7 +810,7 @@ def show(item_id: str, as_json: bool):
     """Show details of a work item."""
     service = get_service()
 
-    item = service.get_item(item_id.upper())
+    item = service.get_item(fold_id(item_id))
     if not item:
         # The ID may belong to a file that exists but doesn't parse (#158)
         wanted = fold_id(item_id)  # the one ID fold (#817)
@@ -1241,7 +1241,7 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
     service = get_service()
     try:
         item = service.rank_item(
-            item_id.upper(),
+            fold_id(item_id),
             rank_number,
             value_summary=summary,
             commit=not no_commit,
@@ -1438,10 +1438,10 @@ def update(
     )
     if push:
         # every refusal comes back as an outcome (#825)
-        _print_outcome(service.update_item_push(item_id.upper(), **edits))
+        _print_outcome(service.update_item_push(fold_id(item_id), **edits))
     try:
         item, changes = service.update_item_changes(
-            item_id.upper(), **edits, commit=not no_commit
+            fold_id(item_id), **edits, commit=not no_commit
         )
     except ValueError as e:
         _refuse(e)
@@ -1483,7 +1483,7 @@ def comment(item_id: str, body: str | None, body_file: str | None, agent: str | 
 
     try:
         author = resolve_actor(agent, cwd=service.repo_root)
-        item = service.add_comment(item_id.upper(), text, author)
+        item = service.add_comment(fold_id(item_id), text, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:
         console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
@@ -1521,7 +1521,7 @@ def metrics(item_id: str | None, as_json: bool):
 
     if item_id:
         # Single item metrics
-        metrics_data = service.get_flow_metrics(item_id.upper())
+        metrics_data = service.get_flow_metrics(fold_id(item_id))
 
         if "error" in metrics_data:
             console.print(f"[yellow]{safe(metrics_data['error'])}[/yellow]")
@@ -1531,7 +1531,7 @@ def metrics(item_id: str | None, as_json: bool):
         if as_json:
             click.echo(json.dumps(metrics_data, indent=2, default=str))
         else:
-            console.print(f"[bold]Flow Metrics: {escape(item_id.upper())}[/bold]")
+            console.print(f"[bold]Flow Metrics: {escape(fold_id(item_id))}[/bold]")
             console.print()
 
             if metrics_data.get("cycle_time_hours"):

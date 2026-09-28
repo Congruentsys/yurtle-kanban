@@ -27,6 +27,7 @@ from ..models import (
     WorkItemStatus,
     WorkItemType,
     check_encodable,
+    fold_id,
     unknown_priority_message,
 )
 from ..service import KanbanService
@@ -456,7 +457,7 @@ class KanbanMCPServer:
 
     def _get_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Get a specific work item."""
-        item_id = args["item_id"].upper()
+        item_id = fold_id(args["item_id"])
         item = self.service.get_item(item_id)
 
         if not item:
@@ -520,7 +521,7 @@ class KanbanMCPServer:
 
     def _move_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Move a work item to a new status."""
-        item_id = args["item_id"].upper()
+        item_id = fold_id(args["item_id"])
         # the same resolver as the CLI's --agent (#580); a blank `agent` is refused,
         # not treated as absent. It is kb:by and whom the holder guard asks (#574)
         actor = resolve_actor(args.get("agent"), cwd=self.repo_root, flag="agent")
@@ -606,7 +607,7 @@ class KanbanMCPServer:
 
     def _add_comment(self, args: dict[str, Any]) -> dict[str, Any]:
         """Add a comment to an item."""
-        item_id = args["item_id"].upper()
+        item_id = fold_id(args["item_id"])
         comment = args["comment"]
         # the same resolver as the CLI's --agent: no "agent" default (#580)
         author = resolve_actor(args.get("author"), cwd=self.repo_root)
@@ -636,7 +637,7 @@ class KanbanMCPServer:
         # edit is rescanned by the service itself (#638), so once either way (#740)
         if args.get("depends_on") is None:
             self.service.scan()
-        item_id = args["item_id"].upper()
+        item_id = fold_id(args["item_id"])
 
         item = self.service.update_item(
             item_id=item_id,
