@@ -203,12 +203,14 @@ def test_json_semantic_broken_extra_error_on_stderr(
     assert _has_install_hint(result.stderr), f"stderr:\n{result.stderr!r}"
 
 
-def test_json_invalid_sparql_error_on_stderr(repo: Path, runner: CliRunner) -> None:
+def test_json_invalid_sparql_error_is_json_refusal(repo: Path, runner: CliRunner) -> None:
+    """A SPARQL error under --json is one JSON refusal on stdout (#877)."""
     result = runner.invoke(main, ["query", "--json", "--sparql", INVALID_SPARQL])
     _assert_clean(result)
     assert result.exit_code == 1, result.output  # today's exit code for a SPARQL error
-    assert result.stdout == "", f"stdout not empty:\n{result.stdout!r}"
-    assert "SPARQL error" in result.stderr, f"stderr:\n{result.stderr!r}"
+    obj = json.loads(result.stdout)
+    assert obj["success"] is False, obj
+    assert "SPARQL error" in obj["error"], obj
 
 
 def test_control_plain_semantic_missing_extra_error_shown(
