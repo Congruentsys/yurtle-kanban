@@ -2244,6 +2244,14 @@ class KanbanService:
                     "nothing was created"
                 )
             blobs = {item_rel: text, **self._allocation_blob(base, current_id, actor)}
+            # and no folder on a written path may be another folder spelled in
+            # another case: a case-insensitive filesystem merges them (#834)
+            if (folder_twin := self._folder_case_twin(base, list(blobs))) is not None:
+                raise _CasRefusedError(
+                    f"{folder_twin}/ is already on the default branch in that spelling "
+                    f"(creating {current_id} would add a folder that differs only in "
+                    "case); nothing was created"
+                )
             linked, parent_state = ({}, None) if parent is None else self._parent_link_blob(
                 base, parent, item_type.value, current_id
             )
@@ -2856,6 +2864,28 @@ class KanbanService:
             path for path, found in ids
             if found.upper() == folded or (key is not None and self._id_key(found) == key)
         ))
+
+    def _folder_case_twin(self, rev: str, rels: list[Path]) -> str | None:
+        """The folder at commit `rev`, in its own spelling, that one of `rels`'
+        folders names in a different case, else None (#834). One listing of the
+        tree covers every folder on every path."""
+        listed = self._git_run(
+            "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev
+        ).stdout.split("\0")
+        folders: dict[str, str] = {}
+        for name in listed:
+            parts = name.split("/")[:-1]
+            for n in range(1, len(parts) + 1):
+                folder = "/".join(parts[:n])
+                folders.setdefault(folder.casefold(), folder)
+        for rel in rels:
+            parts = rel.as_posix().split("/")[:-1]
+            for n in range(1, len(parts) + 1):
+                folder = "/".join(parts[:n])
+                existing = folders.get(folder.casefold())
+                if existing is not None and existing != folder:
+                    return existing
+        return None
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
         """The `.md` files under the work paths at commit `rev`, and each `id:` in
