@@ -100,6 +100,20 @@ def safe(value: object) -> str:
     return escape(escape_nonprintable(str(value)))
 
 
+def refuse(e: object, plain: str | None = None) -> NoReturn:
+    """A refusal, exit 1, shared by every command (#877, #962). With `--json`: one
+    JSON object on stdout, `{"success": false, "error": <e>}`. Without: `plain` (a
+    Rich markup line) when given, else `e` as one red `Error:` line (#580)."""
+    from rich.console import Console
+
+    if json_requested():
+        json_refusal(e)
+    Console().print(
+        plain if plain is not None else f"[red]Error: {safe(e)}[/red]", soft_wrap=True
+    )
+    sys.exit(1)
+
+
 def pull_note(result: dict[str, Any]) -> str:
     """The one line every `--push` create prints when the item landed on the
     remote's default branch but not in this checkout (a feature branch, detached

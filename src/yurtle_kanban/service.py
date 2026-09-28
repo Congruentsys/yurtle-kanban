@@ -5758,7 +5758,13 @@ class KanbanService:
         """
         history = self.get_status_history(item_id)
         if not history:
-            return {"error": "No status history found"}
+            if self.get_item(item_id) is None:
+                return {"error": "No status history found"}
+            # a known item with no history: the usual shape, empty (#905, #962)
+            return {
+                "item_id": item_id, "transitions": 0, "time_in_status": {},
+                "cycle_time_hours": None, "lead_time_hours": None,
+            }
 
         metrics: dict[str, Any] = {
             "item_id": item_id,
