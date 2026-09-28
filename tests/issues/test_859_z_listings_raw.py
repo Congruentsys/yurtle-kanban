@@ -110,7 +110,7 @@ def test_control_ids_at_plain_name(world) -> None:
     assert (PLAIN_NAME, "EXP-001") in ids, ids
 
 
-# --- _folder_case_twin: the whole-tree ls-tree (`_tree_names` since #903) -------------------------------------------------
+# --- _folder_case_twin: the whole-tree ls-tree (`_tree_names`, #903) ---------------------------
 
 CR_FOLDER = "kanban-work/Odd\rDir"
 
