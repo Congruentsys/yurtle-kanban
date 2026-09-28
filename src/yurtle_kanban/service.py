@@ -4580,66 +4580,50 @@ class KanbanService:
             )
         # only regular files are items (#814): a symlink (120000) or gitlink is
         # skipped, as a scan skips it, and never read as a blob
-        regular = []
+        regular: dict[str, str] = {}
         for entry in listed.stdout.split("\0"):
             meta, tab, name = entry.partition("\t")
-            if tab and meta.split(" ")[0] in ("100644", "100755"):
-                regular.append(name)
-        names = []
-        for name in dict.fromkeys(regular):
+            parts = meta.split(" ")
+            if tab and len(parts) == 3 and parts[0] in ("100644", "100755"):
+                regular.setdefault(name, parts[2])
+        oids: dict[str, str] = {}
+        for name, oid in regular.items():
             path = top / name
             if not name.endswith(".md") or (
                 self._should_ignore_for_board(path, board_config) if board_config
                 else self._should_ignore(path)
             ):
                 continue
-            names.append(name)
+            oids[name] = oid
         items: dict[str, WorkItem] = {}
         with self._scan_scope():
-            for name, raw in self._blobs_at(rev, names).items():
+            for name, raw in self._blobs_at(rev, oids).items():
                 item = self._parse_text(top / name, raw)
                 if item is not None:
                     items[item.id] = item
         return list(items.values())
 
-    def _blobs_at(self, rev: str, names: list[str]) -> dict[str, str]:
-        """Each of `names` (paths from the work tree's top) as commit `rev` holds it,
-        its text as a file read with `newline=""` gives it. A non-UTF-8 file is
+    def _blobs_at(self, rev: str, oids: dict[str, str]) -> dict[str, str]:
+        """Each file of `oids` (a path from the work tree's top -> its blob's object
+        id, as `_items_at`'s `ls-tree` of commit `rev` lists it, regular files only)
+        as its text, as a file read with `newline=""` gives it. A non-UTF-8 file is
         left out.
 
-        Read as the blobs themselves (#832): `ls-tree` names each file's object and
-        one `cat-file --batch` prints them, fed the object names from a temporary
-        file since git never reads our stdin (#580). No `.gitattributes` applies,
-        so an `export-subst` or `export-ignore` can't change what is counted, as
-        they could through `git archive`.
+        Read as the blobs themselves (#832): one `cat-file --batch` prints them,
+        fed the object names from a temporary file since git never reads our stdin
+        (#580). No `.gitattributes` applies, so an `export-subst` or
+        `export-ignore` can't change what is counted, as they could through `git
+        archive`. The object ids come from the caller's listing, so git lists the
+        tree once (#880).
 
-        Fails closed (#814): raises `_TreeUnreadableError` when git fails or any of
-        `names` can't be read — a missing file would silently not be counted."""
+        Fails closed (#814): raises `_TreeUnreadableError` when git fails or any
+        object can't be read — a missing file would silently not be counted."""
         import tempfile
 
-        if not names:
+        if not oids:
             return {}
         refusing = "refusing rather than judge a partial board"
-        top = sorted({str(Path(n).parent.as_posix()) for n in names})
-        listed = self._git_z("ls-tree", "-r", "-z", "--full-tree", rev, "--", *top)
-        if listed.returncode != 0:
-            raise _TreeUnreadableError(
-                f"Can't read the board files at {rev}: git ls-tree failed "
-                f"({listed.stderr.strip() or f'exit {listed.returncode}'}); {refusing}"
-            )
-        oids: dict[str, str] = {}
-        for entry in listed.stdout.split("\0"):
-            meta, tab, name = entry.partition("\t")
-            parts = meta.split(" ")
-            if tab and len(parts) == 3 and parts[1] == "blob":
-                oids[name] = parts[2]
-        missing = [n for n in names if n not in oids]
-        if missing:
-            raise _TreeUnreadableError(
-                f"Can't read the board files at {rev}: git ls-tree does not list "
-                f"{len(missing)} of them (e.g. {missing[0]}); {refusing}"
-            )
-        wanted = list(dict.fromkeys(oids[n] for n in names))
+        wanted = list(dict.fromkeys(oids.values()))
         with tempfile.TemporaryFile() as feed:
             feed.write("".join(f"{o}\n" for o in wanted).encode("ascii"))
             feed.seek(0)
@@ -4662,7 +4646,11 @@ class KanbanService:
         for oid in wanted:  # "<oid> blob <size>\n<content>\n", in the order asked
             end = out.find(b"\n", at)
             header = out[at:end].split(b" ") if end >= 0 else []
-            if len(header) != 3 or header[1] != b"blob" or not header[2].isdigit():
+            if (
+                len(header) != 3 or header[0] != oid.encode("ascii")
+                or header[1] != b"blob" or not header[2].isdigit()
+                or out[end + 1 + int(header[2]):end + 2 + int(header[2])] != b"\n"
+            ):  # another object, or output cut short of its stated size (#880)
                 raise _TreeUnreadableError(
                     f"Can't read the board files at {rev}: git cat-file could not "
                     f"read object {oid}; {refusing}"
@@ -4671,7 +4659,7 @@ class KanbanService:
             contents[oid] = out[end + 1:end + 1 + size]
             at = end + 1 + size + 1
         blobs: dict[str, str] = {}
-        for name in names:
+        for name in oids:
             with suppress(UnicodeDecodeError):
                 blobs[name] = contents[oids[name]].decode("utf-8")
         return blobs

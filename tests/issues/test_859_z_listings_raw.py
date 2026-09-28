@@ -40,6 +40,7 @@ import pytest
 
 from tests.issues.test_585_create_push_loop import EXP_DIR, World, git
 from tests.issues.test_590_next_id_and_hdd_ids import b_push
+from tests.issues.test_832_read_blobs_directly import blob_oids
 from tests.test_634_explicit_ids_on_base import service
 from yurtle_kanban import config as config_mod
 
@@ -194,11 +195,13 @@ def test_control_items_at_plain_name(world) -> None:
 
 def test_blobs_at_reads_cr_name(world) -> None:
     on_origin(world, {CR_NAME: item()})
-    blobs = service(world)._blobs_at("origin/main", [CR_NAME])
+    blobs = service(world)._blobs_at("origin/main", blob_oids(world.a, "origin/main", [CR_NAME]))
     assert list(blobs) == [CR_NAME], [repr(k) for k in blobs]
     assert blobs[CR_NAME] == item()
 
 
 def test_control_blobs_at_plain_name(world) -> None:
     on_origin(world, {PLAIN_NAME: item()})
-    assert service(world)._blobs_at("origin/main", [PLAIN_NAME]) == {PLAIN_NAME: item()}
+    assert service(world)._blobs_at(
+        "origin/main", blob_oids(world.a, "origin/main", [PLAIN_NAME])
+    ) == {PLAIN_NAME: item()}

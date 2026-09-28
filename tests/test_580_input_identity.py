@@ -823,6 +823,26 @@ def _git_calls(tree: ast.AST) -> list[ast.Call]:
     return calls
 
 
+def _tempfile_feed(call: ast.Call, name: str, parents: dict[ast.AST, ast.AST]) -> bool:
+    """`name` is bound by a `with tempfile.TemporaryFile() as <name>` enclosing
+    `call` in the same function, and not re-bound inside it (#880)."""
+    node: ast.AST = call
+    while (node := parents.get(node)) is not None and not isinstance(
+        node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+    ):
+        if isinstance(node, (ast.With, ast.AsyncWith)) and any(
+            ast.unparse(item.context_expr) == "tempfile.TemporaryFile()"
+            and isinstance(item.optional_vars, ast.Name)
+            and item.optional_vars.id == name
+            for item in node.items
+        ):
+            return not any(
+                isinstance(n, ast.Name) and n.id == name and not isinstance(n.ctx, ast.Load)
+                for stmt in node.body for n in ast.walk(stmt)
+            )
+    return False
+
+
 class TestGitStdinDevnull:
     def test_every_git_subprocess_in_src_passes_stdin_devnull(self):
         """Literal `subprocess.<fn>(["git", ...])` sites must pass DEVNULL; calls
@@ -832,13 +852,15 @@ class TestGitStdinDevnull:
         literal = runner = 0
         for path in sorted((SRC / "yurtle_kanban").rglob("*.py")):
             tree = ast.parse(path.read_text(), filename=str(path))
+            parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
             for call in _git_calls(tree):
                 literal += 1
                 stdin = next((k.value for k in call.keywords if k.arg == "stdin"), None)
-                # DEVNULL, or a local file the call itself fills (#832's
-                # `cat-file --batch` feed): never the caller's stdin, never a PIPE
+                # DEVNULL, or a temporary file the call's own `with` fills (#832's
+                # `cat-file --batch` feed, #880): never the caller's stdin, never a PIPE
                 if stdin is None or not (
-                    ast.unparse(stdin).endswith("DEVNULL") or isinstance(stdin, ast.Name)
+                    ast.unparse(stdin).endswith("DEVNULL")
+                    or isinstance(stdin, ast.Name) and _tempfile_feed(call, stdin.id, parents)
                 ):
                     offenders.append(f"{path.relative_to(SRC)}:{call.lineno}")
             runner += sum(
