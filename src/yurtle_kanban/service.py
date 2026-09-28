@@ -2938,11 +2938,20 @@ class KanbanService:
     def _board_loads(self, rel: str) -> bool:
         """Whether a scan would load the file at `rel` (from the work tree's top)
         rather than ignore it (#856): on a multi-board config, a board whose root
-        holds it and whose own `ignore` doesn't cover it; else `paths.ignore`."""
+        holds it and whose own `ignore` doesn't cover it; else a work path or
+        placement dir that holds it (#919), and `paths.ignore`."""
         top = self._git_toplevel()
         path = top / rel
         if not self.config.is_multi_board:
-            return not self._should_ignore(path)
+            roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
+            roots += self._placement_dirs()
+            heads = [
+                head.as_posix() for root in roots
+                if (head := self._repo_relative(root, top)) is not None
+            ]
+            return not self._should_ignore(path) and any(
+                head in ("", ".") or rel.startswith(head.rstrip("/") + "/") for head in heads
+            )
         for board in self.config.boards:
             root = self._repo_relative(_under(self.repo_root, board.path), top)
             if root is None:

@@ -304,10 +304,9 @@ def test_board_loads_agrees_with_scan_over_ids_at(repo: Repo) -> None:
 
 
 def test_board_loads_agrees_with_scan_over_whole_tree(repo: Repo) -> None:
-    """Multi-board: `_board_loads` checks each board's root itself, so it must agree
-    with the scan for any `.md` in the tree, outside every board too."""
-    if not repo.layout.multi:
-        pytest.skip("single board: _board_loads leaves the work-path filter to _ids_at")
+    """`_board_loads` checks each board's root (a single board's work paths and
+    placement dirs since #919) itself, so it must agree with the scan for any
+    `.md` in the tree, outside every board too."""
     svc = repo.service()
     loads = scanned(repo)
     tree = tracked_md(repo)
