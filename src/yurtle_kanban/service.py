@@ -2243,7 +2243,7 @@ class KanbanService:
             # nor sit beside one whose name differs only in case: on a
             # case-insensitive filesystem they are one file (#788)
             folder = item_rel.parent.as_posix()
-            listed = self._git_run(
+            listed = self._git_z(
                 "ls-tree", "--name-only", "-z", "--full-tree", base, "--",
                 f"{folder}/" if folder not in ("", ".") else ".",
             ).stdout.split("\0")
@@ -2922,7 +2922,7 @@ class KanbanService:
         """The folder at commit `rev`, in its own spelling, that one of `rels`'
         folders names in a different case, else None (#834). One listing of the
         tree covers every folder on every path."""
-        listed = self._git_run(
+        listed = self._git_z(
             "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev
         ).stdout.split("\0")
         folders: dict[str, str] = {}
@@ -2953,7 +2953,7 @@ class KanbanService:
         if not rels:
             return [], []
         # -z: names raw, never quoted (a quoted `"d/\303\237.md"` isn't `.md`, #808)
-        listed = self._git_run(
+        listed = self._git_z(
             "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", *rels
         )
         names = [name for name in listed.stdout.split("\0") if name.endswith(".md")]
@@ -3047,6 +3047,22 @@ class KanbanService:
             timeout=timeout,
             stdin=subprocess.DEVNULL,
             env={**(os.environ if env is None else env), **fixed},
+        )
+
+    def _git_z(self, *args: str) -> subprocess.CompletedProcess[str]:
+        """`_git_run` for a `-z` listing (#859): read raw and decoded as UTF-8 with
+        `surrogateescape`, as #830's grep is, so a lone `\r` in a filename is kept
+        (text mode would turn it into `\n`) and every listing spells a name alike."""
+        done = self._git_run(*args, text=False)
+
+        def text(out: bytes | str | None, errors: str) -> str:
+            if isinstance(out, bytes):
+                return out.decode("utf-8", errors)
+            return out or ""
+
+        return subprocess.CompletedProcess(
+            done.args, done.returncode,
+            text(done.stdout, "surrogateescape"), text(done.stderr, "replace"),
         )
 
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
@@ -3406,7 +3422,7 @@ class KanbanService:
             # (`git mv`): that file IS committed, under its old name (#705 review)
             # -z: raw paths, as git would C-quote non-ASCII ones (#718); fields run
             # status, path[, new path] — a rename's destination is two after R…
-            renames = self._git_run(
+            renames = self._git_z(
                 "diff", "--no-relative", "--cached", "-M", "--name-status", "-z", "HEAD"
             )
             rel = self._repo_relative(path, self._git_toplevel())
@@ -4466,7 +4482,7 @@ class KanbanService:
         """The text of `rel` (from the work tree's top) as commit `rev` holds it,
         None when it holds no regular file there. Raises `_TreeUnreadableError`
         when git can't list `rev` (#814, #831)."""
-        listed = self._git_run("ls-tree", "-z", "--full-tree", rev, "--", rel)
+        listed = self._git_z("ls-tree", "-z", "--full-tree", rev, "--", rel)
         if listed.returncode != 0:
             raise _TreeUnreadableError(
                 f"Can't read {rel} at {rev}: git ls-tree failed "
@@ -4511,7 +4527,7 @@ class KanbanService:
         })
         if not rels:
             return []
-        listed = self._git_run(  # -z: names raw, never quoted (#808)
+        listed = self._git_z(  # -z: names raw, never quoted (#808)
             "ls-tree", "-r", "-z", "--full-tree", rev, "--", *rels
         )
         if listed.returncode != 0:  # an empty listing would count zero (#814)
@@ -4563,7 +4579,7 @@ class KanbanService:
             return {}
         refusing = "refusing rather than judge a partial board"
         top = sorted({str(Path(n).parent.as_posix()) for n in names})
-        listed = self._git_run("ls-tree", "-r", "-z", "--full-tree", rev, "--", *top)
+        listed = self._git_z("ls-tree", "-r", "-z", "--full-tree", rev, "--", *top)
         if listed.returncode != 0:
             raise _TreeUnreadableError(
                 f"Can't read the board files at {rev}: git ls-tree failed "

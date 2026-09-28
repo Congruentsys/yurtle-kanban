@@ -135,7 +135,11 @@ def break_blobs_ls_tree(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]
     real_git_run = KanbanService._git_run
 
     def git_run(self: KanbanService, *args: str, **kwargs: Any) -> Any:
-        if args[:1] == ("ls-tree",) and sys._getframe(1).f_code.co_name == "_blobs_at":
+        # the caller, past the `-z` reader `_git_z` (#859)
+        caller = sys._getframe(1)
+        if caller.f_code.co_name == "_git_z":
+            caller = caller.f_back
+        if args[:1] == ("ls-tree",) and caller.f_code.co_name == "_blobs_at":
             seen.append(args)
             return subprocess.CompletedProcess(
                 ["git", *args], 128, "", "fatal: ls-tree failed (#832 test)"
