@@ -4505,49 +4505,25 @@ class KanbanService:
 
     def _files_at(self, rev: str, folder: str) -> list[tuple[str, str]]:
         """(`rev:path`, text) of each regular file directly in `folder` (from the
-        work tree's top, ending in `/`) at commit `rev`: one listing and one batched
-        read (#865). Raises `_TreeUnreadableError` when git can't read them."""
-        listed = self._git_run("ls-tree", "-z", "--full-tree", rev, "--", folder)
+        work tree's top, ending in `/`) at commit `rev`, in listing order: read as
+        `_blobs_at` reads a board (#832, #865). Raises `_TreeUnreadableError` when
+        git can't read them or one isn't UTF-8 text."""
+        listed = self._git_z("ls-tree", "-z", "--full-tree", rev, "--", folder)
         if listed.returncode != 0:
             raise _TreeUnreadableError(
                 f"Can't read {folder} at {rev}: git ls-tree failed "
                 f"({listed.stderr.strip() or f'exit {listed.returncode}'})"
             )
-        blobs: list[tuple[str, str]] = []
+        names = []
         for entry in listed.stdout.split("\0"):
             meta, tab, name = entry.partition("\t")
-            fields = meta.split(" ")
-            if tab and len(fields) == 3 and fields[0] in ("100644", "100755"):
-                blobs.append((name, fields[2]))
-        if not blobs:
-            return []
-        shown = subprocess.run(
-            ["git", "cat-file", "--batch"],
-            cwd=self.repo_root,
-            input="".join(f"{sha}\n" for _, sha in blobs).encode(),
-            capture_output=True,
-            timeout=30,
-            env={**os.environ, **GIT_ENV},
-        )
-        if shown.returncode != 0:
-            raise _TreeUnreadableError(
-                f"Can't read {folder} at {rev}: git cat-file failed "
-                f"({shown.stderr.decode(errors='replace').strip()})"
-            )
-        out, pos, files = shown.stdout, 0, []
-        for name, _ in blobs:
-            end = out.index(b"\n", pos)
-            header = out[pos:end].decode().split(" ")
-            if len(header) != 3 or header[1] != "blob":
-                raise _TreeUnreadableError(f"Can't read {name} at {rev}: {' '.join(header)}")
-            size = int(header[2])
-            body = out[end + 1:end + 1 + size]
-            pos = end + 1 + size + 1
-            try:
-                files.append((f"{rev}:{name}", body.decode("utf-8")))
-            except UnicodeDecodeError as e:
-                raise _TreeUnreadableError(f"{name} at {rev} is not UTF-8 text") from e
-        return files
+            if tab and meta.split(" ")[0] in ("100644", "100755"):
+                names.append(name)
+        texts = self._blobs_at(rev, names)
+        for name in names:
+            if name not in texts:
+                raise _TreeUnreadableError(f"{name} at {rev} is not UTF-8 text")
+        return [(f"{rev}:{name}", texts[name]) for name in names]
 
     def _blob_at(self, rev: str, rel: str) -> str | None:
         """The text of `rel` (from the work tree's top) as commit `rev` holds it,
