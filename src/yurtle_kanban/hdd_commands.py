@@ -1343,7 +1343,7 @@ def experiment_status(expr_id: str, as_json: bool):
     item = service.get_item(expr_id)
     if item is None and not runs:
         # no item and no runs: an unknown experiment is a refusal (#905, #962)
-        refuse(f"Experiment not found: {expr_id}")
+        refuse(f"Experiment not found: {expr_id}", console=console)
 
     if as_json:
         # Serialize Path objects to strings

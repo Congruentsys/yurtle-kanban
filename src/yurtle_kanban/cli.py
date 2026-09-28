@@ -165,7 +165,9 @@ def _print_outcome(outcome: Outcome) -> NoReturn:
     sys.exit(int(outcome.exit_code))
 
 
-_refuse = refuse  # the shared refusal (#962)
+def _refuse(e: object, plain: str | None = None) -> NoReturn:
+    """The shared `refuse` (#962) on this module's console."""
+    refuse(e, plain, console=console)
 
 
 class _Main(Group):
