@@ -32,8 +32,10 @@ with a reason (issue #476). That mention check only sees the name
 
 The CLI's own `--help` output is the second surface (issue #89): the Examples
 in each command's help print invocations too, and `--help` is what an agent
-reads when it has not read the repo. Both surfaces go through ONE definition of
-"a command the CLI accepts" — `_rejection` below — so they cannot drift apart.
+reads when it has not read the repo. The third surface is the ```bash blocks of
+README.md and AGENT-QUICK-REF.md (issue #861): a human copies them, and so does
+an agent. All surfaces go through ONE definition of "a command the CLI accepts"
+— `_rejection` below — so they cannot drift apart.
 """
 
 import re
@@ -369,6 +371,202 @@ def test_help_example_is_accepted_by_the_cli(parts, example, words):
         f"`yurtle-kanban {' '.join(parts)} --help` prints `{example}` — {problem}. "
         f"--help is what an agent reads first: it runs this and gets a usage error."
     )
+
+
+# --- surface 3: README.md and AGENT-QUICK-REF.md bash blocks (issue #861) ---------
+
+
+REPO_DIR = SKILLS_DIR.parent
+DOC_FILES = [REPO_DIR / "README.md", REPO_DIR / "AGENT-QUICK-REF.md"]
+
+# A fence that opens a shell block, at any backtick count: README nests ```bash
+# blocks inside a ````markdown sample of a CLAUDE.md, and an agent pastes those too.
+BASH_FENCE = re.compile(r"^\s*`{3,}\s*(?:bash|sh|shell|console)\s*$")
+CLOSE_FENCE = re.compile(r"^\s*`{3,}\s*$")
+# `<<EOF`, `<<'EOF'`, `<<"EOF"`, `<<-EOF`: the body up to the terminator is data.
+HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+def _shell_code(line):
+    """(the line's code with any `#` comment cut, the quote left open at its end).
+
+    A `#` starts a comment only at a word start outside quotes; a `\\` outside
+    single quotes escapes the next character. `quote` is `'`, `"` or "" — a quote
+    still open at the end means the command continues on the next line.
+    """
+    quote, i = "", 0
+    while i < len(line):
+        c = line[i]
+        if quote == "'":
+            quote = "" if c == "'" else quote
+        elif c == "\\":
+            i += 1
+        elif quote == '"':
+            quote = "" if c == '"' else quote
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or line[i - 1].isspace()):
+            return line[:i].rstrip(), ""
+        i += 1
+    return line, quote
+
+
+def _block_commands(lines, first_lineno):
+    """(lineno, command text) per shell command in a bash block's lines.
+
+    Comments are cut, `\\` continuations and quotes that span lines are joined
+    into one command, and a heredoc body is skipped: it is data, not commands.
+    """
+    out, i = [], 0
+    while i < len(lines):
+        start = i
+        code, quote = _shell_code(lines[i])
+        parts = []
+        while i + 1 < len(lines) and (quote or code.endswith("\\")):
+            if quote:
+                parts.append(code)
+                code, quote = _shell_code(quote + lines[i + 1])
+                code = code[1:]
+            else:
+                parts.append(code[:-1])
+                code, quote = _shell_code(lines[i + 1])
+            i += 1
+        parts.append(code)
+        text = " ".join(p.strip() for p in parts if p.strip())
+        i += 1
+        heredoc = HEREDOC.search(text)
+        if heredoc:
+            strip_tabs, terminator = heredoc.group(1), heredoc.group(3)
+            while i < len(lines):
+                body = lines[i].lstrip("\t") if strip_tabs else lines[i]
+                i += 1
+                if body == terminator:
+                    break
+        if text:
+            out.append((first_lineno + start, text))
+    return out
+
+
+def _bash_blocks(text):
+    """(1-based line of the first body line, body lines) per ```bash block."""
+    blocks, body, first = [], None, 0
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if body is None:
+            if BASH_FENCE.match(line):
+                body, first = [], lineno + 1
+        elif CLOSE_FENCE.match(line):
+            blocks.append((first, body))
+            body = None
+        else:
+            body.append(line)
+    return blocks
+
+
+def doc_commands(path):
+    """(lineno, command text) for every shell command in a doc's ```bash blocks."""
+    return [
+        cmd
+        for first, body in _bash_blocks(path.read_text(encoding="utf-8"))
+        for cmd in _block_commands(body, first)
+    ]
+
+
+def _doc_invocations():
+    """(file, lineno, argv words) for every yurtle-kanban command the docs print."""
+    return [
+        (path, lineno, words)
+        for path in DOC_FILES
+        for lineno, text in doc_commands(path)
+        for words in _commands_in(text)
+    ]
+
+
+def test_doc_extraction_is_not_vacuous():
+    """Both docs yield commands with flags, or the guard below is hollow."""
+    invocations = _doc_invocations()
+    per_file = {p.name: 0 for p in DOC_FILES}
+    for path, _, _ in invocations:
+        per_file[path.name] += 1
+    assert per_file["README.md"] >= 40, per_file
+    assert per_file["AGENT-QUICK-REF.md"] >= 5, per_file
+    assert sum(len(_flags(w)) for *_, w in invocations) >= 40
+
+
+@pytest.mark.parametrize(
+    "block,expected",
+    [
+        # a comment is cut; a `#` inside quotes is not a comment
+        (["yurtle-kanban list --status done   # --bogus"], ["yurtle-kanban list --status done"]),
+        (['yurtle-kanban comment X -m "a # b"'], ['yurtle-kanban comment X -m "a # b"']),
+        (["# yurtle-kanban move X done --bogus"], []),
+        # a heredoc body is data, whatever it looks like
+        (
+            ["yurtle-kanban comment X --body-file - <<'EOF'", "yurtle-kanban --bogus", "EOF",
+             "yurtle-kanban board"],
+            ["yurtle-kanban comment X --body-file - <<'EOF'", "yurtle-kanban board"],
+        ),
+        (
+            ["cat <<-EOF", "\tyurtle-kanban --bogus", "\tEOF", "yurtle-kanban board"],
+            ["cat <<-EOF", "yurtle-kanban board"],
+        ),
+        # a continuation is one command; so is a quote that spans lines
+        (["yurtle-kanban list \\", "  --bogus"], ["yurtle-kanban list --bogus"]),
+        (
+            ['yurtle-kanban query --sparql "SELECT ?x WHERE {', "  ?x a ?y .", '}" --bogus'],
+            ['yurtle-kanban query --sparql "SELECT ?x WHERE { ?x a ?y . }" --bogus'],
+        ),
+    ],
+)
+def test_block_commands_extraction(block, expected):
+    assert [text for _, text in _block_commands(block, 1)] == expected
+
+
+def test_only_bash_blocks_are_read():
+    text = "\n".join(
+        [
+            "yurtle-kanban --prose", "```", "yurtle-kanban --plain", "```",
+            "````markdown", "```bash", "yurtle-kanban --nested", "```", "````",
+            "```yaml", "run: yurtle-kanban --yaml", "```", "```bash", "yurtle-kanban --bash", "```",
+        ]
+    )
+    assert [(first, body) for first, body in _bash_blocks(text)] == [
+        (7, ["yurtle-kanban --nested"]),
+        (14, ["yurtle-kanban --bash"]),
+    ]
+
+
+def _doc_case_id(case):
+    path, lineno, words = case
+    return f"{path.name}:{lineno} {' '.join(words[:2])}"
+
+
+@pytest.mark.parametrize(
+    "path,lineno,words",
+    _doc_invocations(),
+    ids=[_doc_case_id(c) for c in _doc_invocations()],
+)
+def test_doc_command_is_accepted_by_the_cli(path, lineno, words):
+    problem = _rejection(*words)
+    assert problem is None, (
+        f"{path.name}:{lineno} — {problem}. A reader copies this line and gets a usage error."
+    )
+
+
+def test_every_doc_command_mention_parses():
+    """No silent skips: a bash-block command naming yurtle-kanban is checked.
+
+    A chained `git fetch && yurtle-kanban …` would not parse and would go unchecked,
+    so it fails here instead; split it, or teach the extractor.
+    """
+    mentions = [
+        (path, lineno, text)
+        for path in DOC_FILES
+        for lineno, text in doc_commands(path)
+        if MENTION.search(text)
+    ]
+    assert len(mentions) >= 45, f"only {len(mentions)} doc mentions — MENTION is broken"
+    blind = [f"{p.name}:{n}: {t}" for p, n, t in mentions if not _commands_in(t)]
+    assert not blind, "doc commands the guard does not check:\n" + "\n".join(blind)
 
 
 # --- blind spots found reviewing #89 (issue #476) --------------------------------
