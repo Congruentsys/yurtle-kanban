@@ -3433,7 +3433,9 @@ class KanbanService:
         child_uri = child_ns[child_id]
 
         # Modify the turtle block using rdflib
-        new_inner, state = self._modify_turtle_block(match.group(2), predicate, child_uri)
+        new_inner, state = self._modify_turtle_block(
+            match.group(2), predicate, child_uri, parent_id
+        )
         if state is not None:
             return None, state
 
@@ -3522,12 +3524,15 @@ class KanbanService:
         turtle_content: str,
         predicate_uri: Any,
         child_uri: Any,
+        parent_id: str | None = None,
     ) -> tuple[str, str | None]:
         """A turtle block's inner text with `<subject> <predicate> <child> .`
         appended as one line (#812).
 
         rdflib parses the block, to find its subject and to see whether the triple
-        is already there; the block itself is never re-serialized, so every
+        is already there. The subject is the one whose local name (after `#` or the
+        last `/`) is `parent_id`, compared case-folded (#838); with none, the one
+        written first; the block itself is never re-serialized, so every
         original line stays as written. The subject is written `<#ID>` when it is
         `urn:yurtle:block#ID` (and the block declares no base), in full otherwise;
         the predicate and child use a prefix the block declares for their
@@ -3538,6 +3543,7 @@ class KanbanService:
                             the ``` fences, not including them), LF.
             predicate_uri: rdflib URIRef for the predicate to add.
             child_uri: rdflib URIRef for the child object to add.
+            parent_id: the parent's ID, whose own subject gets the triple.
 
         Returns:
             Tuple of (new_content, state). state is None when the triple was
@@ -3554,13 +3560,23 @@ class KanbanService:
             logger.debug(f"Failed to parse turtle block for modification: {e}")
             return turtle_content, "unparseable"
 
-        # Find subject — first URIRef (skip BNodes)
-        subject = next(
-            (s for s in g.subjects() if isinstance(s, URIRef)),
-            None,
-        )
-        if subject is None:
+        # rdflib lists subjects in hash order (#838): pick by name, then by text
+        subjects = sorted({s for s in g.subjects() if isinstance(s, URIRef)}, key=str)
+        if not subjects:
             return turtle_content, "unparseable"
+
+        def local(uri: URIRef) -> str:
+            return re.split(r"[#/]", str(uri))[-1]
+
+        def written_at(uri: URIRef) -> int:
+            at = turtle_content.find(local(uri))
+            return at if at >= 0 else len(turtle_content)
+
+        own = [
+            s for s in subjects
+            if parent_id is not None and local(s).casefold() == parent_id.casefold()
+        ]
+        subject = own[0] if own else min(subjects, key=written_at)
 
         # Idempotency: skip if triple already present
         if (subject, predicate_uri, child_uri) in g:
@@ -3570,7 +3586,7 @@ class KanbanService:
             (name, str(ns))
             for name, ns in g.namespaces()
             if re.search(
-                rf"(?:@prefix|(?i:prefix))\s+{re.escape(name)}:\s*<{re.escape(str(ns))}>",
+                rf"(?<![\w@:-])(?:@prefix|(?i:prefix))\s+{re.escape(name)}:\s*<{re.escape(str(ns))}>",
                 turtle_content,
             )
         ]
