@@ -1658,11 +1658,18 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
     """
     service = get_service()
 
-    result = service.allocate_next_id(
-        prefix=prefix,
-        sync_remote=not no_sync,
-        commit_allocation=not no_commit,
-    )
+    try:
+        result = service.allocate_next_id(
+            prefix=prefix,
+            sync_remote=not no_sync,
+            commit_allocation=not no_commit,
+        )
+    except InputRefused as e:
+        if not as_json:
+            raise  # main's handler prints it as `Error: …`
+        # --json answers in JSON on every path, as the remote path does (#847)
+        result = {"success": False, "id": None, "prefix": prefix, "number": None,
+                  "message": str(e)}
 
     if as_json:
         click.echo(json.dumps(result, indent=2))

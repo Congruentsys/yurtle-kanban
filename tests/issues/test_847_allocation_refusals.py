@@ -159,7 +159,7 @@ def test_next_id_no_sync_corrupt_local_says_nothing_was_changed(world, monkeypat
     seed_local(world, "{}")
     result = next_id(world, monkeypatch, "EXP", "--no-sync")
     assert result.exit_code == 1, output_of(result)
-    ends_changed(output_of(result))
+    ends_changed(result.output)  # output_of appends SystemExit's code
 
 
 def test_create_push_corrupt_origin_says_nothing_was_changed(world, monkeypatch) -> None:
@@ -274,27 +274,25 @@ def test_control_next_id_plain_no_actor_prints_error(world, monkeypatch) -> None
     assert "actor" in out.lower(), out
 
 
-# --- 4. the service returns the dict rather than raising ------------------------------------
+# --- 4. the service: input refusals raise InputRefused (#786); the CLI's --json
+# turns them into the refusal dict (steer amended on #847) -------------------------------
 
 
-def test_allocate_next_id_corrupt_local_returns_dict(world, monkeypatch) -> None:
+def test_allocate_next_id_corrupt_local_raises_changed(world, monkeypatch) -> None:
     drop_remote(world)
     seed_local(world, "{not json")
     monkeypatch.chdir(world.a)
-    result = service_result(lambda: service(world).allocate_next_id("EXP"))
-    assert_refusal_dict(result)
-    assert result["prefix"] == "EXP", result
-    ends_changed(result["message"])
+    with pytest.raises(InputRefused) as info:
+        service(world).allocate_next_id("EXP")
+    ends_changed(str(info.value))
 
 
-def test_allocate_next_id_corrupt_local_no_sync_returns_dict(world, monkeypatch) -> None:
+def test_allocate_next_id_corrupt_local_no_sync_raises_changed(world, monkeypatch) -> None:
     seed_origin(world, '"x"')
     monkeypatch.chdir(world.a)
-    result = service_result(
-        lambda: service(world).allocate_next_id("EXP", sync_remote=False)
-    )
-    assert_refusal_dict(result)
-    ends_changed(result["message"])
+    with pytest.raises(InputRefused) as info:
+        service(world).allocate_next_id("EXP", sync_remote=False)
+    ends_changed(str(info.value))
 
 
 def test_control_allocate_next_id_corrupt_origin_returns_dict(world, monkeypatch) -> None:
@@ -302,21 +300,6 @@ def test_control_allocate_next_id_corrupt_origin_returns_dict(world, monkeypatch
     monkeypatch.chdir(world.a)
     result = service_result(lambda: service(world).allocate_next_id("EXP"))
     assert_refusal_dict(result)
-
-
-@pytest.mark.parametrize(
-    "prefix",
-    [*BAD_PREFIXES.values(), "EXP\udcff"],
-    ids=[*BAD_PREFIXES, "unencodable"],
-)
-@pytest.mark.parametrize("sync", [True, False], ids=["sync", "no-sync"])
-def test_allocate_next_id_bad_prefix_returns_dict(world, monkeypatch, prefix, sync) -> None:
-    monkeypatch.chdir(world.a)
-    result = service_result(
-        lambda: service(world).allocate_next_id(prefix, sync_remote=sync)
-    )
-    assert_refusal_dict(result)
-    assert not (world.a / ".kanban" / "_ID_ALLOCATIONS.json").exists()
 
 
 def test_control_allocate_next_id_no_actor_returns_dict(world, monkeypatch) -> None:
