@@ -39,6 +39,7 @@ import pytest
 import yaml
 from click.testing import CliRunner, Result
 
+from tests.issues._snapshot import glob_outside_git
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig
@@ -113,7 +114,7 @@ class Repo:
         return _git(self.root, "rev-parse", "HEAD").strip()
 
     def snapshot(self) -> dict[Path, bytes]:
-        return {p: p.read_bytes() for p in self.root.rglob("*.md") if ".git" not in p.parts}
+        return {p: p.read_bytes() for p in glob_outside_git(self.root, "*.md")}
 
     def deps(self, item_id: str) -> list[str]:
         return self.fm(item_id).get("depends_on")  # type: ignore[return-value]
