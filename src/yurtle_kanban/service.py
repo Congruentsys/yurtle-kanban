@@ -10,6 +10,7 @@ This service provides the business logic for:
 
 from __future__ import annotations
 
+import copy
 import fnmatch
 import json
 import logging
@@ -552,6 +553,10 @@ class KanbanService:
             repo_root=self.repo_root,  # hook actions run in the repo, not the cwd (#347)
         )
         self._hook_engine.set_callback("create_item", self._hook_create_item)
+        # `_judge_at`: the commit this service judges by the config of (None: the
+        # local config), and the last commit's judge (#831)
+        self._judged_rev: str | None = None
+        self._judges: dict[str, KanbanService] = {}
 
     def _get_board_for_item(self, item: WorkItem) -> BoardConfig | None:
         """Get the board configuration for a work item."""
@@ -572,7 +577,9 @@ class KanbanService:
 
         from .config import _load_builtin_theme
 
-        return _load_builtin_theme(board_config.preset, self.repo_root)
+        return _load_builtin_theme(
+            board_config.preset, self.repo_root, self.config.theme_source
+        )
 
     def _scan_board_theme(self, board: BoardConfig) -> dict | None:
         """`board`'s theme, loaded once per board within a scan scope (#665)."""
@@ -1521,7 +1528,7 @@ class KanbanService:
         """
         from .config import _load_builtin_theme
 
-        theme = _load_builtin_theme(preset, self.repo_root)
+        theme = _load_builtin_theme(preset, self.repo_root, self.config.theme_source)
         overrides = wip_limit_overrides or {}
         columns = []
 
@@ -1851,7 +1858,10 @@ class KanbanService:
 
     def _board_type_def(self, board: BoardConfig | None, item_type: WorkItemType) -> dict:
         """`board`'s theme's definition of `item_type` ({} when it has none)."""
-        theme = board.get_theme(self.repo_root) if board is not None else None
+        theme = (
+            board.get_theme(self.repo_root, self.config.theme_source)
+            if board is not None else None
+        )
         return ((theme or {}).get("item_types") or {}).get(item_type.value) or {}
 
     def _board_root(self) -> str:
@@ -4156,7 +4166,11 @@ class KanbanService:
         (`_claim_change`), so a claim that lost the race reads the winner. Hooks
         (`STATUS_CHANGE`, `ASSIGNED`) fire once, after the claim has landed
         (`won` or `local`), for the winner only. `seam`, `sleep` and `jitter` are
-        `sync_and_push`'s."""
+        `sync_and_push`'s.
+
+        WIP limits, board paths and ignore patterns are judged by origin's config at
+        the fetched commit (`_judge_at`), or the local one when origin has none
+        (#831); gate checks still read the local working tree."""
         actor = check_identity(actor, "--agent")
 
         def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
@@ -4256,7 +4270,10 @@ class KanbanService:
                 return Refuse(str(e))
             rel = Path(os.path.relpath(current.file_path, top)).as_posix()
         else:
-            holders = self._holders_at(read.rev, item_id)
+            try:  # found where origin's config puts the boards (#831)
+                holders = self._judge_at(read.rev)._holders_at(read.rev, item_id)
+            except _TreeUnreadableError as e:
+                return Refuse(str(e))
             if len(holders) > 1:
                 return Refuse(
                     f"{item_id} is on more than one board ({', '.join(holders)}): "
@@ -4279,7 +4296,10 @@ class KanbanService:
     def _wip_refusal_in(self, read: Read, proposed: WorkItem) -> str | None:
         """`_wip_refusal` for `proposed` with the items counted in `read`'s tree:
         the fetched commit's, else the working tree's (#574). A fetched tree is
-        parsed only when a WIP limit applies."""
+        parsed only when a WIP limit applies. A fetched tree is judged by its own
+        config (`_judge_at`, #831)."""
+        if read.rev is not None and (judge := self._judge_at(read.rev)) is not self:
+            return judge._wip_refusal_in(read, proposed)
         board_config = self._wip_board_config(proposed)
         if read.rev is None:
             board = self.get_board(board_name=board_config.name if board_config else None)
@@ -4293,6 +4313,84 @@ class KanbanService:
             return None
         board.items = self._items_at(read.rev, board_config)
         return self._wip_refusal(proposed, proposed.status, board, board_config)
+
+    def _judge_at(self, rev: str) -> KanbanService:
+        """This service as commit `rev`'s own `.kanban/config.yaml` judges (#831):
+        a shallow copy with that config (its themes read from `rev`'s
+        `.kanban/themes/`) and fresh memos, so the local service is untouched.
+        `self` when `rev` holds no config (the local one judges) or when `self`
+        already judges `rev`. Raises `_TreeUnreadableError` when `rev`'s config
+        doesn't load: never judge by a config origin doesn't have."""
+        if self._judged_rev == rev:
+            return self
+        if rev in self._judges:
+            return self._judges[rev]
+        rel = self._repo_relative(self.repo_root / ".kanban", self._git_toplevel())
+        text = None if rel is None else self._blob_at(rev, f"{rel.as_posix()}/config.yaml")
+        judge = self
+        if rel is not None and text is not None:
+            kanban = rel.as_posix()
+
+            def themes(name: str) -> tuple[str, str] | None:
+                path = f"{kanban}/themes/{name}.yaml"
+                found = self._blob_at(rev, path)
+                return None if found is None else (f"{rev}:{path}", found)
+
+            try:
+                config = KanbanConfig.from_text(text, self.repo_root, themes)
+            except (ValueError, yaml.YAMLError) as e:
+                raise _TreeUnreadableError(
+                    f"origin's {kanban}/config.yaml at {rev[:12]} does not load "
+                    f"({' '.join(str(e).split())}); refusing rather than judge by "
+                    "another config"
+                ) from e
+            judge = copy.copy(self)
+            judge.config = config
+            judge._judged_rev = rev
+            judge._judges = {}
+            judge._status_names_cache = {}
+            judge._board_theme_cache = {}
+            judge._scanning = False
+            judge._items = {}
+            judge._folded_items = {}
+            judge.duplicate_ids = {}
+            judge.parse_warnings = []
+            judge._board = None
+            judge._workflows = {}
+        self._judges = {rev: judge}  # the last fetched commit's only
+        return judge
+
+    def _blob_at(self, rev: str, rel: str) -> str | None:
+        """The text of `rel` (from the work tree's top) as commit `rev` holds it,
+        None when it holds no regular file there. Raises `_TreeUnreadableError`
+        when git can't list `rev` (#814, #831)."""
+        listed = self._git_run("ls-tree", "-z", "--full-tree", rev, "--", rel)
+        if listed.returncode != 0:
+            raise _TreeUnreadableError(
+                f"Can't read {rel} at {rev}: git ls-tree failed "
+                f"({listed.stderr.strip() or f'exit {listed.returncode}'})"
+            )
+        entry = listed.stdout.split("\0")[0]
+        meta, tab, name = entry.partition("\t")
+        if not tab or name != rel or meta.split(" ")[0] not in ("100644", "100755"):
+            return None
+        shown = subprocess.run(
+            ["git", "cat-file", "blob", meta.split(" ")[2]],
+            cwd=self.repo_root,
+            capture_output=True,
+            timeout=30,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, **GIT_ENV},
+        )
+        if shown.returncode != 0:
+            raise _TreeUnreadableError(
+                f"Can't read {rel} at {rev}: git cat-file failed "
+                f"({shown.stderr.decode(errors='replace').strip()})"
+            )
+        try:
+            return shown.stdout.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise _TreeUnreadableError(f"{rel} at {rev} is not UTF-8 text") from e
 
     def _items_at(self, rev: str, board_config: BoardConfig | None) -> list[WorkItem]:
         """The items of `board_config` (None: the single board) as commit `rev`
@@ -5648,7 +5746,10 @@ class KanbanService:
         self, rev: str
     ) -> tuple[dict[str, list[str]], dict[str, list[Path]]]:
         """(`dependency_graph`, `duplicate_ids`) as commit `rev` has the boards
-        (#574, #576): what `_check_new_dependencies` checks a pushed edit against."""
+        (#574, #576): what `_check_new_dependencies` checks a pushed edit against,
+        the boards as `rev`'s own config places them (`_judge_at`, #831)."""
+        if (judge := self._judge_at(rev)) is not self:
+            return judge._dependency_board_at(rev)
         configs = list(self.config.boards) if self.config.is_multi_board else [None]
         graph = {
             i.id.upper(): self._id_list(i.depends_on)

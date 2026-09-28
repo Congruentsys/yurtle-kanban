@@ -772,6 +772,11 @@ def claim(item_id: str, agent: str | None, take_over: bool):
     Exit codes: 0 claimed (or already yours), 1 refused, 3 lost to another agent,
     4 remote unreachable, 5 remote busy, 6 push refused by the remote.
 
+    WIP limits, board paths and ignore patterns are judged by origin's
+    config (.kanban/config.yaml and the theme files it names under
+    .kanban/themes/) at the fetched commit, or by the local config when origin
+    has none (#831); gate checks still read the local working tree.
+
     Examples:
         YURTLE_AGENT=Claude-M5 yurtle-kanban claim EXP-123
         yurtle-kanban claim EXP-123 --agent Claude-M5
