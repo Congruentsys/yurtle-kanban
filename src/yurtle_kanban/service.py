@@ -4291,7 +4291,7 @@ class KanbanService:
         if not rels:
             return []
         listed = self._git_run(  # -z: names raw, never quoted (#808)
-            "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", *rels
+            "ls-tree", "-r", "-z", "--full-tree", rev, "--", *rels
         )
         if listed.returncode != 0:  # an empty listing would count zero (#814)
             raise _TreeUnreadableError(
@@ -4299,8 +4299,15 @@ class KanbanService:
                 f"({listed.stderr.strip() or f'exit {listed.returncode}'}); "
                 "refusing rather than judge an empty board"
             )
+        # only regular files are items (#814): a symlink (120000) or gitlink is
+        # skipped, as a scan skips it, and never expected in the archive
+        regular = []
+        for entry in listed.stdout.split("\0"):
+            meta, tab, name = entry.partition("\t")
+            if tab and meta.split(" ")[0] in ("100644", "100755"):
+                regular.append(name)
         names = []
-        for name in dict.fromkeys(n for n in listed.stdout.split("\0") if n):
+        for name in dict.fromkeys(regular):
             path = top / name
             if not name.endswith(".md") or (
                 self._should_ignore_for_board(path, board_config) if board_config
@@ -4322,7 +4329,7 @@ class KanbanService:
         git never reads stdin (#580). A non-UTF-8 file is left out.
 
         Fails closed (#814): raises `_TreeUnreadableError` when the archive fails,
-        its output isn't a tar, or it lacks any of `names` (which come from
+        its output isn't a tar, or it lacks any of `names` (the regular files from
         `ls-tree`) — an `export-ignore` in `.gitattributes` drops files from an
         archive, and a dropped file would silently not be counted."""
         import io
@@ -4340,7 +4347,7 @@ class KanbanService:
             env={**os.environ, **GIT_ENV},
         )
         wanted, blobs = set(names), {}
-        refusing = "refusing rather than judge a partial board (it would count short)"
+        refusing = "refusing rather than judge a partial board"
         if done.returncode != 0:
             err = done.stderr.decode("utf-8", "replace").strip() if done.stderr else ""
             raise _TreeUnreadableError(
@@ -4359,11 +4366,11 @@ class KanbanService:
                         continue
                     with suppress(UnicodeDecodeError):
                         blobs[member.name] = handle.read().decode("utf-8")
-        except tarfile.TarError as e:  # every path export-ignored: no tar at all
+        except tarfile.TarError as e:  # every path export-ignored: an empty tar
             raise _TreeUnreadableError(
-                f"Can't read the board files at {rev}: git archive gave no readable "
-                f"tar ({e}); an export-ignore in .gitattributes may cover the board; "
-                f"{refusing}"
+                f"Can't read the board files at {rev}: the git archive is empty or "
+                "unreadable; an export-ignore in .gitattributes may cover the whole "
+                f"board; {refusing}"
             ) from e
         missing = sorted(wanted - seen)
         if missing:
