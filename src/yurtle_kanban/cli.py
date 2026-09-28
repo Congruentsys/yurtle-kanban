@@ -32,7 +32,7 @@ import click
 from rich.console import Console
 from rich.markup import escape
 
-from ._click import Group, pull_note, safe
+from ._click import Group, argv_requests_json, json_refusal, json_requested, pull_note, safe
 from .board import (
     render_board,
     render_history,
@@ -133,6 +133,8 @@ def get_service() -> KanbanService:
         try:
             config = KanbanConfig.load(config_path)
         except ValueError as e:  # a config value of the wrong kind (#220)
+            if json_requested():
+                json_refusal(f"Invalid {config_path}: {e}")
             # one line: a wrapped path breaks copy-paste and grep (#272)
             console.print(
                 f"[red]Invalid {safe(config_path)}: {safe(e)}[/red]", soft_wrap=True
@@ -154,9 +156,13 @@ def _print_outcome(outcome: Outcome) -> NoReturn:
     sys.exit(int(outcome.exit_code))
 
 
-def _refuse(e: Exception) -> NoReturn:
-    """Print a refused input as one red line and exit 1 (#580)."""
-    console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
+def _refuse(e: object, plain: str | None = None) -> NoReturn:
+    """A refusal, exit 1. With `--json`: one JSON object on stdout,
+    `{"success": false, "error": <e>}` (#877). Without: `plain` (a Rich markup
+    line) when given, else `e` as one red `Error:` line (#580)."""
+    if json_requested():
+        json_refusal(e)
+    console.print(plain if plain is not None else f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
     sys.exit(1)
 
 
@@ -176,6 +182,8 @@ class _Main(Group):
             try:
                 check_encodable(f"argument {n}", arg)
             except ValueError as e:
+                if argv_requests_json(args):  # before --json is parsed (#877)
+                    json_refusal(e)
                 console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
                 ctx.exit(1)
         return super().parse_args(ctx, args)
@@ -476,25 +484,25 @@ def list_items(
         try:
             status_filter = WorkItemStatus.from_string(status)
         except ValueError:
-            console.print(f"[red]Unknown status: {safe(status)}[/red]")
-            sys.exit(1)
+            _refuse(f"Unknown status: {status}", f"[red]Unknown status: {safe(status)}[/red]")
 
     type_filter = None
     if item_type:
         try:
             type_filter = WorkItemType.from_string(item_type)
         except ValueError:
-            console.print(f"[red]Unknown type: {safe(item_type)}[/red]")
-            sys.exit(1)
+            _refuse(f"Unknown type: {item_type}", f"[red]Unknown type: {safe(item_type)}[/red]")
 
     priority_filter = None
     if priority:
         # empty segments (`high,,low`, `high,`) are dropped (#238)
         priority_filter = [p for p in (s.strip().lower() for s in priority.split(",")) if p]
         if not priority_filter:
-            console.print(f"[red]No priority given; valid: {', '.join(PRIORITIES)}[/red]")
-            sys.exit(1)
+            given = f"No priority given; valid: {', '.join(PRIORITIES)}"
+            _refuse(given, f"[red]{given}[/red]")
         invalid = [p for p in priority_filter if p not in PRIORITIES]
+        if invalid and json_requested():
+            json_refusal("; ".join(unknown_priority_message(v) for v in invalid))
         # one message per value, each rendered like everywhere else (#190, #238)
         for value in invalid:
             console.print(
@@ -823,7 +831,7 @@ def show(item_id: str, as_json: bool):
             if fold_id(path.stem) == wanted or fold_id(path.stem).startswith(wanted + "-")
         ]
         if as_json:
-            payload: dict[str, object] = {"error": f"Item not found: {item_id}"}
+            payload: dict[str, object] = {"success": False, "error": f"Item not found: {item_id}"}
             if broken:
                 payload["unparseable"] = [
                     {"file": str(path), "reason": reason} for path, reason in broken
@@ -896,7 +904,7 @@ def states(board_name: str | None, item_type: str | None, as_json: bool):
         if not boards:
             error = f"Unknown board: {board_name}"
             if as_json:
-                click.echo(json.dumps({"error": error}))
+                click.echo(json.dumps({"success": False, "error": error}))
             else:
                 console.print(f"[red]{safe(error)}[/red]")
             sys.exit(1)
@@ -1199,8 +1207,7 @@ def roadmap(
             type_filter = WorkItemType.from_string(item_type)
             items = [i for i in items if i.item_type == type_filter]
         except ValueError:
-            console.print(f"[red]Unknown type: {safe(item_type)}[/red]")
-            sys.exit(1)
+            _refuse(f"Unknown type: {item_type}", f"[red]Unknown type: {safe(item_type)}[/red]")
 
     if as_json:
         data = [item.to_dict() for item in items]
@@ -1304,8 +1311,8 @@ def history(
         try:
             cutoff = datetime.fromisoformat(since)
         except ValueError:
-            console.print(f"[red]Invalid date format: {safe(since)} (use YYYY-MM-DD)[/red]")
-            sys.exit(1)
+            bad = f"Invalid date format: {since} (use YYYY-MM-DD)"
+            _refuse(bad, f"[red]Invalid date format: {safe(since)} (use YYYY-MM-DD)[/red]")
 
     if cutoff:
         filtered = []
@@ -1676,6 +1683,8 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
                   "message": str(e)}
 
     if as_json:
+        if not result["success"]:  # #847's keys, and `error` as every refusal (#877)
+            result = {**result, "error": result["message"]}
         click.echo(json.dumps(result, indent=2))
         if not result["success"]:
             sys.exit(1)  # a failed allocation is a failure in JSON too (#590)
@@ -1932,6 +1941,8 @@ def query(
         try:
             results = ug.sparql(sparql_query)
         except Exception as e:
+            if as_json:
+                json_refusal(f"SPARQL error: {e}")
             err_console.print(f"[red]SPARQL error:[/red] {safe(e)}", soft_wrap=True)
             sys.exit(1)
         results = _cap_to_top(results, top_k)  # JSON too, like the table (#387, #397)
@@ -1991,6 +2002,8 @@ def query(
         return
 
     if not query_text:
+        if as_json:
+            json_refusal("Provide a query string, --sparql, or --semantic.")
         console.print("[red]Provide a query string, --sparql, or --semantic.[/red]")
         console.print(
             '[dim]Example: yurtle-kanban query'
