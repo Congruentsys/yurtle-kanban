@@ -142,7 +142,7 @@ def _parse_allocations(text: str | None, where: str) -> list[Any]:
     if not isinstance(records, list):
         raise InputRefused(
             f"{where} is not a valid JSON list of allocations: fix it or remove it "
-            "(a missing file starts a fresh list); nothing was created"
+            "(a missing file starts a fresh list); nothing was changed"
         )
     return records
 
@@ -3949,7 +3949,8 @@ class KanbanService:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
             except GitCommitError as e:
                 # a refused commit is an error (#584)
-                return {"success": False, "id": None, "prefix": prefix, "message": str(e)}
+                return {"success": False, "id": None, "prefix": prefix, "number": None,
+                        "message": str(e)}
 
         return {
             "success": True,
