@@ -139,14 +139,15 @@ def _shape(value: Any) -> str:
 
 
 def _version(value: Any) -> Any:
-    """The config's `version`: a number is its string (`version: 2.0` unquoted is
-    YAML's float, and would silently load as v1 and drop `boards:`); any other
-    non-string is refused (#900). An unknown string keeps today's reading."""
-    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-        raise InputRefused(f"`version` must be \"1.0\" or \"2.0\", got {_shape(value)}")
-    if isinstance(value, (int, float)):
-        return f"{float(value):.1f}"
-    return value
+    """The config's `version`: the numbers 1 and 2 are "1.0" and "2.0" (an
+    unquoted `version: 2.0` is YAML's float, and would silently load as v1 and
+    drop `boards:`); any other non-string is refused (#900). An unknown string
+    keeps today's reading. Never converted to float: a huge int can't overflow."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, bool) and isinstance(value, (int, float)) and value in (1, 2):
+        return f"{int(value)}.0"
+    raise InputRefused(f"`version` must be \"1.0\" or \"2.0\", got {_shape(value)}")
 
 
 def _field(field_name: str, on: str) -> str:
@@ -823,7 +824,8 @@ class KanbanConfig:
     ) -> "KanbanConfig":
         """`from_text`'s config from the parsed mapping."""
         # Check for v2 multi-board config
-        version = _version(data.get("version", CONFIG_VERSION_SINGLE))
+        # a bare `version:` (null) is its default, like an absent one (#220, #900)
+        version = _version(_or_default(data, "version", CONFIG_VERSION_SINGLE))
         # a bare `boards:` is the same as none: fall back to v1 (#204)
         if version == CONFIG_VERSION_MULTI and data.get("boards") is not None:
             config = cls._load_v2(data, repo_root, theme_source)

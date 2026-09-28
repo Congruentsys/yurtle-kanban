@@ -188,3 +188,23 @@ def test_v1_scan_paths_and_ignore_still_refused_by_field(tmp_path: Path) -> None
         with pytest.raises(InputRefused) as exc:
             _load(text, tmp_path)
         assert key in str(exc.value), str(exc.value)
+
+
+# --- round 2 (PR #945 review) ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["version: 1" + "0" * 400 + "\n", "version: 2.5\n", "version: 1.96\n", "version: 3\n"],
+    ids=["huge-int", "2.5", "1.96", "3"],
+)
+def test_other_numbers_are_refused_not_crashed(text: str, tmp_path: Path) -> None:
+    """Only 1 and 2 read as versions; a huge int never overflows a float."""
+    with pytest.raises(InputRefused) as exc:
+        _load(text, tmp_path)
+    assert "version" in str(exc.value), str(exc.value)
+
+
+def test_bare_version_is_the_default(tmp_path: Path) -> None:
+    """`version:` with no value is its default, like an absent key (#220)."""
+    assert _load("version:\nkanban:\n  theme: software\n", tmp_path).version == "1.0"
