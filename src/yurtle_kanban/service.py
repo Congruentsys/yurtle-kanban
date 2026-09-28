@@ -2471,17 +2471,21 @@ class KanbanService:
         "lost". Any other refusal is "push_refused" and a remote that can't be
         reached "unreachable", neither retried. A `Change` whose tree equals the
         base's is "noop" (#805). With no `origin`, the change is made and committed
-        here only ("local"); so is a `Change` naming a file outside the repository,
-        decided per Change (#805): `mutate` is asked again against the working tree,
-        and an in-repo Change keeps the compare-and-swap even when another board is
-        external."""
+        here only ("local"). So is a `Change` naming a file outside the repository,
+        decided per Change before origin is contacted (#805): when a board lies
+        outside, `mutate` is first asked against the working tree, and a Change
+        naming a file outside is made here without touching origin; any other
+        answer runs the compare-and-swap, so an in-repo Change keeps it."""
         if not self._has_remote():
             return self._sync_locally(mutate)
+        if self._board_outside_repo():
+            asked, eols_here = self._ask_working_tree(mutate)
+            if isinstance(asked, Change) and self._names_outside(asked):
+                return self._write_locally(asked, eols_here)
         branch = "main"
         rejected = False
         attempts = max(1, attempts)
         tried = 1  # the attempt under way, for an outcome raised mid-attempt (#805)
-        local = False  # a Change naming a file outside the repository (#805)
         try:
             branch, known = self._resolve_default()
             for attempt in range(attempts):
@@ -2501,10 +2505,6 @@ class KanbanService:
                 result = mutate(self._reader_at(base, eols), attempt)
                 if not isinstance(result, Change):
                     return self._not_changed(result, rejected, attempt + 1)
-                top = self._git_toplevel()
-                if any(self._outside_git(top / rel) for rel in result.files):
-                    local = True  # git can't push it: made here only, below (#805)
-                    break
                 blobs = {
                     Path(rel): eols[rel].apply(text) if rel in eols else text
                     for rel, text in result.files.items()
@@ -2572,8 +2572,6 @@ class KanbanService:
                 f"Could not run git for origin/{branch}: {e}; nothing was changed",
                 attempts=tried,
             )
-        if local:
-            return self._sync_locally(mutate)
         with suppress(subprocess.TimeoutExpired, OSError):
             self._fetch_default(branch, record=known)  # show what beat us
         return Outcome(
@@ -2642,6 +2640,13 @@ class KanbanService:
         repository (#574, #805): `read` is the working tree, and a `Change` is
         written, keeping line endings, and committed alone (#584). No commit made
         is "noop"; a refused commit keeps the edit in the working tree (#805)."""
+        return self._write_locally(*self._ask_working_tree(mutate))
+
+    def _ask_working_tree(
+        self, mutate: Mutate
+    ) -> tuple[Change | NoOp | Refuse, dict[str, LineEndings]]:
+        """`mutate(read, 0)` with `read` the working tree (rev None), and the line
+        endings of each file it read, for `_write_locally` (#574, #805)."""
         top = self._git_toplevel()
         eols: dict[str, LineEndings] = {}
 
@@ -2652,7 +2657,20 @@ class KanbanService:
             text, eols[rel] = self._read_item_text(path)
             return text
 
-        result = mutate(_Reader(None, read), 0)
+        return mutate(_Reader(None, read), 0), eols
+
+    def _names_outside(self, change: Change) -> bool:
+        """True when `change` names a file outside the git repository, which git
+        can't commit or push (#805)."""
+        top = self._git_toplevel()
+        return any(self._outside_git(top / rel) for rel in change.files)
+
+    def _write_locally(
+        self, result: Change | NoOp | Refuse, eols: dict[str, LineEndings]
+    ) -> Outcome:
+        """The local outcome of `result`, a working-tree answer from
+        `_ask_working_tree` (#574, #805)."""
+        top = self._git_toplevel()
         if not isinstance(result, Change):
             return self._not_changed(result, False, 1)
         paths = []
