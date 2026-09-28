@@ -4503,11 +4503,15 @@ class KanbanService:
         self._judges = {rev: judge}  # the last fetched commit's only
         return judge
 
-    def _files_at(self, rev: str, folder: str) -> list[tuple[str, str]]:
-        """(`rev:path`, text) of each regular file directly in `folder` (from the
-        work tree's top, ending in `/`) at commit `rev`, in listing order: read as
-        `_blobs_at` reads a board (#832, #865). Raises `_TreeUnreadableError` when
-        git can't read them or one isn't UTF-8 text."""
+    def _files_at(
+        self, rev: str, folder: str, suffix: str = ".md"
+    ) -> list[tuple[str, str]]:
+        """(`rev:path`, text) of each regular `suffix` file directly in `folder`
+        (from the work tree's top, ending in `/`) at commit `rev`, in listing
+        order: read as `_blobs_at` reads a board (#832, #865). As the working-tree
+        reader does, other files (a `.DS_Store`) are never read and a non-UTF-8
+        one is skipped with a warning. Raises `_TreeUnreadableError` when git
+        can't read them."""
         listed = self._git_z("ls-tree", "-z", "--full-tree", rev, "--", folder)
         if listed.returncode != 0:
             raise _TreeUnreadableError(
@@ -4517,13 +4521,13 @@ class KanbanService:
         names = []
         for entry in listed.stdout.split("\0"):
             meta, tab, name = entry.partition("\t")
-            if tab and meta.split(" ")[0] in ("100644", "100755"):
+            if tab and meta.split(" ")[0] in ("100644", "100755") and name.endswith(suffix):
                 names.append(name)
         texts = self._blobs_at(rev, names)
         for name in names:
             if name not in texts:
-                raise _TreeUnreadableError(f"{name} at {rev} is not UTF-8 text")
-        return [(f"{rev}:{name}", texts[name]) for name in names]
+                logger.warning(f"{name} at {rev} is not UTF-8 text; skipped")
+        return [(f"{rev}:{name}", texts[name]) for name in names if name in texts]
 
     def _blob_at(self, rev: str, rel: str) -> str | None:
         """The text of `rel` (from the work tree's top) as commit `rev` holds it,

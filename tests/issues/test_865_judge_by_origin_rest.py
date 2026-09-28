@@ -609,3 +609,46 @@ def test_control_gate_only_in_local_config_still_refuses(world) -> None:
     )
     assert "Gate check failed" in out.message, out.message
     assert world.remote_sha() == base
+
+
+def test_non_md_or_non_utf8_file_in_origins_workflows_is_skipped(world) -> None:
+    """PR #916 review: a binary `.DS_Store` (and a non-UTF-8 `.md`) in origin's
+    `.kanban/workflows/` is skipped as the working-tree reader skips it, never a
+    refusal of every claim; origin's real workflow still judges."""
+    b_change(world, {
+        WORKFLOW: _workflow_md(WORKFLOW_READY_NO_CLAIM, applies_to="expedition"),
+    })
+    git(world.b, "fetch", "origin")
+    git(world.b, "reset", "--hard", f"origin/{world.default}")
+    folder = world.b / ".kanban" / "workflows"
+    (folder / ".DS_Store").write_bytes(b"\x00\x05\x16\x07\xff\xfe binary")
+    (folder / "latin1.md").write_bytes("caf\xe9\n".encode("latin-1"))
+    git(world.b, "add", "-A")
+    git(world.b, "commit", "-m", "junk in workflows")
+    git(world.b, "push", "origin", f"HEAD:{world.default}")
+    base = world.remote_sha()
+
+    out = claim(world.a, A)
+
+    # the junk is skipped; origin's expedition workflow still forbids the move
+    assert out.kind == "refused", f"{out.kind}: {out.message}"
+    assert "Illegal move" in out.message, out.message
+    assert "UTF-8" not in out.message, out.message
+    assert world.remote_sha() == base
+
+
+def test_junk_only_in_origins_workflows_lets_the_claim_win(world) -> None:
+    """Only a `.DS_Store` in origin's workflows folder: the default lifecycle
+    allows ready -> in_progress, so the claim wins."""
+    git(world.b, "fetch", "origin")
+    git(world.b, "reset", "--hard", f"origin/{world.default}")
+    folder = world.b / ".kanban" / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / ".DS_Store").write_bytes(b"\x00\x05\x16\x07\xff\xfe binary")
+    git(world.b, "add", "-A")
+    git(world.b, "commit", "-m", "a .DS_Store")
+    git(world.b, "push", "origin", f"HEAD:{world.default}")
+
+    out = claim(world.a, A)
+
+    assert out.kind == "won", f"{out.kind}: {out.message}"
