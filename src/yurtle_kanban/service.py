@@ -3693,6 +3693,7 @@ class KanbanService:
         skip_gates: bool = False,
         gate_context: dict[str, Any] | None = None,
         actor: str | None = None,
+        take_over: bool = False,
     ) -> WorkItem:
         """Move a work item to a new status.
 
@@ -3712,12 +3713,28 @@ class KanbanService:
             actor: Who is moving it, recorded as kb:by. Resolved through
                 `resolve_actor` (explicit, then $YURTLE_AGENT, then git user.name);
                 never the assignee, which is not defaulted either (#580).
+            take_over: Move an item someone else holds in progress, recording
+                kb:takenOverFrom (#574 §4). It needs an explicit actor (`actor` or
+                $YURTLE_AGENT; git user.name is not enough). Gates, WIP and
+                legality still apply.
+
+        The holder guard (#574 §4): an item whose canonical status is in progress
+        and whose assignee is not the actor is refused unless `take_over`; `--force`
+        (`validate_workflow`/`skip_wip_check`/`skip_gates`) does not override it.
+        It is local and advisory; `claim` is the authoritative gate.
         """
         self._check_text(assignee=assignee, message=message, closed_by=closed_by)  # (#239)
-        actor = resolve_actor(actor, cwd=self.repo_root)
+        if take_over:
+            try:
+                actor = resolve_actor(actor, allow_git_fallback=False, cwd=self.repo_root)
+            except InputRefused as e:
+                raise InputRefused(f"--take-over needs an explicit actor: {e}") from None
+        else:
+            actor = resolve_actor(actor, cwd=self.repo_root)
         item = self._writable_item(item_id, "a move")  # the file now (#638, #742)
 
         old_status = item.status
+        taken_over_from = self._holder_guard(item, actor, take_over)
 
         # Rules, gates and WIP judge the PROPOSED item — a copy carrying the new
         # status and assignee — so `--assign` can satisfy an assignee check; the
@@ -3767,7 +3784,7 @@ class KanbanService:
         self._update_item_file_with_history(
             proposed, old_status, new_status, assignee,
             actor=actor, forced=forced, closed_by=closed_by,
-            gates_skipped=gates_skipped,
+            gates_skipped=gates_skipped, taken_over_from=taken_over_from,
         )
         for name, value in changes.items():
             setattr(item, name, value)
@@ -3782,6 +3799,8 @@ class KanbanService:
                     commit_msg += " (forced)"
                 if assignee:
                     commit_msg += f" (assigned to {assignee})"
+                if taken_over_from is not None:
+                    commit_msg += f" (taken over from {taken_over_from})"
             self._git_commit(item.file_path, commit_msg)
 
         # Fire hooks (after successful move)
@@ -3828,6 +3847,24 @@ class KanbanService:
             )
 
         return item
+
+    @staticmethod
+    def _holder_guard(item: WorkItem, actor: str, take_over: bool) -> str | None:
+        """`move`'s holder guard (#574 §4): refuse moving an item someone else holds
+        in progress (canonical status), unless `take_over`. Returns the holder a
+        take-over records as kb:takenOverFrom, else None."""
+        if item.status != WorkItemStatus.IN_PROGRESS:
+            return None
+        held = item.assignee
+        holder = (held if isinstance(held, str) else str(held or "")).strip()
+        if not holder or same_actor(holder, actor):
+            return None
+        if take_over:
+            return holder
+        raise InputRefused(
+            f"{item.id} is held by {holder}; if you are {holder} pass --agent {holder} "
+            "or set YURTLE_AGENT; to take it over use --take-over"
+        )
 
     def _wip_board_config(self, item: WorkItem) -> BoardConfig | None:
         """The board whose WIP limits a move of `item` answers to (multi-board);
@@ -4386,6 +4423,7 @@ class KanbanService:
         gates_skipped: bool = False,
         *,
         actor: str,
+        taken_over_from: str | None = None,
     ) -> None:
         """Update file and append status change to yurtle knowledge block.
 
@@ -4412,6 +4450,7 @@ class KanbanService:
         content = self._history_text(
             content, item, new_status, assignee, actor=actor, forced=forced,
             closed_by=closed_by, gates_skipped=gates_skipped,
+            taken_over_from=taken_over_from,
         )
         self._write_item_text(item.file_path, content, eol)
 

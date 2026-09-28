@@ -75,6 +75,7 @@ def _move(svc: KanbanService, item_id: str, assignee: str = "DGX"):
         assignee=assignee,
         validate_workflow=False,
         skip_wip_check=False,
+        actor="Mini",  # the holder, past #574's holder guard
     )
 
 

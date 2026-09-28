@@ -168,6 +168,15 @@ class KanbanMCPServer:
                                 " item's theme's own names (hdd `active`)"
                             ),
                         },
+                        "agent": {
+                            "type": "string",
+                            "description": (
+                                "Who is moving it (recorded as kb:by); default"
+                                " $YURTLE_AGENT, then the server's git user.name."
+                                " An item someone else holds in progress is refused"
+                                " unless this names its holder"
+                            ),
+                        },
                     },
                     "required": ["item_id", "new_status"],
                 },
@@ -512,6 +521,9 @@ class KanbanMCPServer:
     def _move_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Move a work item to a new status."""
         item_id = args["item_id"].upper()
+        # the same resolver as the CLI's --agent (#580); a blank `agent` is refused,
+        # not treated as absent. It is kb:by and whom the holder guard asks (#574)
+        actor = resolve_actor(args.get("agent"), cwd=self.repo_root, flag="agent")
         # a long-lived server: see duplicates as the files are now (#732, #742)
         self.service.scan()
         target = self.service.get_item(item_id)
@@ -525,7 +537,7 @@ class KanbanMCPServer:
             valid = ", ".join(self.service.listed_status_names(target))
             return {"error": f"Unknown status: {args['new_status']}. Valid statuses: {valid}"}
 
-        item = self.service.move_item(item_id, new_status)
+        item = self.service.move_item(item_id, new_status, actor=actor)
 
         return {
             "success": True,
