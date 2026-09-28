@@ -128,3 +128,54 @@ def test_picker_fixes_without_a_verdict_at_r_still_needs_review(yk) -> None:
 def test_picker_does_not_re_review_another_authors_fixed_pr(yk, monkeypatch, capsys) -> None:
     out = run_main(yk, monkeypatch, capsys, [pr(7, author=PEER, head=HEAD, comments=FIXED)], [])
     assert "REVIEW PR #7" not in out, out
+
+
+# --------------------------------------------------------------------------- r1 findings
+
+
+def test_changes_at_head_is_never_fixed_by_a_comment_alone(tmp_path: Path) -> None:
+    """r1 F1: `changes` at H plus `fixes-at-sha: H / for-review-at: H`, no fix commit."""
+    sb = Sandbox(tmp_path, conflict=False)
+    out = sb.run(GREEN, [verdict(sb.head_sha, "changes"), fixes(sb.head_sha, sb.head_sha)])
+    assert out.returncode != 0, _output(out)
+    assert sb.merge_calls() == []
+
+
+def test_a_short_for_review_at_refuses(tmp_path: Path) -> None:
+    """r1 follow-up: the reviewed sha is the full sha the verdict names, never a prefix."""
+    sb = Sandbox(tmp_path, conflict=False)
+    r = _reviewed_ancestor(sb)
+    out = sb.run(GREEN, [verdict(r[:7] + "0" * 33, "changes"), fixes(sb.head_sha, r[:7])])
+    assert out.returncode != 0, _output(out)
+    assert sb.merge_calls() == []
+
+
+def test_fixes_posted_before_the_verdict_refuses(tmp_path: Path) -> None:
+    sb = Sandbox(tmp_path, conflict=False)
+    r = _reviewed_ancestor(sb)
+    out = sb.run(GREEN, [fixes(sb.head_sha, r), verdict(r, "changes")])
+    assert out.returncode != 0, _output(out)
+    assert sb.merge_calls() == []
+
+
+def test_crlf_bodies_merge(tmp_path: Path) -> None:
+    sb = Sandbox(tmp_path, conflict=False)
+    r = _reviewed_ancestor(sb)
+    comments = [
+        {"body": f"reviewed-at-sha: {r}\r\nverdict: changes\r\n", "association": "MEMBER"},
+        {"body": f"fixes-at-sha: {sb.head_sha}\r\nfor-review-at: {r}\r\n",
+         "association": "MEMBER"},
+    ]
+    out = sb.run(GREEN, comments)
+    assert out.returncode == 0, _output(out)
+
+
+def test_picker_changes_at_head_is_not_fixed_by_a_comment(yk) -> None:
+    comments = [picker_verdict(HEAD, "changes"), f"fixes-at-sha: {HEAD}\nfor-review-at: {HEAD}"]
+    assert yk.my_pr_state(pr(1, head=HEAD, comments=comments)) == "changes-requested"
+
+
+def test_picker_and_gate_agree_on_a_short_verdict_sha(yk) -> None:
+    """A verdict posted with a short sha doesn't count as the reviewed R (safe_merge agrees)."""
+    comments = [picker_verdict(R[:7], "changes"), f"fixes-at-sha: {HEAD}\nfor-review-at: {R}"]
+    assert yk.my_pr_state(pr(1, head=HEAD, comments=comments)) == "needs-review"

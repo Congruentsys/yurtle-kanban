@@ -44,7 +44,9 @@ VERDICT = re.compile(
     r"\Areviewed-at-sha:\s*([0-9a-f]{7,40})\s*\nverdict:\s*(approve|changes)\b", re.I,
 )
 # pairit's one review round (#987): the driver's comment after fixing a `changes` verdict's findings
-FIXES = re.compile(r"\Afixes-at-sha:\s*([0-9a-f]{7,40})\s*\nfor-review-at:\s*([0-9a-f]{7,40})\b", re.I)
+FIXES = re.compile(
+    r"\Afixes-at-sha:\s*([0-9a-f]{40})\s*\nfor-review-at:\s*([0-9a-f]{40})\b", re.I,
+)
 CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 # "depends on #5", "Depends on: #5", "blocked by #8, #9", "depends on #6, #7, and #8",
 # "Blocked-by: #17", "depends on **#12**" (markdown emphasis), "depends on #6 #7"
@@ -89,9 +91,10 @@ def verdict_at_head(pr: dict) -> str | None:
             reviewed.append(m.group(1).lower())
             if head.startswith(m.group(1).lower()):
                 found = m.group(2).lower()
-        elif (f := FIXES.match(body)) and head.startswith(f.group(1).lower()):
+        elif (f := FIXES.match(body)) and f.group(1).lower() == head.lower():
+            # the exact reviewed sha, as safe_merge.sh checks it, and never the head itself
             r = f.group(2).lower()
-            if any(s.startswith(r) or r.startswith(s) for s in reviewed):
+            if r != head.lower() and r in reviewed:
                 found = "fixed"
     return found
 

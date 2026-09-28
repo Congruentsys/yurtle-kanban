@@ -94,7 +94,8 @@ AT ONCE, and a fix that passes the check is NOT sent for another review:
   code) in one message; a finding about a test goes to the test partner as a ruled test edit, in its own named
   commit. Each fix commit names the finding it closes (`fix(#<N>): r1 F<n> — …`); a behaviour fix carries a
   test that goes red without it. Run the check, push, then post ONE PR comment whose first two lines are
-  `fixes-at-sha: <FIX-SHA>` and `for-review-at: <REVIEWED-SHA>`, then one line per finding → its fix commit.
+  `fixes-at-sha: <FIX-SHA>` and `for-review-at: <REVIEWED-SHA>` (both full 40-hex shas, exactly as the verdict
+  names it; the fixed tip must be a later commit), then one line per finding → its fix commit.
   `safe_merge.sh` merges that tip once CI is green (the reviewed sha must be an ancestor of it); the picker
   counts it as reviewed.
 - Escalate instead of merging only when a finding cannot be closed by a tested fix: it needs a Captain ruling,

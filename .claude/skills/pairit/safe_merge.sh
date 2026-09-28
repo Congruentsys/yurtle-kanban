@@ -73,10 +73,12 @@ ok=""
 if [ "$verdict" = "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then
   ok=approve
 elif [ "${verdict%%$'\n'*}" = "fixes-at-sha: $head" ]; then
-  r=$(printf '%s' "${verdict#*$'\n'}" | sed -n 's/^for-review-at: *\([0-9a-f]\{7,40\}\) *$/\1/p')
-  if [ -n "$r" ] && printf '%s' "$decisive" | jq -e --arg r "$r" 'map(select(
-      startswith("reviewed-at-sha: ") and (.[17:] | split("\n")[0] | startswith($r))))
-      | length > 0' >/dev/null && git merge-base --is-ancestor "$r" "$head" 2>/dev/null; then
+  # R: the full 40-hex sha, with a verdict at exactly R before it, and a PROPER ancestor
+  # of the head: `changes` at the head itself is never "fixed" by a comment alone
+  r=$(printf '%s' "${verdict#*$'\n'}" | sed -n 's/^for-review-at: *\([0-9a-f]\{40\}\) *$/\1/p')
+  if [ -n "$r" ] && [ "$r" != "$head" ] && printf '%s' "$decisive" | jq -e --arg r "$r" '
+      map(select(split("\n")[0] == "reviewed-at-sha: \($r)")) | length > 0' >/dev/null &&
+    git merge-base --is-ancestor "$r" "$head" 2>/dev/null; then
     ok=fixed
   fi
 fi
