@@ -2982,15 +2982,17 @@ class KanbanService:
         return None
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
-        """The `.md` files under the work paths at commit `rev`, and each `id:` in
+        """The `.md` files under the work paths and placement dirs at commit `rev`
+        (the roots a scan walks, as `_items_at` reads them, #954), and each `id:` in
         the leading frontmatter block of one as (path, id) (#590, #634); an `id:`
         line in the body or a code block is not an id (#641)."""
         top = self._git_toplevel()
-        rels = [
-            rel.as_posix()
-            for p in self.config.get_work_paths()
-            if (rel := self._repo_relative(_under(self.repo_root, p), top)) is not None
-        ]
+        roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
+        roots += sorted(self._placement_dirs())
+        rels = sorted({
+            rel.as_posix() for root in roots
+            if (rel := self._repo_relative(root, top)) is not None
+        })
         if not rels:
             return [], []
         # -z: names raw, never quoted (a quoted `"d/\303\237.md"` isn't `.md`, #808)
