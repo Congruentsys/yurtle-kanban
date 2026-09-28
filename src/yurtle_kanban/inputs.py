@@ -28,6 +28,11 @@ from .models import InputRefused
 AGENT_ENV = "YURTLE_AGENT"
 
 
+# every git call the code parses: no credential prompt, and git's messages in
+# English whatever the user's locale, since the code matches them (#806)
+GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANGUAGE": ""}
+
+
 def check_identity(value: str, name: str) -> str:
     """`value` stripped; refused (naming `name`) when empty, whitespace-only, or
     holding a control character (Unicode category `Cc`: `\\n`, `\\r`, `\\t`, NUL,
@@ -51,7 +56,7 @@ def _git_user_name(cwd: Path | str | None) -> str | None:
             text=True,
             timeout=30,
             stdin=subprocess.DEVNULL,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env={**os.environ, **GIT_ENV},
         )
     except (OSError, subprocess.SubprocessError):
         return None
