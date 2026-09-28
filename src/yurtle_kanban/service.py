@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .config import BoardConfig
     from .gates import GateResult
 from .models import (
+    ID_PREFIX_RE,
     PRIORITIES,
     Board,
     Column,
@@ -5575,7 +5576,7 @@ class KanbanService:
             raise InputRefused("The title has a line break: a title is one line")
 
     # letters and digits in any script (#193, #219): `[^\W\d_]` is a letter
-    _PREFIX_RE = re.compile(r"[^\W\d_][^\W_]*(?:-[^\W_]+)*\.?")
+    _PREFIX_RE = ID_PREFIX_RE  # one grammar, shared with theme loading (#816)
 
     @classmethod
     def _check_prefix(cls, prefix: str) -> None:
