@@ -835,7 +835,11 @@ class TestGitStdinDevnull:
             for call in _git_calls(tree):
                 literal += 1
                 stdin = next((k.value for k in call.keywords if k.arg == "stdin"), None)
-                if stdin is None or not ast.unparse(stdin).endswith("DEVNULL"):
+                # DEVNULL, or a local file the call itself fills (#832's
+                # `cat-file --batch` feed): never the caller's stdin, never a PIPE
+                if stdin is None or not (
+                    ast.unparse(stdin).endswith("DEVNULL") or isinstance(stdin, ast.Name)
+                ):
                     offenders.append(f"{path.relative_to(SRC)}:{call.lineno}")
             runner += sum(
                 1 for node in ast.walk(tree)
@@ -847,7 +851,7 @@ class TestGitStdinDevnull:
         assert literal + runner >= 20, (
             f"found only {literal} literal + {runner} _git_run calls — is the scan broken?"
         )
-        assert offenders == [], f"git calls without stdin=subprocess.DEVNULL: {offenders}"
+        assert offenders == [], f"git calls without stdin=DEVNULL or a local feed: {offenders}"
 
     def test_no_subprocess_imported_by_another_name(self):
         """The static scan above looks for `subprocess.<fn>`; keep it that way."""
