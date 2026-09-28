@@ -915,15 +915,21 @@ def claim(item_id: str | None, agent: str | None, take_over: bool, next_: bool):
 def _claim_next(service: KanbanService, actor: str) -> NoReturn:
     """`claim --next` (#575 §8): claim each pickable item in turn. `refused` or
     `lost` moves on to the next; any other outcome ends it (`unreachable`, `busy`
-    and `push_refused` without trying the rest). None left: exit 7."""
+    and `push_refused` without trying the rest), and so does a WIP-limit refusal,
+    which a full column repeats for every candidate (#990). None left: exit 7,
+    naming the last refusal's reason (#990)."""
     picks, _ = service.pick_report(actor)
+    last: str | None = None
     for item in picks:
         outcome = service.claim_item(item.id, actor=actor)
-        if outcome.kind not in ("refused", "lost"):
+        if outcome.kind not in ("refused", "lost") or (
+            outcome.kind == "refused" and outcome.message.startswith("WIP limit reached")
+        ):
             _print_outcome(outcome)
+        last = outcome.message
     message = f"nothing pickable for {actor}"
     if picks:
-        message += f" ({len(picks)} tried: each refused or lost)"
+        message += f" ({len(picks)} tried: each refused or lost; last: {last})"
     console.print(f"[red]Error: {safe(message)}[/red]", soft_wrap=True)
     sys.exit(NOTHING_PICKABLE)
 

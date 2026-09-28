@@ -4515,10 +4515,12 @@ class KanbanService:
         _, reason = judge._pickable(item, actor, index=index)
         if holder and not mine and not take_over:
             also = "" if reason == f"held by {holder}" else f" ({reason})"
-            return Refuse(
-                f"{item.id} is held by {holder}{also}; to take it over use claim --take-over",
-                holder=holder,
+            # the hint only where a take-over would pass: ready or in progress (#990)
+            hint = (
+                "; to take it over use claim --take-over"
+                if old_status in (WorkItemStatus.READY, in_progress) else ""
             )
+            return Refuse(f"{item.id} is held by {holder}{also}{hint}", holder=holder)
         if not holder and old_status == in_progress and not take_over:
             return Refuse(
                 f"{item.id} is in progress with no holder; use claim --take-over ({reason})"
