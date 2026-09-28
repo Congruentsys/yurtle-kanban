@@ -2537,12 +2537,26 @@ class KanbanService:
         """After a push of `sha` to origin/`branch` has landed: fast-forward the
         checkout when it is on `branch`. Never fails (#603): a checkout that can't
         be fast-forwarded just isn't updated, and False says so."""
+        def said(out: bytes | str | None) -> str:
+            # raw, decoded only to show: git may name a file whose name isn't
+            # UTF-8, and a decode error must not follow a landed push (#928)
+            if isinstance(out, bytes):
+                return out.decode("utf-8", "replace")
+            return out or ""
+
         try:
-            head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD")
-            return head.stdout.strip() == branch and (
-                self._git_run("merge", "--ff-only", "--quiet", sha).returncode == 0
-            )
-        except (subprocess.TimeoutExpired, OSError) as e:
+            head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD", text=False)
+            if said(head.stdout).strip() != branch:
+                return False
+            merged = self._git_run("merge", "--ff-only", "--quiet", sha, text=False)
+            if merged.returncode != 0:
+                logger.warning(
+                    f"Pushed {sha[:12]}, but the local checkout was not updated: "
+                    f"{' '.join((said(merged.stderr) or said(merged.stdout)).split())}"
+                )
+                return False
+            return True
+        except (subprocess.TimeoutExpired, OSError, UnicodeError) as e:
             logger.warning(f"Pushed {sha[:12]}, but the local checkout was not updated: {e}")
             return False
 
