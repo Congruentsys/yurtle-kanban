@@ -105,8 +105,12 @@ jobs:
               MOVED=$((MOVED + 1))
               echo "  ✓ $ITEM_ID moved to $TARGET_STATUS"
             else
-              # one annotation line, with the refusal's own reason
-              echo "::warning::Could not move $ITEM_ID to $TARGET_STATUS: $(echo "$OUT" | tr '\n' ' ')"
+              # one annotation line carrying the refusal's whole reason, escaped as
+              # workflow-command data: % first, then CR and LF (#894)
+              OUT=${OUT//%/%25}
+              OUT=${OUT//$'\r'/%0D}
+              OUT=${OUT//$'\n'/%0A}
+              echo "::warning::Could not move $ITEM_ID to $TARGET_STATUS: $OUT"
             fi
           done
           echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
