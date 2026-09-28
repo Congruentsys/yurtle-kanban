@@ -2976,7 +2976,8 @@ class KanbanService:
         path = top / rel
         if not self.config.is_multi_board:
             roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
-            roots += self._placement_dirs()
+            # only those inside the repo root, as _scan loads them (#963)
+            roots += [d for d in self._placement_dirs() if d.is_relative_to(self.repo_root)]
             heads = [
                 head.as_posix() for root in roots
                 if (head := self._repo_relative(root, top)) is not None
