@@ -57,6 +57,7 @@ from .models import (
     WorkItemStatus,
     WorkItemType,
     check_encodable,
+    fold_id,
     unknown_priority_message,
 )
 from .service import KanbanService, git_toplevel
@@ -797,10 +798,10 @@ def show(item_id: str, as_json: bool):
     item = service.get_item(item_id.upper())
     if not item:
         # The ID may belong to a file that exists but doesn't parse (#158)
-        wanted = item_id.upper()
+        wanted = fold_id(item_id)  # the one ID fold (#817)
         broken = [
             (path, reason) for path, reason in service.parse_warnings
-            if path.stem.upper() == wanted or path.stem.upper().startswith(wanted + "-")
+            if fold_id(path.stem) == wanted or fold_id(path.stem).startswith(wanted + "-")
         ]
         if as_json:
             payload: dict[str, object] = {"error": f"Item not found: {item_id}"}

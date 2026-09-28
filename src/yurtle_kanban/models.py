@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
@@ -35,8 +36,18 @@ def unknown_priority_message(value: object) -> str:
 
 ID_PREFIX_FORM = (
     "a letter, then letters or digits, in dash-separated segments, with an optional "
-    "trailing '.' after a final digit and no dash (EXP, IDEA-R, H130.)"
+    "trailing '.' after a final ASCII digit and no dash (EXP, IDEA-R, H130.)"
 )
+
+
+def fold_id(text: str) -> str:
+    """The one fold for comparing IDs and prefixes: NFC(upper(NFC(text))) (#817).
+
+    Case folded, so `exp-3` is `EXP-3` (#732), and NFC on both sides of the upper
+    case, since upper-casing can undo NFC (`ΐ` upper-cases to a decomposed `Ϊ́`):
+    every spelling of one ID folds to one string. Idempotent; ASCII digits are
+    never changed, so a folded ID's number is where it was."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).upper())
 
 
 def id_prefix(prefix: str) -> str | None:
@@ -47,8 +58,6 @@ def id_prefix(prefix: str) -> str | None:
     word). Each segment starts with a letter or digit, the first with a letter.
     A trailing `.` marks a paper-scoped space (`H130.`): only after a final digit
     and with no dash, so `H-1.` never lands in the dashed `H-` space."""
-    import unicodedata
-
     text = unicodedata.normalize("NFC", prefix)
     dotted = text.endswith(".")
     body = text[:-1] if dotted else text

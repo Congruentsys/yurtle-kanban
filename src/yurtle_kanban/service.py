@@ -51,6 +51,7 @@ from .models import (
     WorkItemStatus,
     WorkItemType,
     check_encodable,
+    fold_id,
     id_prefix,
     turtle_string,
     turtle_unescape,
@@ -698,9 +699,9 @@ class KanbanService:
 
     def _index_item(self, item: WorkItem) -> None:
         """Put a scanned item in `_items`, recording its ID in `duplicate_ids` when
-        another file already holds it (#576), IDs compared upper-cased so `exp-5`
-        and `EXP-5` are one ID (#732): the dict keeps one, silently."""
-        key = item.id.upper()
+        another file already holds it (#576), IDs compared folded (`fold_id`) so
+        `exp-5` and `EXP-5` are one ID (#732, #817): the dict keeps one, silently."""
+        key = fold_id(item.id)
         prior = self._folded_items.get(key)
         if prior is not None and prior.file_path.resolve() != item.file_path.resolve():
             files = self.duplicate_ids.setdefault(key, [prior.file_path])
@@ -1679,9 +1680,10 @@ class KanbanService:
 
     def _lookup(self, item_id: str) -> WorkItem | None:
         """The cached item for `item_id`: an exact match first, else the one whose
-        ID differs only in case, since `exp-9` and `EXP-9` are one ID (#732, #741)."""
+        ID folds to the same (`fold_id`), since `exp-9` and `EXP-9` are one ID
+        (#732, #741, #817)."""
         item = self._items.get(item_id)
-        if item is None and (folded := self._folded_items.get(item_id.upper())):
+        if item is None and (folded := self._folded_items.get(fold_id(item_id))):
             item = self._items.get(folded.id)
         return item
 
@@ -1703,7 +1705,7 @@ class KanbanService:
         """Refuse `action` ("a move", "an update", ...) on an item whose ID, case
         folded, is on more than one board: which copy it meant is ambiguous
         (#721, #732, #742). Names every file."""
-        files = self.duplicate_ids.get(item.id.upper())
+        files = self.duplicate_ids.get(fold_id(item.id))
         if files:
             where = ", ".join(self._display_path(f) for f in files)
             raise InputRefused(
@@ -2787,10 +2789,10 @@ class KanbanService:
     def _id_key(item_id: str) -> tuple[str, int] | None:
         """`item_id` as (the text before its trailing number, separator included,
         number), for comparing ids: `EXP-3` and `EXP-003` are (`EXP-`, 3), `EXP3`
-        is (`EXP`, 3), so they differ (#661). The text is case folded: `exp-3` is
-        `EXP-3` (#732, #764). None when it ends in no number."""
+        is (`EXP`, 3), so they differ (#661). The text is folded (`fold_id`): `exp-3`
+        is `EXP-3` (#732, #764, #817). None when it ends in no number."""
         match = re.fullmatch(r"(.*?)(\d+)", item_id)
-        return None if match is None else (match.group(1).upper(), int(match.group(2)))
+        return None if match is None else (fold_id(match.group(1)), int(match.group(2)))
 
     @staticmethod
     def _stem_holds(stem: str, key: tuple[str, int]) -> bool:
@@ -2798,9 +2800,8 @@ class KanbanService:
         its text, then its number, then no more of an id (`EXP-003-Title` and
         `EXP-003.v2` hold (`EXP-`, 3); `H1.2-Title`, a paper-scoped id, does not hold
         (`H`, 1)) (#661, #685)."""
-        text, num = key  # `_id_key` folds the text; the stem's head is folded (#764)
-        # the stem's own head slice: an upper-cased stem may be longer (#765, #775)
-        rest = stem[len(text):] if stem[: len(text)].upper() == text else None
+        text, num = key  # `_id_key` folds the text; so is the stem's head (#764, #817)
+        rest = KanbanService._stem_rest(stem, text)
         match = re.match(r"(\d+)(?!\d|\.\d)", rest) if rest is not None else None
         return match is not None and int(match.group(1)) == num
 
@@ -2808,11 +2809,23 @@ class KanbanService:
     def _stem_id(cls, stem: str, prefix: str) -> int | None:
         """The id number a filename stem starts with in `prefix`'s space
         (`EXP-608-Some-Title` -> 608), or None; case folded, `exp-608-…` too (#752)."""
-        head = prefix + cls._id_sep(prefix)
-        # the stem's own head slice, folded: an upper-cased stem may be longer (#765)
-        held = stem[: len(head)].upper() == head.upper()
-        match = re.match(r"(\d+)", stem[len(head):]) if held else None
+        rest = cls._stem_rest(stem, prefix + cls._id_sep(prefix))
+        match = re.match(r"(\d+)", rest) if rest is not None else None
         return int(match.group(1)) if match else None
+
+    @staticmethod
+    def _stem_rest(stem: str, head: str) -> str | None:
+        """What follows `head` in a filename stem that starts with it, folded
+        (`fold_id`), else None (#765, #775, #817). Both sides are compared
+        decomposed (NFD), so the stem's own head is the slice as long as the folded
+        `head`: every spelling of `ΐX-` (NFC, decomposed, upper-cased) lines up with
+        `Ϊ́X-`, while a letter whose upper case is more letters never does, `ß-12`
+        holding no `SS-` id (#775, #792). Folding never changes an ASCII digit."""
+        want = fold_id(head)
+        decomposed, width = (
+            unicodedata.normalize("NFD", stem), len(unicodedata.normalize("NFD", want))
+        )
+        return decomposed[width:] if fold_id(decomposed[:width]) == want else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
         """The file under the work paths at commit `rev` that holds `item_id`, or
@@ -2826,17 +2839,15 @@ class KanbanService:
         if holders:
             return holders[0]
         key = self._id_key(item_id)
-        folded = item_id.upper()  # `m-042` holds `M-042` (#732, #764)
         with_id = {path for path, _ in ids}
         for name in names:
             if name in with_id:
                 continue  # it holds its own `id:` only (#788)
-            # the stem's own head slice, folded: an upper-cased stem may be longer
-            # (`ß` is `SS`), so fold only what lines up with the ID (#775, #792)
+            # the stem's head folded, `m-042` holds `M-042` (#732, #764, #817); only
+            # what lines up with the ID: `ß` is no `SS` (#775, #792)
             stem = Path(name).stem
-            head, rest = stem[: len(folded)], stem[len(folded):]
-            if (len(head) == len(folded) and head.upper() == folded
-                    and rest[:1] in ("", "-")) or (
+            rest = self._stem_rest(stem, item_id)
+            if (rest is not None and rest[:1] in ("", "-")) or (
                 key is not None and self._stem_holds(stem, key)
             ):
                 return name
@@ -2853,10 +2864,10 @@ class KanbanService:
         if ids is None:
             ids = self._ids_at(rev)[1]
         key = self._id_key(item_id)
-        folded = item_id.upper()
+        folded = fold_id(item_id)
         return list(dict.fromkeys(
             path for path, found in ids
-            if found.upper() == folded or (key is not None and self._id_key(found) == key)
+            if fold_id(found) == folded or (key is not None and self._id_key(found) == key)
         ))
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
@@ -3087,7 +3098,7 @@ class KanbanService:
         a dashless `EXP3` is in no dashed space, as #661 has it), else 0 (#752,
         #765, #776)."""
         key = cls._id_key(item_id)  # its text is folded (#764)
-        head = (prefix + cls._id_sep(prefix)).upper()
+        head = fold_id(prefix + cls._id_sep(prefix))  # one fold (#817)
         return key[1] if key is not None and key[0] == head else 0
 
     @classmethod
@@ -3807,8 +3818,8 @@ class KanbanService:
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
         # a malformed prefix allocates nothing (#802); one NFC spelling (#817)
-        # upper-casing can undo NFC (`ΐ` → `Ϊ́` decomposed): normalize after it (#817)
-        prefix = unicodedata.normalize("NFC", self._check_prefix(prefix).upper())
+        # the one fold, NFC(upper(NFC)): upper-casing can undo NFC (`ΐ`) (#817)
+        prefix = fold_id(self._check_prefix(prefix))
         actor = ""
         if commit_allocation:
             # the record names who allocated: no actor, nothing is written (#620)
@@ -4273,7 +4284,7 @@ class KanbanService:
             return Refuse(f"Item not found: {item_id} ({rel} is gone)")
         item = self._parse_text(top / rel, text)
         if item is None or (
-            item.id.upper() != item_id.upper()
+            fold_id(item.id) != fold_id(item_id)
             and (self._id_key(item.id) is None or self._id_key(item.id) != self._id_key(item_id))
         ):
             return Refuse(f"Item not found: {item_id} ({rel} does not hold it)")
@@ -5654,13 +5665,13 @@ class KanbanService:
         (#574, #576): what `_check_new_dependencies` checks a pushed edit against."""
         configs = list(self.config.boards) if self.config.is_multi_board else [None]
         graph = {
-            i.id.upper(): self._id_list(i.depends_on)
+            fold_id(i.id): self._id_list(i.depends_on)
             for c in configs for i in self._items_at(rev, c)
         }
         top = self._git_toplevel()
         files: dict[str, list[Path]] = {}
         for path, found in self._ids_at(rev)[1]:
-            held = files.setdefault(found.upper(), [])
+            held = files.setdefault(fold_id(found), [])
             if top / path not in held:
                 held.append(top / path)
         return graph, {i: f for i, f in files.items() if len(f) > 1}
@@ -5684,18 +5695,18 @@ class KanbanService:
 
     @staticmethod
     def _id_list(ids: list[Any]) -> list[str]:
-        """Item IDs as written and looked up: stripped, upper-cased, blanks and
-        repeats dropped, order kept (#576). A bare string is refused: it would be
+        """Item IDs as written and looked up: stripped, folded (`fold_id`), blanks
+        and repeats dropped, order kept (#576, #817). A bare string is refused: it would be
         written as a list of its characters (#719)."""
         if isinstance(ids, str):
             raise ValueError(f"expected a list of item IDs, got the string {ids!r}")
-        return list(dict.fromkeys(s for i in ids if (s := str(i).strip().upper())))
+        return list(dict.fromkeys(s for i in ids if (s := fold_id(str(i).strip()))))
 
     @staticmethod
     def _list_change(key: str, old: list[Any], new: list[str]) -> str:
         """`depends_on +EXP-3 -EXP-2`: a list edit as the commit message names it;
-        just `key` when nothing changed. IDs compare upper-cased; tags as written."""
-        norm = str if key == "tags" else str.upper
+        just `key` when nothing changed. IDs compare folded; tags as written."""
+        norm = str if key == "tags" else fold_id
         old_ids = [str(i) for i in old]
         old_keys = {norm(i) for i in old_ids}
         new_keys = {norm(i) for i in new}
@@ -5717,14 +5728,14 @@ class KanbanService:
         or with a dangling target, still goes through. `board` is the (dependency
         graph, duplicated IDs) to check against, e.g. a fetched commit's (#574);
         default the scanned board's."""
-        me = item.id.upper()
+        me = fold_id(item.id)
         had = set(self._id_list(item.depends_on))
         added = [d for d in new_deps if d not in had]
         if not added:
             return
         if board is None:
             graph = self.dependency_graph()
-            duplicated = {i.upper(): files for i, files in self.duplicate_ids.items()}
+            duplicated = {fold_id(i): files for i, files in self.duplicate_ids.items()}
         else:
             graph, duplicated = dict(board[0]), board[1]
         for target in added:
@@ -5758,13 +5769,13 @@ class KanbanService:
     def dependency_graph(self) -> dict[str, list[str]]:
         """Each item's `depends_on` targets, keyed by item ID, over every board (#576).
 
-        IDs are upper-cased. A target on no board is kept in its item's list and has
+        IDs are folded (`fold_id`). A target on no board is kept in its item's list and has
         no key of its own. Reused by `find_cycle`, `validate`, #575 and #577.
         """
         if not self._items:
             self.scan()
         return {
-            item.id.upper(): self._id_list(item.depends_on) for item in self._items.values()
+            fold_id(item.id): self._id_list(item.depends_on) for item in self._items.values()
         }
 
     def find_cycle(
@@ -5782,7 +5793,7 @@ class KanbanService:
         elsewhere in the graph, not through `start`, is not reported.
         """
         graph = self.dependency_graph() if graph is None else graph
-        start = start.upper()
+        start = fold_id(start)
         dead: set[str] = set()  # nodes with no path back to `start`
         for first in graph.get(start, []) if via is None else self._id_list(via):
             path = self._path_back(graph, first, start, dead)
