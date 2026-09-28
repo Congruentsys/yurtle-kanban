@@ -18,6 +18,7 @@ import random
 import re
 import subprocess
 import time
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
@@ -3806,8 +3807,8 @@ class KanbanService:
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
         # a malformed prefix allocates nothing (#802); one NFC spelling (#817)
-        prefix = self._check_prefix(prefix)
-        prefix = prefix.upper()
+        # upper-casing can undo NFC (`ΐ` → `Ϊ́` decomposed): normalize after it (#817)
+        prefix = unicodedata.normalize("NFC", self._check_prefix(prefix).upper())
         actor = ""
         if commit_allocation:
             # the record names who allocated: no actor, nothing is written (#620)

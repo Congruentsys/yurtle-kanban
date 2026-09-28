@@ -50,8 +50,10 @@ def id_prefix(prefix: str) -> str | None:
     import unicodedata
 
     text = unicodedata.normalize("NFC", prefix)
-    body = text[:-1] if text.endswith(".") else text
-    if body is not text and ("-" in body or not body or not body[-1].isdigit()):
+    dotted = text.endswith(".")
+    body = text[:-1] if dotted else text
+    # the paper number before a dot is an ASCII int: `H٣.` and `H１３.` are not `H3.`
+    if dotted and ("-" in body or not body or body[-1] not in "0123456789"):
         return None
     segments = body.split("-")
     for n, segment in enumerate(segments):
