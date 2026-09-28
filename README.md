@@ -51,6 +51,7 @@ yurtle-kanban init --theme software
 # so two people creating at once cannot land on the same one
 yurtle-kanban create feature "Add dark mode" --push --priority high
 yurtle-kanban create bug "Fix login error" --push --assign dev-1
+yurtle-kanban create feature "Dark mode settings" --push   # FEAT-002
 
 # View the board
 yurtle-kanban board
@@ -86,7 +87,7 @@ yurtle-kanban show FEAT-001
 
 # Each board's lifecycle: every status and its legal next statuses
 yurtle-kanban states
-yurtle-kanban states --board research --json
+yurtle-kanban states --board default --json    # one board, as JSON
 
 # Prioritized roadmap (excludes done items)
 yurtle-kanban roadmap
