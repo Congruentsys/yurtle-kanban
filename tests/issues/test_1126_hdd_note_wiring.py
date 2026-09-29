@@ -6,7 +6,8 @@ other hdd creates reach the note through the same shared `_print_created_file`
 silently lose the note with nothing going red. This static check finds every
 `<group>.command("create")` in `hdd_commands.py` that takes a `--push` option —
 discovered from the click decorators, not a hard-coded list — and asserts its
-`if push:` branch calls `_print_created_file` (or `pull_note` directly).
+`if push:` branch calls `_print_created_file` (or `pull_note` directly) on its
+success path — not only in the failure branch of `if result["success"]` (#1137).
 """
 
 from __future__ import annotations
@@ -66,13 +67,61 @@ def _tests_push(test: ast.expr) -> bool:
     return any(isinstance(n, ast.Name) and n.id == "push" for n in ast.walk(test))
 
 
+def _success_polarity(test: ast.expr) -> bool | None:
+    """True for `if ...success...:`, False for `if not ...success...:`, else None.
+
+    "success" is matched as a subscript key (`result["success"]`), an attribute
+    (`result.success`) or a bare name (`success`).
+    """
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _success_polarity(test.operand)
+        return None if inner is None else not inner
+    for n in ast.walk(test):
+        if isinstance(n, ast.Constant) and n.value == "success":
+            return True
+        if isinstance(n, ast.Attribute) and n.attr == "success":
+            return True
+        if isinstance(n, ast.Name) and n.id == "success":
+            return True
+    return None
+
+
+def _success_path_calls_note(stmts: list[ast.stmt]) -> bool:
+    """A note helper is called in `stmts` outside every failure-only branch (#1137).
+
+    The failure-only branch of `if <success>:` is its `else:`; of
+    `if not <success>:` it is the body. Every other branch is walked.
+    """
+    for stmt in stmts:
+        if isinstance(stmt, ast.If):
+            polarity = _success_polarity(stmt.test)
+            if any(_call_name(n) in NOTE_HELPERS for n in ast.walk(stmt.test)):
+                return True
+            if polarity is not False and _success_path_calls_note(stmt.body):
+                return True
+            if polarity is not True and _success_path_calls_note(stmt.orelse):
+                return True
+            continue
+        nested = [
+            body
+            for field in ("body", "orelse", "finalbody")
+            if isinstance(body := getattr(stmt, field, None), list)
+        ] + [h.body for h in getattr(stmt, "handlers", [])]
+        if nested:  # for / while / with / try: walk each nested block the same way
+            if any(_success_path_calls_note(block) for block in nested):
+                return True
+            continue
+        if any(_call_name(n) in NOTE_HELPERS for n in ast.walk(stmt)):
+            return True
+    return False
+
+
 def _push_branch_prints_note(func: ast.FunctionDef) -> bool:
-    """Some `if ...push...:` body in `func` calls a note helper."""
+    """Some `if ...push...:` body in `func` calls a note helper on its success path."""
     for node in ast.walk(func):
         if isinstance(node, ast.If) and _tests_push(node.test):
-            for stmt in node.body:
-                if any(_call_name(n) in NOTE_HELPERS for n in ast.walk(stmt)):
-                    return True
+            if _success_path_calls_note(node.body):
+                return True
     return False
 
 
@@ -119,6 +168,44 @@ def helper_outside_push(push):
     if push:
         pass
 
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_only_on_failure(push):
+    if push:
+        result = service.create_item_and_push()
+        if result["success"]:
+            console.print(result["id"])
+        else:
+            _print_created_file(result)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_only_when_not_success(push):
+    if push:
+        result = service.create_item_and_push()
+        if not result["success"]:
+            _print_created_file(result)
+            raise SystemExit(1)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_on_success(push):
+    if push:
+        result = service.create_item_and_push()
+        if result["success"]:
+            _print_created_file(result)
+        else:
+            raise SystemExit(1)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_after_guard(push):
+    if push:
+        result = service.create_item_and_push()
+        if not result["success"]:
+            raise SystemExit(1)
+        _print_created_file(result)
+
 @other.command("list")
 @click.option("--push", is_flag=True)
 def not_a_create(push):
@@ -132,5 +219,18 @@ def create_without_push():
 
 def test_checker_flags_a_push_create_without_the_note() -> None:
     found, missing = _unwired(SYNTHETIC)
-    assert found == ["thing_create", "other_create", "helper_outside_push"]
-    assert missing == ["thing_create", "helper_outside_push"]
+    assert found == [
+        "thing_create",
+        "other_create",
+        "helper_outside_push",
+        "note_only_on_failure",
+        "note_only_when_not_success",
+        "note_on_success",
+        "note_after_guard",
+    ]
+    assert missing == [
+        "thing_create",
+        "helper_outside_push",
+        "note_only_on_failure",
+        "note_only_when_not_success",
+    ]
