@@ -3693,8 +3693,13 @@ class KanbanService:
     _PLX = r"%[0-9A-Fa-f]{2}|\\[_~.\-!$&'()*+,;=/?#@%]"
     # Turtle's PN_PREFIX (#956): a letter in any script, then name characters and `.`,
     # never ending in `.` (`true.:Beta` is `true`, the statement's `.`, then `:Beta`)
-    _PN_PREFIX = r"[^\W\d_](?:[\w.-]*[\w-])?"
-    _PN_LOCAL = rf"(?:(?:[\w:]|{_PLX})(?:(?:[\w.:-]|{_PLX})*(?:[\w:-]|{_PLX}))?)?"
+    # PN_CHARS beyond `\w` (#1001): combining diacritics, `·` and the tie marks
+    _PN_EXTRA = "\u00b7\u0300-\u036f\u203f\u2040"
+    _PN_PREFIX = rf"[^\W\d_](?:[\w.{_PN_EXTRA}-]*[\w{_PN_EXTRA}-])?"
+    _PN_LOCAL = (
+        rf"(?:(?:[\w:]|{_PLX})"
+        rf"(?:(?:[\w.:{_PN_EXTRA}-]|{_PLX})*(?:[\w:{_PN_EXTRA}-]|{_PLX}))?)?"
+    )
     # a turtle block's tokens, in order (#876, #910): strings and comments only to be
     # skipped; `@prefix`/`@base` and SPARQL `PREFIX`/`BASE` directives, whose
     # bindings apply from where they are written; IRI refs and prefixed names
@@ -3707,6 +3712,10 @@ class KanbanService:
         r"|(?<![\w:-])(?:@prefix|(?i:prefix))\s+(" + _PN_PREFIX + r")?:\s*<([^<>\"{}|^`\\\s]*)>"
         r"|(?<![\w:-])(?:@base|(?i:base))\s+<([^<>\"{}|^`\\\s]*)>"
         r"|<([^<>\"{}|^`\\\s]*)>"
+        # a blank-node label, skipped whole: `_:a.b` is no `b:` name (#1001)
+        rf"|_:[\w][\w.{_PN_EXTRA}-]*(?<!\.)"
+        # a keyword ends at a `.`: `true.x:B` is `true`, `.`, `x:B` (#1001)
+        rf"|(?<![\w:-])(?:true|false)(?![\w:{_PN_EXTRA}-])"
         rf"|(?<![\w:-])({_PN_PREFIX})?:({_PN_LOCAL})"
     )
 
