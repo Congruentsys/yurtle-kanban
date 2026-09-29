@@ -52,7 +52,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     work = tmp_path / "work"
     work.mkdir()
-    for item_id, item_type in [("DOC-001", "spec"), ("DOC-002", "spec"), (TASK, "task")]:
+    for item_id, item_type in [("DOC-001", "spec"), ("DOC-002", "Spec"), (TASK, "task")]:
         (work / f"{item_id}-x.md").write_text(
             f"---\nid: {item_id}\ntitle: Item {item_id}\ntype: {item_type}\n"
             f"status: draft\n---\n\n# Item {item_id}\n"
