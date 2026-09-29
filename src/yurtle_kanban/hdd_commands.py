@@ -149,13 +149,10 @@ def _refuse_duplicate_parent(service, parent_id: str | None) -> None:
 def _commit_or_exit(service, path, message: str) -> bool:
     """Commit just `path`; a refused commit is an error: nothing is pushed (#584).
     True when a commit was made, False when `path` was unchanged (#614)."""
-    import sys
-
     try:
         return service._commit_paths([path], message)
     except ValueError as e:  # GitCommitError
-        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
-        sys.exit(1)
+        refuse(e, console=console)
 
 
 def _push_only_head_or_exit(service, what: str) -> None:
@@ -165,18 +162,17 @@ def _push_only_head_or_exit(service, what: str) -> None:
     upstream to push to it pushes nothing and warns, like a failed push (the #192 /
     #478 contract). The commit stays local either way."""
     import subprocess
-    import sys
     from typing import Any, NoReturn
 
     kept = f"The {what} commit is kept locally"
 
     def refuse(reason: str) -> NoReturn:
-        console.print(
-            f"[red]Error: not pushed: {safe(reason)}. {safe(kept)} — push it yourself "
-            "once that's sorted.[/red]",
-            soft_wrap=True,
+        from ._click import refuse as shared_refuse  # this name shadows it (#1086)
+
+        shared_refuse(
+            f"not pushed: {reason}. {kept} — push it yourself once that's sorted.",
+            console=console,
         )
-        sys.exit(1)
 
     def no_upstream(reason: str) -> None:
         console.print(
@@ -1313,8 +1309,7 @@ def experiment_run(
             run_by=run_by,
         )
     except InputRefused as e:  # no actor, or a refused input (#620, #666)
-        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
-        raise SystemExit(1) from None
+        refuse(e, console=console)
 
     console.print(f"[green]Created run for {safe(expr_id)}[/green]")
     console.print(f"  Path: {safe(run_path)}")
