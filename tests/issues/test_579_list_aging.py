@@ -11,7 +11,9 @@ Summary of the spec:
   ``history`` (the last node of the canonical history block, used only when its
   canonical status equals the item's current canonical status), then ``git`` (the
   author date ``%aI`` of the last commit that changed the file's ``status:`` line,
-  found with ONE ``git log`` per invocation), then ``created`` (frontmatter
+  found with ONE ``git log`` per invocation; only under an aging flag since
+  #1055's Captain's ruling, so the git cases list with ``--stale-after 24h``,
+  which filters nothing), then ``created`` (frontmatter
   ``created``, taken as midnight in the reader's local zone), then ``unknown``
   (kept, sorted last, never dropped).
 - Stamps are timezone-aware when written (``move`` writes an offset). One read
@@ -118,6 +120,10 @@ COMMITTER_DATE = "2026-06-15T11:30:00+00:00"
 
 NAIVE_REVIEW = "2026-06-14T12:00:00"  # EXP-8: a naive stamp (reader's local time)
 CREATED_5 = date(2026, 6, 10)
+
+# an aging flag that lists the same rows as plain `list --json` but runs the git
+# source (#1055, Captain's ruling): the default threshold, given explicitly
+GIT = ["--stale-after", "24h"]
 
 AGING_KEYS = ("since", "since_source", "age_seconds", "stale", "clock_skew", "board")
 EXISTING_KEYS = ("id", "title", "item_type", "status", "file_path", "priority", "assignee")
@@ -415,7 +421,7 @@ def test_a1_history_disagreeing_with_frontmatter_falls_to_git(
 ) -> None:
     """History ends in review, frontmatter says done: the git source, i.e. the
     AUTHOR date of the commit that changed the status line."""
-    row = by_id(rows([]))["EXP-3"]
+    row = by_id(rows(GIT))["EXP-3"]
     assert row["since_source"] == "git", row
     expected = datetime.fromisoformat(DATE_3)
     assert since_of(row) == expected
@@ -426,7 +432,7 @@ def test_a1_no_history_committed_is_git(board: Path, clock: datetime) -> None:
     """No history; created by a commit and later retitled. The retitle does not
     touch `status:`, so `since` is the creating commit's author date, not
     `created:` (git outranks it)."""
-    row = by_id(rows([]))["EXP-4"]
+    row = by_id(rows(GIT))["EXP-4"]
     assert row["since_source"] == "git", row
     expected = datetime.fromisoformat(DATE_4)
     assert since_of(row) == expected
@@ -467,7 +473,7 @@ def test_a2_one_git_log_per_invocation(
             super().__init__(args, *a, **kw)
 
     monkeypatch.setattr(subprocess, "Popen", Spy)
-    data = by_id(rows([]))
+    data = by_id(rows(GIT))
     monkeypatch.setattr(subprocess, "Popen", real)
     # two committed items need the git source (EXP-11's lone block after
     # `## Comments` is legacy history: [steer] bucket-1)...
