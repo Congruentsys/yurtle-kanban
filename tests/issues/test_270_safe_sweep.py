@@ -124,7 +124,7 @@ def test_show_parse_reason_real_yaml_error_escapes_bidi_override(
     (repo / "work" / "FEAT-002.md").write_text(
         f'---\nid: FEAT-002\ntitle: "a{RLO}b\n---\n\n# t\n'
     )
-    plain = _plain(_run(repo, ["show", "FEAT-002"], monkeypatch))
+    plain = _plain(_run(repo, ["show", "FEAT-002"], monkeypatch, err=True))
     assert "doesn't parse" in plain, repr(plain)
     assert RLO not in plain, f"raw RLO reached the terminal: {plain!r}"
     assert "\\u202e" in plain, repr(plain)
@@ -140,7 +140,7 @@ def test_show_parse_reason_with_control_chars_is_escaped(
         return f"YAML error: quoting {EVIL}"  # a reason that quotes the file's text
 
     monkeypatch.setattr(KanbanService, "_unparseable_reason", reason)
-    _assert_escaped(_run(repo, ["show", "FEAT-002"], monkeypatch), "doesn't parse")
+    _assert_escaped(_run(repo, ["show", "FEAT-002"], monkeypatch, err=True), "doesn't parse")
 
 
 # --- 2. validate: ids from frontmatter ------------------------------------------------
@@ -229,7 +229,7 @@ def test_create_push_git_message_is_escaped(
         return {"success": False, "message": f"git said: {EVIL}"}
 
     monkeypatch.setattr(KanbanService, "create_item_and_push", push)
-    out = _run(repo, ["create", "feature", "T", "--push"], monkeypatch)
+    out = _run(repo, ["create", "feature", "T", "--push"], monkeypatch, err=True)
     _assert_escaped(out, "Failed: git said")
 
 
@@ -242,7 +242,7 @@ def test_next_id_git_message_is_escaped(
         return {"success": False, "message": f"git said: {EVIL}"}
 
     monkeypatch.setattr(KanbanService, "allocate_next_id", allocate)
-    out = _run(repo, ["next-id", "FEAT"], monkeypatch)
+    out = _run(repo, ["next-id", "FEAT"], monkeypatch, err=True)
     _assert_escaped(out, "Failed to allocate ID: git said")
 
 

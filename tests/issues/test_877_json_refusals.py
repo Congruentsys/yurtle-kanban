@@ -375,7 +375,7 @@ def test_control_non_json_refusal_is_plain_text(board: Path, args: list[str], te
 def test_control_non_json_invalid_config_is_plain_text(bad_config: Path) -> None:
     result = _run(["list"])
     assert result.exit_code == 1, result.output
-    assert "Invalid " in result.stdout and "mapping" in result.stdout, result.output
+    assert "Invalid " in result.stderr and "mapping" in result.stderr, result.output
 
 
 def test_control_non_json_undecodable_argument_is_plain_text(board: Path) -> None:
