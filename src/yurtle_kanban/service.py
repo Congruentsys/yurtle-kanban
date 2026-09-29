@@ -6358,6 +6358,17 @@ class KanbanService:
         """Get all blocked items."""
         return self.get_items(status=WorkItemStatus.BLOCKED)
 
+    def refuse_unknown_board(self, board: str | None) -> None:
+        """Raise `InputRefused` (`Unknown board: X`, as `states` says it) for a board
+        name no config knows; a single-board repo's one board is `default`, the name
+        `boards` shows (#1068). None (every board) passes."""
+        if board is None:
+            return
+        config = self.config
+        names = [b.name for b in config.boards] if config.is_multi_board else ["default"]
+        if board not in names:
+            raise InputRefused(f"Unknown board: {board}")
+
     def blocked(
         self, board: str | None = None, include_backlog: bool = False
     ) -> list[tuple[WorkItem, bool, list[DepNode]]]:
@@ -6365,8 +6376,10 @@ class KanbanService:
         unfinished item that is status-blocked (canonical blocked; hdd abandoned is
         finished, so never) or dependency-blocked (ready, in_progress or review, plus
         backlog with `include_backlog`, and a depends_on item not met). `board`
-        limits the items listed, not where dependencies are found. The CLI and MCP
-        `kanban_get_blocked` both read this (#1066)."""
+        limits the items listed, not where dependencies are found; an unknown one
+        is refused (#1068). The CLI and MCP `kanban_get_blocked` both read this
+        (#1066)."""
+        self.refuse_unknown_board(board)
         waiting = {WorkItemStatus.READY, WorkItemStatus.IN_PROGRESS, WorkItemStatus.REVIEW}
         if include_backlog:
             waiting.add(WorkItemStatus.BACKLOG)

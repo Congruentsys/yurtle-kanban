@@ -612,7 +612,7 @@ def list_items(
         except ValueError as e:
             _refuse(e)
     service = get_service()
-    _refuse_unknown_board(service.config, board_name)
+    _refuse_unknown_board(service, board_name)
 
     # Parse filters: a status name is resolved through each item's own theme
     # (#579, #587); refused only when no board in scope knows it
@@ -1942,8 +1942,7 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
     Only depends_on is followed: for hdd `implements` edges, see
     `hdd critical-path --dev-blockers`.
     """
-    service = get_service()
-    _refuse_unknown_board(service.config, board_name)
+    service = get_service()  # an unknown --board: refused by service.blocked (#1068)
     if as_json:  # one service function with MCP `kanban_get_blocked` (#1066)
         click.echo(json.dumps(service.blocked_report(board_name, show_all), indent=2))
         return
@@ -1959,14 +1958,13 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
         _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1)
 
 
-def _refuse_unknown_board(config: Any, board_name: str | None) -> None:
-    """Refuse a `--board` no config knows, as `states` does (#1068): a single-board
-    repo's one board is `default`, the name `boards` shows."""
-    if board_name is None:
-        return
-    names = [b.name for b in config.boards] if config.is_multi_board else ["default"]
-    if board_name not in names:
-        _refuse(f"Unknown board: {board_name}", f"[red]Unknown board: {safe(board_name)}[/red]")
+def _refuse_unknown_board(service: Any, board_name: str | None) -> None:
+    """`list`'s refusal of a `--board` no config knows (#1068): the service's
+    `refuse_unknown_board`, as a CLI refusal."""
+    try:
+        service.refuse_unknown_board(board_name)
+    except InputRefused as e:
+        _refuse(e, f"[red]{safe(e)}[/red]")
 
 
 def _status_with(status: str | None, assignee: Any) -> str:

@@ -174,3 +174,25 @@ def test_blocked_builds_the_index_once(
     result = run(["blocked", *(["--json"] if as_json else [])])
     assert result.exit_code == 0, result.output
     assert calls == {"_dep_index": 1, "_dep_graph": 1}, calls
+
+
+@pytest.mark.parametrize("args", [{"board": "nosuch"}, {"board": "nosuch", "all": True}])
+def test_mcp_get_blocked_refuses_an_unknown_board(graph: Repo, args: dict[str, Any]) -> None:
+    """#1066's [steer]: the tool returns what `blocked --json` does, through one
+    service function, so it refuses the same unknown board."""
+    from yurtle_kanban.mcp import server as mcp_server
+
+    out = mcp_server.KanbanMCPServer(repo_root=graph.root).handle_tool_call(
+        "kanban_get_blocked", args
+    )
+    assert out == {"error": "Unknown board: nosuch"}, out
+
+
+def test_service_blocked_refuses_an_unknown_board(graph: Repo) -> None:
+    from yurtle_kanban.models import InputRefused
+
+    service = graph.service()
+    for call in (service.blocked, service.blocked_report):
+        with pytest.raises(InputRefused, match="^Unknown board: nosuch$"):
+            call("nosuch")
+    assert service.blocked("research")  # a real board still works
