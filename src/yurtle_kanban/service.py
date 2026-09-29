@@ -4508,7 +4508,9 @@ class KanbanService:
             )
         finished = self.is_finished(proposed)
         if resolution is None:
-            if finished or not (item.resolution or item.superseded_by):
+            # only a resolved item is reopened: a stray hand-written superseded_by
+            # stays as written (#583)
+            if finished or not item.resolution:
                 return {}, None
             return {"resolution": None, "superseded_by": []}, item.resolution
         if resolution not in RESOLUTIONS:
