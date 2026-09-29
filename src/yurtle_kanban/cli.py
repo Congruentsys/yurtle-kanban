@@ -590,8 +590,9 @@ def list_items(
     for --stale-after (default 24h) or longer. Both sort oldest first, items of
     unknown age last, and add Age and Since columns; --stale prints the
     `claim ID --take-over` command for each row. `since` is the item's last
-    history node when it names the current status, else the author date of the
-    last commit that changed its `status:` line, else `created:`, else unknown.
+    history node when it names the current status, else (under --older-than,
+    --stale or --stale-after only, #1055) the author date of the last commit that
+    changed its `status:` line, else `created:`, else unknown.
     """
     if pickable and (status is not None or assignee is not None):
         raise click.UsageError(
