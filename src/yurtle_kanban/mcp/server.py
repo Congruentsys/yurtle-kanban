@@ -623,7 +623,7 @@ class KanbanMCPServer:
     def _suggest_next(self, args: dict[str, Any]) -> dict[str, Any]:
         """Suggest the next item to work on: the item `next` gives (#575)."""
         actor = advisory_actor(args.get("assignee"), cwd=self.repo_root, flag="assignee")
-        control = self.service.control_state()
+        control = self.service.control_state(fresh=True)  # a long-lived server (#1067)
         if control.halted:  # as `next`: nothing, even work in progress (#582)
             return {"suggestion": None, "message": control.refusal(), "halted": True}
         found = self.service.next_item(actor)
