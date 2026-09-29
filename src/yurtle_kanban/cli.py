@@ -1614,13 +1614,14 @@ def roadmap(
         lines = ["# Roadmap\n"]
         for i, item in enumerate(items, 1):
             priority = item.priority or "medium"
-            assignee = item.assignee or "unassigned"
+            # one list line per item: controls shown as `\x1b` / `\n` (#1101)
+            assignee = escape_nonprintable(item.assignee or "unassigned")
             if item.priority_rank is not None:
                 rank_str = f" [rank:{item.priority_rank}]"
             else:
                 rank_str = ""
             lines.append(
-                f"{i}. **{item.id}**: {item.title} "
+                f"{i}. **{escape_nonprintable(item.id)}**: {escape_nonprintable(item.title)} "
                 f"[{priority}]{rank_str} "
                 f"({service.status_label(item)}) @{assignee}"
             )
