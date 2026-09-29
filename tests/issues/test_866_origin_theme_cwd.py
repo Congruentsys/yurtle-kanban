@@ -185,3 +185,35 @@ def test_origins_own_theme_override_is_honoured_from_any_cwd(
     )
     assert "wip" in out.message.lower(), out.message
     assert world.remote_sha() == base
+
+
+# --- #967 part 2: the SERVICE repo's working-tree override never judges origin either ------
+#
+# The judge drops both the cwd's and the service repo's (A's) working-tree
+# `.kanban/themes`. With cwd = A the cwd half alone drops A's, so only cwd = the
+# other repo pins the repo_root half: A holds an UNCOMMITTED override that loosens
+# the limit to 50 while origin is full at the built-in 10.
+
+
+@pytest.mark.parametrize("where", ["A", "other"])
+def test_service_repos_uncommitted_theme_does_not_lift_origins_limit(
+    world, tmp_path, monkeypatch, where
+) -> None:
+    other = make_other_repo(tmp_path, limit=BUILTIN_LIMIT)
+    (other / ".kanban" / "themes" / "nautical.yaml").unlink()  # no override in the cwd repo
+    a_themes = world.a / ".kanban" / "themes"
+    a_themes.mkdir(parents=True)
+    (a_themes / "nautical.yaml").write_text(nautical_with_limit(50))
+    assert "nautical.yaml" in git(world.a, "status", "--porcelain", "--untracked-files=all")
+    b_push(world, in_progress_items(BUILTIN_LIMIT))
+    base = world.remote_sha()
+
+    out = run_claim_from(where, world, other, monkeypatch)
+
+    assert out.kind == "refused", (
+        f"cwd={where}: origin is full at the built-in nautical limit {BUILTIN_LIMIT}; "
+        f"A's uncommitted .kanban/themes/nautical.yaml (limit 50) must not lift it: "
+        f"{out.kind}: {out.message}"
+    )
+    assert "wip" in out.message.lower(), out.message
+    assert world.remote_sha() == base
