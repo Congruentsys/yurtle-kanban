@@ -36,7 +36,16 @@ def argv_requests_json(args: list[str], root: click.Command | None = None) -> bo
         arg = args[i]
         if arg == "--json":
             return True
-        if arg.startswith("-") and arg != "-" and "=" not in arg:
+        if arg.startswith("-") and arg != "-" and "=" in arg:
+            # `--name=value`: an option cmd doesn't know is where click fails (#1036)
+            name = arg.split("=", 1)[0]
+            known = any(
+                name in p.opts + p.secondary_opts
+                for p in cmd.params if isinstance(p, click.Option)
+            )
+            if not known and name not in _help_names(cmd):
+                return "--json" in args[i + 1 :]
+        elif arg.startswith("-") and arg != "-":
             nxt = args[i + 1] if i + 1 < len(args) else None
             step = _value_follows(cmd, arg, nxt)
             if step is None:  # click fails here: a later `--json` was still asked for
@@ -49,9 +58,10 @@ def argv_requests_json(args: list[str], root: click.Command | None = None) -> bo
 
 
 def _help_names(cmd: click.Command) -> list[str]:
-    """`--help` and the like: options click adds that are not in `cmd.params`."""
-    ctx = click.Context(cmd)
-    return list(ctx.help_option_names)
+    """`--help` and the like: options click adds that are not in `cmd.params`, as
+    the command's own `context_settings` name them (#1036)."""
+    names = (cmd.context_settings or {}).get("help_option_names")
+    return list(names) if names is not None else list(click.Context(cmd).help_option_names)
 
 
 def _value_follows(cmd: click.Command, arg: str, nxt: str | None = None) -> bool | None:

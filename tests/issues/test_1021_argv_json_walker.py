@@ -156,3 +156,25 @@ def test_unknown_option_stops_the_walk(args: list[str]) -> None:
     result = CliRunner().invoke(root, args)
     assert result.exit_code == 2 and "No such option" in result.output, result.output
     assert argv_requests_json(args, root) is True
+
+
+# --- #1036: an unknown `--name=value` stops the walk; help names from context_settings --
+
+
+@pytest.mark.parametrize(
+    "args", [["c", "--bogus=1", "-n", "--json"], ["c", "-x=1", "-n", "--json"]],
+    ids=["unknown-long-eq", "unknown-short-eq"],
+)
+def test_unknown_option_with_equals_stops_the_walk(args: list[str]) -> None:
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2 and "No such option" in result.output, result.output
+    assert argv_requests_json(args, root) is True
+
+
+def test_help_names_follow_context_settings() -> None:
+    from yurtle_kanban._click import _help_names
+
+    @click.command(context_settings={"help_option_names": ["-h", "--help"]})
+    def withh() -> None: ...
+
+    assert _help_names(withh) == ["-h", "--help"]
