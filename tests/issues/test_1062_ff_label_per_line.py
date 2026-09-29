@@ -21,32 +21,35 @@ from tests.issues.test_1043_ff_warning import (  # noqa: F401  (fixtures)
     world,
 )
 from tests.test_634_explicit_ids_on_base import service
-from yurtle_kanban.service import _without_git_prefix, pull_note_text
+from yurtle_kanban.service import _git_refusal, pull_note_text
 
 ODD = "error: odd.md"
 
 
-# --- unit: _without_git_prefix (the note's own strip) -------------------------------
+# --- unit: the one strip site, `_git_refusal`'s reason (#1138) --------------------
+
+
+def _reason(line: str) -> str | None:
+    return _git_refusal(line + "\n")[1]
 
 
 def test_leading_label_dropped() -> None:
-    assert _without_git_prefix("fatal: Not possible to fast-forward, aborting.") == (
+    assert _reason("fatal: Not possible to fast-forward, aborting.") == (
         "Not possible to fast-forward, aborting."
     )
 
 
 def test_label_mid_text_kept() -> None:
-    assert _without_git_prefix("an error: in text") == "an error: in text"
+    assert _reason("error: an error: in text") == "an error: in text"
 
 
 def test_file_named_like_a_label_mid_line_kept() -> None:
     why = f"The following untracked working tree files would be overwritten: {ODD}"
-    assert _without_git_prefix(why) == why
+    assert _reason(f"error: {why}") == why
 
 
 def test_bare_label_falls_back_to_raw() -> None:
-    assert _without_git_prefix("error:") == "error:"
-    assert _without_git_prefix("  fatal:  ") == "fatal:"
+    assert _reason("  fatal:  ") == "fatal:"  # `error:` alone: see below
 
 
 def test_note_never_reads_empty_refusal() -> None:
@@ -61,12 +64,6 @@ def test_note_keeps_mid_text_label() -> None:
 
 
 # --- unit: _git_refusal (per-line strip of git's output) ----------------------------
-
-
-def _git_refusal(out: str) -> tuple[str | None, str | None]:
-    from yurtle_kanban.service import _git_refusal as refusal
-
-    return refusal(out)
 
 
 def test_multi_line_output_strips_each_leading_label() -> None:

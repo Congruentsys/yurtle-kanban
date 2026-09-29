@@ -661,15 +661,6 @@ class LineEndings:
 _GIT_LABEL = re.compile(r"(?i)^\s*(?:error|fatal):\s*")
 
 
-def _without_git_prefix(why: str) -> str:
-    """git's reason with its own leading `error: ` / `fatal: ` label dropped, for a
-    note that already says what refused (#1057): "Not possible to fast-forward,
-    aborting.". Only the label git put first: the same text mid-line, e.g. a file
-    named `error: odd.md`, stays; a bare label leaves the raw text (#1062). For raw
-    git text only: a `_git_refusal` reason is already label-free (#1124)."""
-    return _GIT_LABEL.sub("", why).strip() or why.strip()
-
-
 def _git_refusal(out: str) -> tuple[str | None, str | None]:
     """git's failure in `out`, as (raw, reason): its `error:`/`fatal:` lines, not its
     `hint:` advice (#995), with the indented lines that continue a kept line, e.g.
