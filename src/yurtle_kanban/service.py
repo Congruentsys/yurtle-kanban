@@ -2923,10 +2923,10 @@ class KanbanService:
         return decomposed[width:] if fold_id(decomposed[:width]) == want else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
-        """The file under the id space's roots (`_rev_roots()`: the work paths and
-        every placement dir, #1014) at commit `rev` that holds `item_id`, or None (#634). Ids
-        are the same when the text before their number, separator included, and
-        the number are: `EXP-3` is `EXP-003` (#641), but `EXP3` is not
+        """The file at commit `rev` that holds `item_id`, or None (#634), read in
+        the id space (`_rev_roots()`: the work paths and every placement dir,
+        #1014). Ids are the same when the text before their number, separator
+        included, and the number are: `EXP-3` is `EXP-003` (#641), but `EXP3` is not
         (#661). The file whose frontmatter `id:` is the ID wins; a filename counts
         only for a file with no `id:` of its own, since the board names an item by
         its `id:` and never by a lookalike outline or another item's file (#788)."""
@@ -3078,11 +3078,11 @@ class KanbanService:
         })
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
-        """The `.md` files under the work paths and every placement dir at commit
-        `rev` (the id space: a placement dir the scan skips too, so an id committed
-        there is never reissued, #954, #1014), and each `id:` in
-        the leading frontmatter block of one as (path, id) (#590, #634); an `id:`
-        line in the body or a code block is not an id (#641)."""
+        """The `.md` files of the id space at commit `rev`, and each `id:` in the
+        leading frontmatter block of one as (path, id) (#590, #634); an `id:` line in
+        the body or a code block is not an id (#641). The id space is the work paths
+        and every placement dir, including one the scan skips, so an id committed
+        there is never reissued (#954, #1014)."""
         rels = self._rev_roots()
         if not rels:
             return [], []
