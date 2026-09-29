@@ -95,6 +95,16 @@ def _success_polarity(test: ast.expr) -> bool | None:
         if isinstance(test.op, ast.And) and len(polarities) == 1:
             return polarities.pop()
         return None
+    if isinstance(test, ast.Compare) and len(test.ops) == 1:
+        # `result["success"] == False` / `is False` / `!= True` (r1 F3): the
+        # comparison against a bool constant sets the polarity; any other is unsure
+        other = test.comparators[0]
+        if isinstance(other, ast.Constant) and isinstance(other.value, bool):
+            if isinstance(test.ops[0], (ast.Eq, ast.Is)):
+                return other.value
+            if isinstance(test.ops[0], (ast.NotEq, ast.IsNot)):
+                return not other.value
+        return None
     return True
 
 
@@ -295,6 +305,30 @@ def note_when_not_success_or_strict(push, strict):
 
 @other.command("create")
 @click.option("--push", is_flag=True)
+def note_when_success_or_strict(push, strict):
+    if push:
+        result = service.create_item_and_push()
+        if result["success"] or strict:
+            _print_created_file(result)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_when_success_is_false(push):
+    if push:
+        result = service.create_item_and_push()
+        if result["success"] == False:
+            _print_created_file(result)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_when_success_is_true(push):
+    if push:
+        result = service.create_item_and_push()
+        if result["success"] is True:
+            _print_created_file(result)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
 def note_only_in_except(push):
     if push:
         try:
@@ -320,11 +354,16 @@ def test_checker_flags_early_return_negated_or_and_except_only() -> None:
     assert found == [
         "note_after_early_success_return",
         "note_when_not_success_or_strict",
+        "note_when_success_or_strict",
+        "note_when_success_is_false",
+        "note_when_success_is_true",
         "note_only_in_except",
         "note_in_try_body",
     ]
     assert missing == [
         "note_after_early_success_return",
         "note_when_not_success_or_strict",
+        "note_when_success_or_strict",  # r1 F1: runs on failure when `strict`
+        "note_when_success_is_false",  # r1 F3
         "note_only_in_except",
     ]
