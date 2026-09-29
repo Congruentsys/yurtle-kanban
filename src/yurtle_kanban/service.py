@@ -6484,7 +6484,11 @@ class KanbanService:
         4. every `depends_on` is `met` (a superseded or duplicate one: its final
            target; a `wont_do` one is dead, #581).
 
-        Before them all: the board is not halted (#582, `control_state`).
+        Before them all: the board is not halted (#582, `control_state`). That
+        state is cached per scan (#1067): it is read afresh by the next `scan()`,
+        this service's own fetch or `set_control`, but NOT across an out-of-band
+        `git fetch`. A caller looping `pickable()` across such a fetch should
+        `scan()` again or read `control_state(fresh=True)` (#1071).
         """
         return self._pickable(item, actor, halt=self.control_state().why())  # cached (#1067)
 
@@ -6578,7 +6582,9 @@ class KanbanService:
         last fetched, else (no remote, nothing fetched, or `worktree`: `validate`)
         the working-tree file. Memoised until the next scan, fetch or `set_control`
         (#1067), so `pickable` over one scan's items reads git once; `fresh` reads
-        it again (and re-memoises it)."""
+        it again (and re-memoises it). A `git fetch` run outside this service does
+        not clear the memo: a long-lived caller that loops across one should
+        `scan()` or pass `fresh=True` (#1071)."""
         if worktree:
             return self._read_control_state(worktree=True)
         if fresh or self._control_cache is None:
