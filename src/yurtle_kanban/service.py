@@ -148,11 +148,15 @@ class ControlState:
         return f"{self.why()} (see control status)" + (f"; {age}" if age else "")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        """`control status --json`; `error` only when the file is bad (#1067)."""
+        data: dict[str, Any] = {
             "mode": self.mode, "reason": self.reason, "by": self.by, "at": self.at,
             "source": self.source,
             "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
         }
+        if self.error:
+            data["error"] = self.error
+        return data
 
 
 def parse_control(
@@ -709,6 +713,8 @@ class KanbanService:
         self._board_theme_cache: dict[str, dict | None] = {}
         self._scanning = False
         self._ff_why: str | None = None  # the last refused fast-forward's reason (#1048)
+        # `control_state` memoised until the next scan, fetch or halt/resume (#1067)
+        self._control_cache: ControlState | None = None
         if getattr(config, "repo_root", None) is None:
             # a config with no repo_root (built directly, or from load for a missing
             # file) resolves themes in this service's repo, not the cwd; one loaded from
@@ -894,6 +900,7 @@ class KanbanService:
         self._items[item.id] = item
 
     def _scan(self) -> list[WorkItem]:
+        self._control_cache = None  # read the halt state afresh per scan (#1067)
         self._items.clear()
         self.duplicate_ids = {}
         self._folded_items = {}
@@ -2574,6 +2581,7 @@ class KanbanService:
         fetch = self._git_run(
             "fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
         )
+        self._control_cache = None  # origin's halt state may have moved (#1067)
         if fetch.returncode == 0 and record:
             ref = f"refs/remotes/origin/{branch}"
             known = self._git_run("symbolic-ref", "-q", "refs/remotes/origin/HEAD")
@@ -4474,7 +4482,7 @@ class KanbanService:
             actor = resolve_actor(actor, cwd=self.repo_root)
         item = self._writable_item(item_id, "a move")  # the file now (#638, #742)
         if new_status == WorkItemStatus.IN_PROGRESS:  # new work stops; finishing doesn't (#582)
-            control = self.control_state()
+            control = self.control_state(fresh=True)
             if control.halted:
                 raise BoardHalted(f"Can't move {item.id} to in progress: {control.refusal()}")
 
@@ -6478,7 +6486,7 @@ class KanbanService:
 
         Before them all: the board is not halted (#582, `control_state`).
         """
-        return self._pickable(item, actor, halt=self.control_state().why())
+        return self._pickable(item, actor, halt=self.control_state().why())  # cached (#1067)
 
     def _pickable(
         self, item: WorkItem, actor: str | None, *, take_over: bool = False,
@@ -6565,10 +6573,20 @@ class KanbanService:
         path = self.repo_root / CONTROL_FILE
         return (self._repo_relative(path, self._git_toplevel()) or Path(CONTROL_FILE)).as_posix()
 
-    def control_state(self, *, worktree: bool = False) -> ControlState:
+    def control_state(self, *, worktree: bool = False, fresh: bool = False) -> ControlState:
         """The halt state, never from the network (#582): origin's default branch as
         last fetched, else (no remote, nothing fetched, or `worktree`: `validate`)
-        the working-tree file."""
+        the working-tree file. Memoised until the next scan, fetch or `set_control`
+        (#1067), so `pickable` over one scan's items reads git once; `fresh` reads
+        it again (and re-memoises it)."""
+        if worktree:
+            return self._read_control_state(worktree=True)
+        if fresh or self._control_cache is None:
+            self._control_cache = self._read_control_state()
+        return self._control_cache
+
+    def _read_control_state(self, *, worktree: bool = False) -> ControlState:
+        """`control_state`, read now."""
         rel = self._control_rel()
         ref = None if worktree or not self._has_remote() else self._fetched_default()
         if ref is None:
@@ -6627,7 +6645,10 @@ class KanbanService:
             verb = "Halt" if mode == "halt" else "Resume"
             return Change({rel: text}, f"{verb} the board ({actor})")
 
-        return self.sync_and_push(mutate)
+        try:
+            return self.sync_and_push(mutate)
+        finally:
+            self._control_cache = None  # the file may have changed (#1067)
 
     @staticmethod
     def _as_datetime(value: Any) -> datetime | None:

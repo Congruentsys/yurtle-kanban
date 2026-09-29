@@ -182,7 +182,7 @@ def _print_outcome(outcome: Outcome) -> NoReturn:
 def _halt_gate(service: KanbanService) -> None:
     """For `next`, `list --pickable` and `claim --next` (#582): on a halted board
     print why and exit 8; else note a stale last fetch on stderr."""
-    control = service.control_state()
+    control = service.control_state(fresh=True)  # memoised for pick_report (#1067)
     if control.halted:
         if json_requested():
             json_refusal(control.refusal(), exit_code=HALTED)
@@ -1161,12 +1161,13 @@ def control_resume(reason: str | None, reason_file: str | None, agent: str | Non
 @control.command("status")
 @click.option(
     "--json", "as_json", is_flag=True,
-    help='Output as JSON: {"mode", "reason", "by", "at", "source", "fetched_at"}',
+    help='Output as JSON: {"mode", "reason", "by", "at", "source", "fetched_at"}, '
+    'plus "error" when the control file is bad',
 )
 def control_status(as_json: bool) -> None:
     """Show the halt state: mode, reason, by, at, and the age of the last fetch
     it was read from. It reads origin as last fetched: git fetch to refresh."""
-    state: ControlState = get_service().control_state()
+    state: ControlState = get_service().control_state(fresh=True)
     if as_json:
         click.echo(json.dumps(state.to_dict()))
         return
