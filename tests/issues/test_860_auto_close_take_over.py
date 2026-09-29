@@ -1,3 +1,4 @@
+# ruff: noqa: F811  (the borrowed `bash` fixture)
 """Issue #860: the auto-close workflow moves a held item and reports why a move fails.
 
 When a PR merges, ``.github/workflows/kanban-auto-close.yml`` moves the linked items
@@ -49,8 +50,7 @@ from typing import Any
 import pytest
 import yaml
 
-from tests.issues import _bashes
-from tests.issues._bashes import each_bash  # noqa: F401  (autouse: each bash, #940)
+from tests.issues._bashes import bash  # noqa: F401  (fixture: each bash, #940, #981)
 from tests.issues.test_574_claim import (
     ITEM,
     ITEM_ID,
@@ -84,7 +84,9 @@ def move_step_script() -> str:
     return str(step["run"])
 
 
-def run_move_step(clone: Path, tmp_path: Path, ids: str) -> tuple[Any, dict[str, str]]:
+def run_move_step(
+    clone: Path, tmp_path: Path, ids: str, bash: str
+) -> tuple[Any, dict[str, str]]:
     """Run the step's script in `clone`; return the process and its GITHUB_OUTPUT."""
     output_file = tmp_path / "github_output"
     output_file.write_text("")
@@ -103,7 +105,7 @@ def run_move_step(clone: Path, tmp_path: Path, ids: str) -> tuple[Any, dict[str,
     script = tmp_path / "move_items.sh"
     script.write_text(move_step_script())
     proc = subprocess.run(
-        [_bashes.BASH, "--noprofile", "--norc", "-e", str(script)],  # each bash (#940)
+        [bash, "--noprofile", "--norc", "-e", str(script)],  # each bash (#940, #981)
         cwd=clone,
         env=env,
         capture_output=True,
@@ -149,10 +151,10 @@ def item_file(world: World) -> str:
 # --- 1. a held in-progress item is moved, and the take-over is recorded ------------------------
 
 
-def test_held_in_progress_item_is_moved_to_done_with_take_over(world, tmp_path) -> None:
+def test_held_in_progress_item_is_moved_to_done_with_take_over(world, tmp_path, bash) -> None:
     seed(world, "in_progress", A)
 
-    proc, outputs = run_move_step(world.a, tmp_path, ITEM_ID)
+    proc, outputs = run_move_step(world.a, tmp_path, ITEM_ID, bash)
     log = log_of(proc)
 
     assert proc.returncode == 0, f"the step failed (exit {proc.returncode}):\n{log}"
@@ -173,10 +175,10 @@ def test_held_in_progress_item_is_moved_to_done_with_take_over(world, tmp_path) 
 # --- 2. a failed move's warning carries the refusal's reason ----------------------------------
 
 
-def test_failed_move_warning_includes_refusal_reason(world, tmp_path) -> None:
+def test_failed_move_warning_includes_refusal_reason(world, tmp_path, bash) -> None:
     seed(world, "in_progress", A)
 
-    proc, outputs = run_move_step(world.a, tmp_path, "EXP-999")
+    proc, outputs = run_move_step(world.a, tmp_path, "EXP-999", bash)
     log = log_of(proc)
 
     assert proc.returncode == 0, f"a failed move must warn, not fail the job:\n{log}"
@@ -192,10 +194,10 @@ def test_failed_move_warning_includes_refusal_reason(world, tmp_path) -> None:
 # --- 3. controls (pass on the current workflow) ------------------------------------------------
 
 
-def test_control_unheld_review_item_moves_to_done(world, tmp_path) -> None:
+def test_control_unheld_review_item_moves_to_done(world, tmp_path, bash) -> None:
     push_from_a(world, {ITEM: item_text("review")}, "EXP-001 review")
 
-    proc, outputs = run_move_step(world.a, tmp_path, ITEM_ID)
+    proc, outputs = run_move_step(world.a, tmp_path, ITEM_ID, bash)
     log = log_of(proc)
 
     assert proc.returncode == 0, log
@@ -203,10 +205,10 @@ def test_control_unheld_review_item_moves_to_done(world, tmp_path) -> None:
     assert status_of(world) is WorkItemStatus.DONE, f"{log}\n{item_file(world)}"
 
 
-def test_control_no_ids_moves_nothing(world, tmp_path) -> None:
+def test_control_no_ids_moves_nothing(world, tmp_path, bash) -> None:
     before = item_file(world)
 
-    proc, outputs = run_move_step(world.a, tmp_path, "")
+    proc, outputs = run_move_step(world.a, tmp_path, "", bash)
 
     assert proc.returncode == 0, log_of(proc)
     assert outputs.get("moved") == "0", f"expected moved=0, got {outputs}"
