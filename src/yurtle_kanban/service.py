@@ -658,10 +658,38 @@ class LineEndings:
         return run[::-1]
 
 
+_GIT_LABEL = re.compile(r"(?i)^\s*(?:error|fatal):\s*")
+
+
 def _without_git_prefix(why: str) -> str:
-    """git's reason with its own `error: ` / `fatal: ` labels dropped, for a note that
-    already says what refused (#1057): "Not possible to fast-forward, aborting."."""
-    return re.sub(r"(?i)(?:^|(?<=\s))(?:error|fatal):\s*", "", why).strip()
+    """git's reason with its own leading `error: ` / `fatal: ` label dropped, for a
+    note that already says what refused (#1057): "Not possible to fast-forward,
+    aborting.". Only the label git put first: the same text mid-line, e.g. a file
+    named `error: odd.md`, stays; a bare label leaves the raw text (#1062)."""
+    return _GIT_LABEL.sub("", why).strip() or why.strip()
+
+
+def _git_refusal(out: str) -> tuple[str | None, str | None]:
+    """git's failure in `out`, as (raw, reason): its `error:`/`fatal:` lines, not its
+    `hint:` advice (#995), with the indented lines that continue a kept line, e.g.
+    file names (#1043). `raw` keeps git's labels, for the log; `reason` drops each
+    kept line's own leading label before the join (#1057, #1062), and is `raw` when
+    nothing else is left. (None, None) when git said no such line."""
+    raw: list[str] = []
+    reason: list[str] = []
+    keep = False
+    for line in out.splitlines():
+        if keep and line[:1] in ("\t", " "):  # a continuation: kept as git wrote it
+            raw.append(line.strip())
+            reason.append(line.strip())
+        elif line.lstrip().lower().startswith(("error:", "fatal:")):
+            keep = True
+            raw.append(line.strip())
+            reason.append(_GIT_LABEL.sub("", line).strip())
+        else:
+            keep = False
+    said = " ".join(" ".join(raw).split()) or None
+    return said, " ".join(" ".join(reason).split()) or said
 
 
 def pull_note_text(branch: str, dirty: str | None = None, why: str | None = None) -> str:
@@ -2737,23 +2765,15 @@ class KanbanService:
                 "merge", "--ff-only", "--quiet", sha, text=False, timeout=None
             )
             if merged.returncode != 0:
-                out = said(merged.stderr) or said(merged.stdout)
-                # git's own failure, not its `hint:` advice (#995), with the
-                # indented lines that continue a kept line, e.g. file names (#1043)
-                why: list[str] = []
-                keep = False
-                for line in out.splitlines():
-                    if line.lstrip().lower().startswith(("error:", "fatal:")):
-                        keep = True
-                    elif not (keep and line[:1] in ("\t", " ")):
-                        keep = False
-                    if keep:
-                        why.append(line.strip())
-                self._ff_why = " ".join(" ".join(why).split()) or None
+                # git's own failure: raw for the log, labels dropped per line
+                # for the caller's note (#995, #1043, #1062)
+                raw, self._ff_why = _git_refusal(
+                    said(merged.stderr) or said(merged.stdout)
+                )
                 if warn:
                     logger.warning(
                         f"Pushed {sha[:12]}, but the local checkout was not updated"
-                        + (f": {self._ff_why}" if self._ff_why else "")
+                        + (f": {raw}" if raw else "")
                     )
                 return False
             return True
