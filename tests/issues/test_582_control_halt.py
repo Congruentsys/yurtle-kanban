@@ -296,7 +296,12 @@ def test_a1_halt_is_one_commit_of_only_the_control_file(world, monkeypatch) -> N
     tip = world.remote_sha()
     assert git(world.remote, "rev-list", f"{base}..{tip}").split() == [tip]
     assert commit_files(world.remote, tip) == [CONTROL]
-    assert snapshot(world.a) == a_before, "the halt touched A's checkout"
+    # a clean checkout on the default branch is fast-forwarded to the tip, as every
+    # sync_and_push write does (#574's pinned contract; [steer] on #582)
+    assert git(world.a, "rev-parse", "HEAD").strip() in (a_before["head"], tip), (
+        "the halt moved A's checkout somewhere other than origin's tip"
+    )
+    assert git(world.a, "status", "--porcelain").strip() == "", "the halt dirtied A's checkout"
 
 
 def test_a1_halt_from_a_feature_branch_lands_on_the_default_branch(world, monkeypatch) -> None:
