@@ -173,11 +173,11 @@ def get_service() -> KanbanService:
 def _print_outcome(outcome: Outcome) -> NoReturn:
     """Print a sync outcome and exit with its code: a non-zero one as one `Error:`
     line, as every refusal (#666, #825); a halted board's refusal exits 8 (#582)."""
-    if outcome.exit_code == 0:
-        console.print(f"[green]{safe(outcome.message)}[/green]", soft_wrap=True)
-    else:
-        console.print(f"[red]Error: {safe(outcome.message)}[/red]", soft_wrap=True)
-    sys.exit(HALTED if outcome.halted else int(outcome.exit_code))
+    code = HALTED if outcome.halted else int(outcome.exit_code)
+    if code != 0:  # a refusal: on stderr, or one JSON object (#1086)
+        refuse(outcome.message, console=console, exit_code=code)
+    console.print(f"[green]{safe(outcome.message)}[/green]", soft_wrap=True)
+    sys.exit(0)
 
 
 def _halt_gate(service: KanbanService) -> None:
@@ -941,8 +941,7 @@ def move(
 
     target = service.get_item(fold_id(item_id))
     if target is None:
-        console.print(f"[red]Error: Item not found: {safe(fold_id(item_id))}[/red]")
-        sys.exit(1)
+        _refuse(f"Item not found: {fold_id(item_id)}")
     try:  # before its status is read off one of the copies (#742)
         service.refuse_duplicate(target, "a move")
     except ValueError as e:
@@ -951,10 +950,11 @@ def move(
     # another theme's; --force doesn't change that (#587)
     status = service.resolve_status_name(target, new_status)
     if status is None:
-        console.print(f"[red]Unknown status: {safe(new_status)}[/red]")
-        valid = service.listed_status_names(target)
-        console.print(f"Valid statuses: {escape(', '.join(valid))}")
-        sys.exit(1)
+        valid = ", ".join(service.listed_status_names(target))
+        _refuse(
+            f"Unknown status: {new_status}; valid statuses: {valid}",
+            f"[red]Unknown status: {safe(new_status)}[/red]\nValid statuses: {escape(valid)}",
+        )
 
     # Build gate context from CLI flags
     gate_context: dict[str, object] = {}
@@ -984,8 +984,7 @@ def move(
         if assign:
             console.print(f"  Assigned to: {escape(assign)}")
     except ValueError as e:
-        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
-        sys.exit(HALTED if isinstance(e, BoardHalted) else 1)
+        refuse(e, console=console, exit_code=HALTED if isinstance(e, BoardHalted) else 1)
 
     # Export board if requested
     if export_board:
@@ -1215,8 +1214,7 @@ def _claim_next(service: KanbanService, actor: str) -> NoReturn:
         # `last:` kept to one short clause: a refusal can be long (#990)
         brief = last if last is None or len(last) <= 120 else last[:119].rstrip() + "…"
         message += f" ({tried} tried: each refused or lost; last: {brief})"
-    console.print(f"[red]Error: {safe(message)}[/red]", soft_wrap=True)
-    sys.exit(NOTHING_PICKABLE)
+    refuse(message, console=console, exit_code=NOTHING_PICKABLE)
 
 
 @main.command()
@@ -1914,8 +1912,7 @@ def comment(item_id: str, body: str | None, body_file: str | None, agent: str | 
         item = service.add_comment(fold_id(item_id), text, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:
-        console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
-        sys.exit(1)
+        _refuse(e)
 
 
 @main.command()

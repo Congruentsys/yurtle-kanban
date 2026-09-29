@@ -93,8 +93,12 @@ def _run_tty(repo: Path, args: list[str], monkeypatch: pytest.MonkeyPatch) -> st
     tty = Console(file=buf, force_terminal=True, width=200)
     monkeypatch.setattr(cli, "console", tty)
     monkeypatch.setattr(hdd_commands, "console", tty)
-    _run(repo, args, monkeypatch)
-    return buf.getvalue()
+    monkeypatch.chdir(repo)
+    result = CliRunner().invoke(main, args)
+    assert result.exception is None or isinstance(result.exception, SystemExit), result.output
+    # refusals print on stderr through refuse(), which keeps the swapped console's
+    # forced terminal (#1080, #1086): read both
+    return buf.getvalue() + result.stderr
 
 
 def _assert_escaped(out: str) -> None:
