@@ -521,11 +521,12 @@ def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
         # #1117: numeric colours are out of the sweep's scope, by ruling
         'console.print("[#ff0000]x[/]")\nsys.exit(1)\n',
         'console.print("[color(9)]x[/]")\nsys.exit(1)\n',
+        'console.print("[rgb(255,0,0)]x[/]")\nsys.exit(1)\n',
         # a red tag only after a leading non-red tag
         'console.print("[bold]x[/bold] [red]y[/red]")\nsys.exit(1)\n',
     ],
     ids=["report-row", "work-between", "not-red", "red-later", "refuse", "other-print",
-         "redact", "bred", "bold-reddish", "bright-redx", "red1a", "hex-red", "color-9",
+         "redact", "bred", "bold-reddish", "bright-redx", "red1a", "hex-red", "color-9", "rgb-red",
          "red-in-second-tag"],
 )
 def test_sweep_leaves_non_refusals_alone(snippet: str) -> None:
