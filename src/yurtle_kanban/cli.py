@@ -1309,12 +1309,7 @@ def states(board_name: str | None, item_type: str | None, as_json: bool):
     if board_name is not None:
         boards = [b for b in boards if b[0] == board_name]
         if not boards:
-            error = f"Unknown board: {board_name}"
-            if as_json:
-                click.echo(json.dumps({"success": False, "error": error}))
-            else:
-                console.print(f"[red]{safe(error)}[/red]")
-            sys.exit(1)
+            _refuse(f"Unknown board: {board_name}")  # one wording (#1077)
 
     entries = [
         {
@@ -1959,12 +1954,12 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
 
 
 def _refuse_unknown_board(service: Any, board_name: str | None) -> None:
-    """`list`'s refusal of a `--board` no config knows (#1068): the service's
-    `refuse_unknown_board`, as a CLI refusal."""
+    """`list`'s and `export`'s refusal of a `--board` no config knows (#1068, #1077):
+    the service's `refuse_unknown_board`, as the `Error:` line `blocked` prints."""
     try:
         service.refuse_unknown_board(board_name)
     except InputRefused as e:
-        _refuse(e, f"[red]{safe(e)}[/red]")
+        _refuse(e)
 
 
 def _status_with(status: str | None, assignee: Any) -> str:
@@ -1974,26 +1969,26 @@ def _status_with(status: str | None, assignee: Any) -> str:
 def _echo_dep_tree(nodes: list[DepNode], path: list[str], shown: set[str], depth: int) -> None:
     """`blocked`'s tree of `unmet_dependencies` (#577): a node already shown under
     this root is `(see above)`; one on `path` (the IDs from the root down) closes
-    a `↻ cycle` line. A `cycle` node with no `↻` line below it (a supersession
-    cycle, #581) is marked `— cycle` (#1068)."""
+    a `↻ cycle` line. A `cycle` node no `↻` line below it runs through (a
+    supersession cycle, #581) is marked `— cycle` (#1068, #1077)."""
     for line in _dep_tree_lines(nodes, path, shown, depth)[0]:
         click.echo(line)
 
 
 def _dep_tree_lines(
     nodes: list[DepNode], path: list[str], shown: set[str], depth: int
-) -> tuple[list[str], bool]:
-    """`_echo_dep_tree`'s lines, and whether one of them is a `↻ cycle` line."""
+) -> tuple[list[str], set[str]]:
+    """`_echo_dep_tree`'s lines, and the (folded) IDs its `↻ cycle` lines run through."""
     pad = "  " * depth
     lines: list[str] = []
-    arrow = False
+    arrowed: set[str] = set()
     for node in nodes:
         key = fold_id(node.id)
         on_path = [fold_id(p) for p in path]
         if key in on_path:
             ids = [*path[on_path.index(key):], node.id]
             lines.append(f"{pad}↻ cycle: {' → '.join(ids)}")
-            arrow = True
+            arrowed.update(fold_id(i) for i in ids)
             continue
         if key in shown:
             lines.append(f"{pad}{node.id} (see above)")
@@ -2005,12 +2000,12 @@ def _dep_tree_lines(
         line = f"{pad}{node.id} ({_status_with(node.status, node.assignee)})"
         if node.state == "dead":
             line += " — dead: needs a human to re-point or drop the dependency"
-        below, below_arrow = _dep_tree_lines(node.children, [*path, node.id], shown, depth + 1)
-        if node.state == "cycle" and not below_arrow:
+        below, below_arrowed = _dep_tree_lines(node.children, [*path, node.id], shown, depth + 1)
+        if node.state == "cycle" and key not in below_arrowed:
             line += " — cycle"
         lines += [line, *below]
-        arrow = arrow or below_arrow
-    return lines, arrow
+        arrowed |= below_arrowed
+    return lines, arrowed
 
 
 @main.command()
@@ -2129,6 +2124,7 @@ def export_cmd(fmt: str, output: str | None, min_id: int, board_name: str | None
     - research-index: Research board index grouped by type (papers, hypotheses, etc.)
     """
     service = get_service()
+    _refuse_unknown_board(service, board_name)  # not a silent default board (#1077)
     board = service.get_board(board_name)
 
     if fmt == "html":
