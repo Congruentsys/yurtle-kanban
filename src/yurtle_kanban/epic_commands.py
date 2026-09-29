@@ -306,7 +306,7 @@ def _do_show(epic_id: str):
     type_label = _TYPE_LABELS.get(epic_item.item_type, "Epic")
     color = status_colors.get(epic_item.status, "white")
     console.print(
-        f"\n[bold]{type_label} {escape(epic_item.id)}[/bold]: {escape(epic_item.title)} "
+        f"\n[bold]{type_label} {safe(epic_item.id)}[/bold]: {safe(epic_item.title)} "
         f"[{color}]({epic_item.status.value})[/{color}]"
     )
 
@@ -335,11 +335,11 @@ def _do_show(epic_id: str):
         color = status_colors.get(item.status, "white")
         status_str = f"[{color}]{item.status.value}[/{color}]"
         table.add_row(
-            escape(item.id),
-            escape(item.title[:40]),
+            safe(item.id),
+            safe(item.title[:40]),
             status_str,
-            escape(str(item.assignee or "-")),
-            escape(str(item.priority or "medium")),
+            safe(item.assignee or "-"),
+            safe(item.priority or "medium"),
         )
 
     console.print(table)
