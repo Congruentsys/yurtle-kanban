@@ -31,6 +31,10 @@ class ExitCode(IntEnum):
 # outcome of `sync_and_push`, so it stays out of `ExitCode`
 NOTHING_PICKABLE = 7
 
+# a refusal because the board is halted (#582): `claim`, `move` to in progress,
+# `next` and `list --pickable`; distinct so a loop stops rather than retries
+HALTED = 8
+
 
 _EXIT_CODES: dict[str, ExitCode] = {
     "won": ExitCode.OK,
@@ -51,7 +55,8 @@ class Outcome:
     was rejected), unreachable, busy (rejected every attempt) or push_refused (the
     remote said no for another reason, not retried). `sha` is the commit made,
     `attempts` how many were used, `data` the winning Change's `data`. `wip` marks
-    a refusal by a WIP limit (#990), copied from the `Refuse`."""
+    a refusal by a WIP limit (#990), and `halted` one by a halted board (#582),
+    copied from the `Refuse`; the CLI exits `HALTED` on the latter."""
 
     kind: str
     message: str
@@ -59,6 +64,7 @@ class Outcome:
     attempts: int = 0
     data: Any = None
     wip: bool = False
+    halted: bool = False
 
     @property
     def exit_code(self) -> ExitCode:
@@ -86,11 +92,13 @@ class NoOp:
 class Refuse:
     """Don't change anything. With a `holder`, after a lost race, it is "lost to
     `holder`" (exit 3); otherwise "refused" (exit 1). `wip` marks a refusal by a
-    WIP limit, so a caller need not match its wording (#990)."""
+    WIP limit, so a caller need not match its wording (#990); `halted` one by a
+    halted board (#582)."""
 
     message: str
     holder: str | None = None
     wip: bool = False
+    halted: bool = False
 
 
 class Read(Protocol):
@@ -107,5 +115,6 @@ class Read(Protocol):
 Mutate = Callable[[Read, int], "Change | NoOp | Refuse"]
 
 __all__ = [
-    "NOTHING_PICKABLE", "Change", "ExitCode", "Mutate", "NoOp", "Outcome", "Read", "Refuse",
+    "HALTED", "NOTHING_PICKABLE", "Change", "ExitCode", "Mutate", "NoOp", "Outcome", "Read",
+    "Refuse",
 ]

@@ -75,8 +75,15 @@ from .models import (
     id_prefix,
     unknown_priority_message,
 )
-from .service import KanbanService, git_toplevel, parse_duration
-from .sync import NOTHING_PICKABLE, Outcome
+from .service import (
+    BoardHalted,
+    ControlState,
+    KanbanService,
+    age_text,
+    git_toplevel,
+    parse_duration,
+)
+from .sync import HALTED, NOTHING_PICKABLE, Outcome
 
 
 def _get_shared_data_dir(subdir: str) -> Path:
@@ -164,12 +171,25 @@ def get_service() -> KanbanService:
 
 def _print_outcome(outcome: Outcome) -> NoReturn:
     """Print a sync outcome and exit with its code: a non-zero one as one `Error:`
-    line, as every refusal (#666, #825)."""
+    line, as every refusal (#666, #825); a halted board's refusal exits 8 (#582)."""
     if outcome.exit_code == 0:
         console.print(f"[green]{safe(outcome.message)}[/green]", soft_wrap=True)
     else:
         console.print(f"[red]Error: {safe(outcome.message)}[/red]", soft_wrap=True)
-    sys.exit(int(outcome.exit_code))
+    sys.exit(HALTED if outcome.halted else int(outcome.exit_code))
+
+
+def _halt_gate(service: KanbanService) -> None:
+    """For `next`, `list --pickable` and `claim --next` (#582): on a halted board
+    print why and exit 8; else note a stale last fetch on stderr."""
+    control = service.control_state()
+    if control.halted:
+        if json_requested():
+            json_refusal(control.refusal(), exit_code=HALTED)
+        console.print(f"[red]Error: {safe(control.refusal())}[/red]", soft_wrap=True)
+        sys.exit(HALTED)
+    if age := control.fetch_age():
+        click.echo(f"note: {age}", err=True)
 
 
 def _refuse(e: object, plain: str | None = None) -> NoReturn:
@@ -687,6 +707,7 @@ def _list_pickable(
         actor = advisory_actor(agent, cwd=service.repo_root)
     except InputRefused as e:
         _refuse(e)
+    _halt_gate(service)
     picks, refused = service.pick_report(actor, items)
     _warn_unparseable(service)
     ready = {fold_id(i.id) for i in items if i.status == WorkItemStatus.READY}
@@ -965,7 +986,7 @@ def move(
             console.print(f"  Assigned to: {escape(assign)}")
     except ValueError as e:
         console.print(f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
-        sys.exit(1)
+        sys.exit(HALTED if isinstance(e, BoardHalted) else 1)
 
     # Export board if requested
     if export_board:
@@ -1080,6 +1101,88 @@ def bounce(
     _print_outcome(outcome)
 
 
+@main.group(cls=Group)
+def control() -> None:
+    """The board's emergency stop (#582): one mode, halt.
+
+    A halt stops new work: claim, claim --next, claim --take-over and a move to in
+    progress (CLI and MCP) are refused, and next and list --pickable exit 8. A
+    holder may still finish (move its item to review, done, blocked or ready);
+    create, comment, update and bounce are allowed. The state is one repo-wide
+    .kanban/control.yaml on origin's default branch, written as a kanban-only
+    commit (as claim writes); it is read from origin as last fetched (claim
+    fetches), else from the working tree. A file that doesn't read counts as a
+    halt. Exit codes as claim's; a refusal because of a halt exits 8.
+    """
+
+
+def _set_control(mode: str, reason: str | None, agent: str | None) -> NoReturn:
+    """`control halt` / `control resume`: write, then say whether it took effect."""
+    service = get_service()
+    try:
+        actor = resolve_actor(agent, cwd=service.repo_root)
+        outcome = service.set_control(mode, reason, actor)
+    except InputRefused as e:
+        _refuse(e)
+    verb = "halt" if mode == "halt" else "resume"
+    if outcome.kind not in ("won", "local", "noop"):
+        outcome.message += f"; the {verb} is NOT in effect for other agents"
+    elif outcome.kind == "local":
+        outcome.message += f"; note: the {verb} is in this repository only"
+    _print_outcome(outcome)
+
+
+@control.command("halt")
+@click.option("--reason", help="Why (required; prefer --reason-file: no shell expansion)")
+@click.option("--reason-file", help="Read the reason from PATH, or from stdin with '-'")
+@click.option("--agent", help="Who is halting; default $YURTLE_AGENT, then git user.name")
+def control_halt(reason: str | None, reason_file: str | None, agent: str | None) -> None:
+    """Halt the board: no new work until control resume (#582)."""
+    try:
+        text = read_text_option(reason, reason_file, "reason", required=True)
+    except ValueError as e:
+        _refuse(e)
+    _set_control("halt", text, agent)
+
+
+@control.command("resume")
+@click.option("--reason", help="Why (optional)")
+@click.option("--reason-file", help="Read the reason from PATH, or from stdin with '-'")
+@click.option("--agent", help="Who is resuming; default $YURTLE_AGENT, then git user.name")
+def control_resume(reason: str | None, reason_file: str | None, agent: str | None) -> None:
+    """Resume a halted board (#582)."""
+    try:
+        text = read_text_option(reason, reason_file, "reason")
+    except ValueError as e:
+        _refuse(e)
+    _set_control("running", text, agent)
+
+
+@control.command("status")
+@click.option(
+    "--json", "as_json", is_flag=True,
+    help='Output as JSON: {"mode", "reason", "by", "at", "source", "fetched_at"}',
+)
+def control_status(as_json: bool) -> None:
+    """Show the halt state: mode, reason, by, at, and the age of the last fetch
+    it was read from. It reads origin as last fetched: git fetch to refresh."""
+    state: ControlState = get_service().control_state()
+    if as_json:
+        click.echo(json.dumps(state.to_dict()))
+        return
+    click.echo(f"mode: {state.mode}")
+    if state.error:
+        click.echo(f"error: {state.error} (counts as a halt)")
+    for key in ("reason", "by", "at"):
+        if (value := getattr(state, key)) is not None:
+            click.echo(f"{key}: {value}")
+    where = "origin, as last fetched" if state.source == "remote" else "the working tree"
+    click.echo(f"source: {where}")
+    if state.fetched_at is not None:
+        seconds = (datetime.now().astimezone() - state.fetched_at).total_seconds()
+        click.echo(f"last fetch: {age_text(seconds)} ago ({state.fetched_at.isoformat()})")
+
+
 def _claim_next(service: KanbanService, actor: str) -> NoReturn:
     """`claim --next` (#575 §8): claim each pickable item in turn. `refused` or
     `lost` moves on to the next; any other outcome ends it (`unreachable`, `busy`
@@ -1088,6 +1191,7 @@ def _claim_next(service: KanbanService, actor: str) -> NoReturn:
     other types are still tried: one exempt from the limit, or under its own
     per-type limit, can pass (#990). Nothing won: the first WIP refusal (exit 1)
     if there was one, else exit 7 naming the last refusal's reason (#990)."""
+    _halt_gate(service)  # the last-fetched state; each claim reads its own fetch (#582)
     picks, _ = service.pick_report(actor)
     last: str | None = None
     wip: Outcome | None = None
@@ -1098,7 +1202,7 @@ def _claim_next(service: KanbanService, actor: str) -> NoReturn:
             continue
         tried += 1
         outcome = service.claim_item(item.id, actor=actor)
-        if outcome.kind not in ("refused", "lost"):
+        if outcome.kind not in ("refused", "lost") or outcome.halted:
             _print_outcome(outcome)
         if outcome.kind == "refused" and outcome.wip:
             full_types.add(item.item_type.value)
@@ -1656,6 +1760,7 @@ def next_item(agent: str | None, as_json: bool):
         actor = advisory_actor(agent, cwd=service.repo_root)
     except InputRefused as e:
         _refuse(e)
+    _halt_gate(service)  # even with work in progress: finishing it is a move (#582)
     found = service.next_item(actor)
     if found is None:
         if as_json:
@@ -2063,11 +2168,18 @@ def validate(fix: bool, as_json: bool):
     - A bounce stamp is well formed (bounce_sha a sha256 hex digest, bounces a count,
       bounced_at an ISO-8601 time with an offset, bounced_by non-empty)
     - A superseded or duplicate item's superseded_by is on a board, with no cycle
+    - .kanban/control.yaml, when present, reads (a mode of halt or running)
     """
     service = get_service()
     items = service.get_items()
 
     issues = []
+    control = service.control_state(worktree=True)  # (#582)
+    if control.error:
+        issues.append({
+            "type": "bad_control_file",
+            "message": f"{control.error}: it counts as a halt (#582)",
+        })
     # every file per ID: the items listed, then the ones the scan's merge dropped
     # (a duplicate across boards keeps one item, #576)
     files_by_id: dict[str, list[Path]] = {}
@@ -2228,6 +2340,10 @@ def validate(fix: bool, as_json: bool):
         elif issue["type"] == "bad_supersession":
             console.print(
                 f"[yellow]BAD SUPERSESSION:[/yellow] {safe(issue['message'])}", soft_wrap=True
+            )
+        elif issue["type"] == "bad_control_file":
+            console.print(
+                f"[red]BAD CONTROL FILE:[/red] {safe(issue['message'])}", soft_wrap=True
             )
 
         console.print()
