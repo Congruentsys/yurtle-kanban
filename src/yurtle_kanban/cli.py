@@ -191,7 +191,12 @@ class _Main(Group):
                 console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
                 ctx.exit(1)
         ctx.meta["yurtle_kanban.argv"] = list(args)  # for a usage error's --json (#929)
-        return super().parse_args(ctx, args)
+        try:
+            return super().parse_args(ctx, args)
+        except click.UsageError as e:  # the root's own options, before any invoke (#971)
+            if ctx.resilient_parsing or not argv_requests_json(args, self):
+                raise
+            json_refusal(e.format_message(), exit_code=e.exit_code)
 
 
 @click.group(cls=_Main)
