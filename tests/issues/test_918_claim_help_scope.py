@@ -27,4 +27,6 @@ def test_claim_help_names_origin_themes_and_workflows() -> None:
 
 def test_update_help_names_origin_config_for_push() -> None:
     text = _help("update")
-    assert "origin's own config, themes and workflows" in text, text
+    # update --push never changes status, so no workflow rule applies to it (#995)
+    assert "origin's own config and theme" in text, text
+    assert "workflow" not in text, text
