@@ -1975,7 +1975,7 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
         console.print("[green]No blocked items.[/green]")
         return
 
-    console.print(f"[bold red]Blocked Items ({len(listed)})[/bold red]")
+    console.print(f"[bold red]Blocked Items ({safe(len(listed))})[/bold red]")
     for item, _, unmet in listed:
         root = f"{item.id} ({_status_with(service.status_label(item), item.assignee)})"
         click.echo(f"{root}  waiting on:" if unmet else root)
