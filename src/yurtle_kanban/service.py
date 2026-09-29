@@ -2767,7 +2767,7 @@ class KanbanService:
             return Outcome(
                 "lost", f"Lost to {result.holder}: {result.message}", attempts=attempts
             )
-        return Outcome("refused", result.message, attempts=attempts)
+        return Outcome("refused", result.message, attempts=attempts, wip=result.wip)
 
     def _won(self, branch: str, sha: str, change: Change, attempts: int) -> Outcome:
         """The outcome of a push that landed; nothing here may turn it into a
@@ -4582,10 +4582,13 @@ class KanbanService:
         _, reason = judge._pickable(item, actor, index=index)
         if holder and not mine and not take_over:
             also = "" if reason == f"held by {holder}" else f" ({reason})"
-            return Refuse(
-                f"{item.id} is held by {holder}{also}; to take it over use claim --take-over",
-                holder=holder,
+            # the hint only where a take-over would pass pickable's clauses (WIP
+            # and gates aside): ready or in progress, dependencies met (#990)
+            hint = (
+                "; to take it over use claim --take-over"
+                if judge._pickable(item, actor, take_over=True, index=index)[0] else ""
             )
+            return Refuse(f"{item.id} is held by {holder}{also}{hint}", holder=holder)
         if not holder and old_status == in_progress and not take_over:
             return Refuse(
                 f"{item.id} is in progress with no holder; use claim --take-over ({reason})"
@@ -4620,7 +4623,7 @@ class KanbanService:
             except _TreeUnreadableError as e:  # never count an unreadable tree (#814)
                 return Refuse(str(e))
             if refusal:
-                return Refuse(refusal)
+                return Refuse(refusal, wip=True)  # the marker `claim --next` reads (#990)
             blocking = [
                 r for r in self._evaluate_gates(proposed, old_status, in_progress, {})
                 if not r.passed and r.severity == "blocking"

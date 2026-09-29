@@ -339,17 +339,7 @@ def test_claim_pre_assigned_to_self_fires_no_assigned(world, tmp_path, take_over
     )
 
 
-def test_claim_blocked_item_of_self_fires_status_change_only(world, tmp_path) -> None:
-    # #575: claim refuses a blocked item (not pickable, --take-over or not), so the
-    # item is ready and held by A; the point stands: the holder doesn't change, so a
-    # take-over fires STATUS_CHANGE alone, no ASSIGNED
-    seed(world, "ready", A)
-    marker = install_hooks(world, tmp_path)
-
-    out = claim(world.a, A, take_over=True)
-
-    assert out.kind == "won", out.message
-    assert fired(marker) == [f"on_status_change {ITEM_ID} in_progress {A}"], fired(marker)
+# a claim of one's own blocked item (refused, no hooks): test_990_575_followups.py (#990)
 
 
 # --- controls: hooks on a real change --------------------------------------------------------------

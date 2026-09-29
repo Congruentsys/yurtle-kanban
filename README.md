@@ -112,8 +112,9 @@ yurtle-kanban export --format json
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize with theme, scaffold directories + templates |
-| `list` | List work items with optional filters |
+| `list` | List work items with optional filters (`--pickable` for what `--agent` may pick up now, in pick order; `--explain` also shows each ready item that isn't pickable, and why) |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
+| `claim` | Claim an item race-free: move it to in progress, held by you (`--agent`, `--take-over`); `claim --next` claims the first pickable item you win (exit 7 when none) |
 | `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`) |
 | `bounce` | Give an ill-defined item back (`--reason TEXT` or `--reason-file PATH\|-`; `--agent`, `--take-over`): to backlog, unassigned, not pickable until its body is edited |
 | `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
@@ -126,7 +127,7 @@ yurtle-kanban export --format json
 | `roadmap` | Prioritized view of all non-done items |
 | `history` | Completed work log with time filters |
 | `metrics` | Flow metrics (cycle time, lead time) |
-| `next` | Suggest next item to work on (`--agent`) |
+| `next` | Suggest next item to work on (`--agent`; `--json`: `{"id", "kind", "reason"}`, or `null` and exit 7 when nothing is left) |
 | `next-id` | **Allocate next ID atomically (prevents duplicates!)** |
 | `blocked` | List blocked items |
 | `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`) |

@@ -978,15 +978,34 @@ def bounce(
 def _claim_next(service: KanbanService, actor: str) -> NoReturn:
     """`claim --next` (#575 §8): claim each pickable item in turn. `refused` or
     `lost` moves on to the next; any other outcome ends it (`unreachable`, `busy`
-    and `push_refused` without trying the rest). None left: exit 7."""
+    and `push_refused` without trying the rest). A WIP-limit refusal skips the
+    remaining candidates of that item's TYPE, which meet the same limit, and the
+    other types are still tried: one exempt from the limit, or under its own
+    per-type limit, can pass (#990). Nothing won: the first WIP refusal (exit 1)
+    if there was one, else exit 7 naming the last refusal's reason (#990)."""
     picks, _ = service.pick_report(actor)
+    last: str | None = None
+    wip: Outcome | None = None
+    full_types: set[str] = set()
+    tried = 0
     for item in picks:
+        if item.item_type.value in full_types:
+            continue
+        tried += 1
         outcome = service.claim_item(item.id, actor=actor)
         if outcome.kind not in ("refused", "lost"):
             _print_outcome(outcome)
+        if outcome.kind == "refused" and outcome.wip:
+            full_types.add(item.item_type.value)
+            wip = wip or outcome
+        last = outcome.message
+    if wip is not None:
+        _print_outcome(wip)
     message = f"nothing pickable for {actor}"
     if picks:
-        message += f" ({len(picks)} tried: each refused or lost)"
+        # `last:` kept to one short clause: a refusal can be long (#990)
+        brief = last if last is None or len(last) <= 120 else last[:119].rstrip() + "…"
+        message += f" ({tried} tried: each refused or lost; last: {brief})"
     console.print(f"[red]Error: {safe(message)}[/red]", soft_wrap=True)
     sys.exit(NOTHING_PICKABLE)
 

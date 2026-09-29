@@ -50,13 +50,15 @@ class Outcome:
     remote: committed here only), noop, refused, lost (to `holder`, after a push
     was rejected), unreachable, busy (rejected every attempt) or push_refused (the
     remote said no for another reason, not retried). `sha` is the commit made,
-    `attempts` how many were used, `data` the winning Change's `data`."""
+    `attempts` how many were used, `data` the winning Change's `data`. `wip` marks
+    a refusal by a WIP limit (#990), copied from the `Refuse`."""
 
     kind: str
     message: str
     sha: str | None = None
     attempts: int = 0
     data: Any = None
+    wip: bool = False
 
     @property
     def exit_code(self) -> ExitCode:
@@ -83,10 +85,12 @@ class NoOp:
 @dataclass
 class Refuse:
     """Don't change anything. With a `holder`, after a lost race, it is "lost to
-    `holder`" (exit 3); otherwise "refused" (exit 1)."""
+    `holder`" (exit 3); otherwise "refused" (exit 1). `wip` marks a refusal by a
+    WIP limit, so a caller need not match its wording (#990)."""
 
     message: str
     holder: str | None = None
+    wip: bool = False
 
 
 class Read(Protocol):
