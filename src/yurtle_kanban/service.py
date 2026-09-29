@@ -3714,6 +3714,9 @@ class KanbanService:
         rf"(?:(?:[\w:]|{_PLX})"
         rf"(?:(?:[\w.:{_PN_EXTRA}-]|{_PLX})*(?:[\w:{_PN_EXTRA}-]|{_PLX}))?)?"
     )
+    # a prefixed name, `prefix?:local`, as two groups; written once, used after a
+    # blank-node label and on its own (#1030)
+    _PNAME = rf"({_PN_PREFIX})?:({_PN_LOCAL})"
     # a turtle block's tokens, in order (#876, #910): strings and comments only to be
     # skipped; `@prefix`/`@base` and SPARQL `PREFIX`/`BASE` directives, whose
     # bindings apply from where they are written; IRI refs and prefixed names
@@ -3728,10 +3731,10 @@ class KanbanService:
         r"|<([^<>\"{}|^`\\\s]*)>"
         # a blank-node label, skipped whole: `_:a.b` is no `b:` name (#1001); a
         # label holds no `:`, so a name right after it is read (`_:x:k`, #1020)
-        rf"|_:[\w][\w.{_PN_EXTRA}-]*(?<!\.)(?:({_PN_PREFIX})?:({_PN_LOCAL}))?"
+        rf"|_:[\w][\w.{_PN_EXTRA}-]*(?<!\.)(?:{_PNAME})?"
         # a keyword ends at a `.`: `true.x:B` is `true`, `.`, `x:B` (#1001)
         rf"|(?<![\w:-])(?:true|false)(?![\w:{_PN_EXTRA}-])"
-        rf"|(?<![\w:-])({_PN_PREFIX})?:({_PN_LOCAL})"
+        rf"|(?<![\w:-]){_PNAME}"
     )
 
     @classmethod
