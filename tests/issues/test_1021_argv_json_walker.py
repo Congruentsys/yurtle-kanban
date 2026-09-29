@@ -139,3 +139,20 @@ def test_control_matches_click(name: str) -> None:
     args, expected = CONTROLS[name]
     assert click_requests_json(args) is expected, (args, _seen)
     assert argv_requests_json(args, root) is expected, args
+
+
+# --- round 2 (PR #1031 review): an unknown option stops the whole walk ----------------
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["c", "-vxn", "-n", "--json"], ["c", "-xn", "-vn", "--json"],
+     ["c", "-x", "-n", "--json"], ["c", "--bogus", "-n", "--json"]],
+    ids=["cluster-then-value-option", "cluster-then-cluster", "unknown-short", "unknown-long"],
+)
+def test_unknown_option_stops_the_walk(args: list[str]) -> None:
+    """Click fails at the first unknown option without consuming any later token,
+    so a later `--json` was asked for."""
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2 and "No such option" in result.output, result.output
+    assert argv_requests_json(args, root) is True
