@@ -89,6 +89,105 @@ class _Reader:
         return self.read(rel)
 
 
+class BoardHalted(InputRefused):  # noqa: N818 — a refusal, as InputRefused is
+    """A refusal because the board is halted (#582): the CLI exits `sync.HALTED`."""
+
+
+CONTROL_FILE = ".kanban/control.yaml"  # the one repo-wide stop switch (#582)
+CONTROL_MODES = ("halt", "running")
+STALE_FETCH = timedelta(minutes=10)
+
+
+def age_text(seconds: float) -> str:
+    """`seconds` as one short unit: 45s, 12m, 3h, 2d."""
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{int(seconds // size)}{unit}"
+    return f"{max(0, int(seconds))}s"
+
+
+@dataclass
+class ControlState:
+    """The board's emergency stop (#582), as read from `source`: `remote` (origin's
+    default branch as last fetched, at `fetched_at`) or `worktree` (no remote). A
+    file that can't be read, or names an unknown mode, is a halt with `error`."""
+
+    mode: str = "running"
+    reason: str | None = None
+    by: str | None = None
+    at: str | None = None
+    source: str = "worktree"
+    fetched_at: datetime | None = None
+    error: str | None = None
+
+    @property
+    def halted(self) -> bool:
+        return self.mode != "running"
+
+    def why(self) -> str | None:
+        """`pickable`'s reason while halted, else None."""
+        if not self.halted:
+            return None
+        if self.error:
+            return f"board halted: {self.error}"
+        return f"board halted by {self.by or 'unknown'} at {self.at}: {self.reason}"
+
+    def fetch_age(self) -> str | None:
+        """How old the last fetch is, when this state is origin's and older than
+        `STALE_FETCH`."""
+        if self.source != "remote" or self.fetched_at is None:
+            return None
+        seconds = (_now() - self.fetched_at).total_seconds()
+        if seconds <= STALE_FETCH.total_seconds():
+            return None
+        return f"control state as of the last fetch of origin, {age_text(seconds)} ago"
+
+    def refusal(self) -> str:
+        """A halted board's refusal: the reason, where to look, the fetch's age."""
+        age = self.fetch_age()
+        return f"{self.why()} (see control status)" + (f"; {age}" if age else "")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode, "reason": self.reason, "by": self.by, "at": self.at,
+            "source": self.source,
+            "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
+        }
+
+
+def parse_control(
+    text: str | None, where: str, source: str, fetched_at: datetime | None = None
+) -> ControlState:
+    """The control file's `text` (None: absent, so running), named `where` in a
+    parse error. Broken YAML, not a mapping, or an unknown mode: a halt (#582)."""
+    state = ControlState(source=source, fetched_at=fetched_at)
+    if text is None:
+        return state
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        state.mode, state.error = "halt", f"{where} is unreadable ({' '.join(str(e).split())})"
+        return state
+    if not isinstance(data, dict):
+        state.mode, state.error = "halt", f"{where} is not a mapping"
+        return state
+    mode = data.get("mode")
+    if mode not in CONTROL_MODES:
+        state.mode = "halt"
+        state.error = f"{where} has unknown mode {mode!r} (expected halt or running)"
+        return state
+
+    def text_of(value: Any) -> str | None:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return None if value is None else str(value)
+
+    state.mode, state.reason, state.by, state.at = (
+        mode, text_of(data.get("reason")), text_of(data.get("by")), text_of(data.get("at"))
+    )
+    return state
+
+
 @dataclass
 class _Claimed:
     """What a claim changed, for the hooks it fires once it has landed (#574)."""
@@ -2826,7 +2925,9 @@ class KanbanService:
             return Outcome(
                 "lost", f"Lost to {result.holder}: {result.message}", attempts=attempts
             )
-        return Outcome("refused", result.message, attempts=attempts, wip=result.wip)
+        return Outcome(
+            "refused", result.message, attempts=attempts, wip=result.wip, halted=result.halted
+        )
 
     def _won(self, branch: str, sha: str, change: Change, attempts: int) -> Outcome:
         """The outcome of a push that landed; nothing here may turn it into a
@@ -4372,6 +4473,10 @@ class KanbanService:
         else:
             actor = resolve_actor(actor, cwd=self.repo_root)
         item = self._writable_item(item_id, "a move")  # the file now (#638, #742)
+        if new_status == WorkItemStatus.IN_PROGRESS:  # new work stops; finishing doesn't (#582)
+            control = self.control_state()
+            if control.halted:
+                raise BoardHalted(f"Can't move {item.id} to in progress: {control.refusal()}")
 
         old_status = item.status
         taken_over_from = self._holder_guard(item, actor, take_over)
@@ -4738,6 +4843,9 @@ class KanbanService:
 
         if mine and old_status == in_progress:
             return NoOp(f"{item.id} is already yours ({judge.status_label(item)})")
+        control = self._control_at(read)  # the fetched tree's halt (#582)
+        if control.halted:
+            return Refuse(f"Can't claim {item.id}: {control.refusal()}", halted=True)
         # the one pickable predicate (#575), dependencies judged in `read`'s tree;
         # #574's two holder refusals keep their wording and carry its reason
         try:
@@ -6363,17 +6471,22 @@ class KanbanService:
         3. no unrepaired bounce: `bounce_sha` differs from the body hash (#578);
         4. every `depends_on` is `met` (a superseded or duplicate one: its final
            target; a `wont_do` one is dead, #581).
+
+        Before them all: the board is not halted (#582, `control_state`).
         """
-        return self._pickable(item, actor)
+        return self._pickable(item, actor, halt=self.control_state().why())
 
     def _pickable(
         self, item: WorkItem, actor: str | None, *, take_over: bool = False,
         index: dict[str, WorkItem] | None = None,
-        graph: dict[str, list[str]] | None = None,
+        graph: dict[str, list[str]] | None = None, halt: str | None = None,
     ) -> tuple[bool, str]:
         """`pickable`, with dependencies looked up in `index` (default: every board
         here). `take_over` (`claim --take-over`) skips clause 2 and accepts an
-        in-progress item under clause 1 (#575 [steer] 2)."""
+        in-progress item under clause 1 (#575 [steer] 2). `halt` is a halted
+        board's reason (#582), which refuses every item."""
+        if halt:
+            return False, halt
         allowed = {WorkItemStatus.READY}
         if take_over:
             allowed.add(WorkItemStatus.IN_PROGRESS)
@@ -6430,15 +6543,87 @@ class KanbanService:
         reason), both in pick order, of `items` (default: every board) (#575)."""
         index = self._dep_index()
         graph = self._dep_graph(index)
+        halt = self.control_state().why()
         picks: list[WorkItem] = []
         refused: list[tuple[WorkItem, str]] = []
         for item in sorted(self.get_items() if items is None else items, key=self.pick_order):
-            ok, reason = self._pickable(item, actor, index=index, graph=graph)
+            ok, reason = self._pickable(item, actor, index=index, graph=graph, halt=halt)
             if ok:
                 picks.append(item)
             elif item.status == WorkItemStatus.READY:
                 refused.append((item, reason))
         return picks, refused
+
+    # --- the emergency stop (#582) ------------------------------------------------
+
+    def _control_rel(self) -> str:
+        """`.kanban/control.yaml` of the repo root, from the git work tree's top."""
+        path = self.repo_root / CONTROL_FILE
+        return (self._repo_relative(path, self._git_toplevel()) or Path(CONTROL_FILE)).as_posix()
+
+    def control_state(self, *, worktree: bool = False) -> ControlState:
+        """The halt state, never from the network (#582): origin's default branch as
+        last fetched, else (no remote, nothing fetched, or `worktree`: `validate`)
+        the working-tree file."""
+        rel = self._control_rel()
+        ref = None if worktree or not self._has_remote() else self._fetched_default()
+        if ref is None:
+            path = self.repo_root / CONTROL_FILE
+            try:
+                text = path.read_text(encoding="utf-8") if path.is_file() else None
+            except (OSError, UnicodeDecodeError) as e:
+                return ControlState("halt", source="worktree", error=f"{rel}: {e}")
+            return parse_control(text, rel, "worktree")
+        fetched = self._last_fetch(ref)
+        where = f"{rel} on {ref.removeprefix('refs/remotes/')}"
+        try:
+            text = self._blob_at(ref, rel)
+        except _TreeUnreadableError as e:
+            return ControlState("halt", source="remote", fetched_at=fetched, error=str(e))
+        return parse_control(text, where, "remote", fetched)
+
+    def _control_at(self, read: Read) -> ControlState:
+        """The halt state in the tree `read` reads: `claim`'s fetched one (#582)."""
+        rel = self._control_rel()
+        try:
+            text = read(rel)
+        except (OSError, UnicodeDecodeError) as e:
+            return ControlState("halt", error=f"{rel}: {e}")
+        return parse_control(text, rel, "worktree" if read.rev is None else "remote")
+
+    def _last_fetch(self, ref: str) -> datetime | None:
+        """When `ref` was last fetched: the newer of FETCH_HEAD's mtime and its last
+        reflog entry, or None when git keeps neither (#582)."""
+        done = self._git_run("rev-parse", "--git-path", "FETCH_HEAD", "--git-path", f"logs/{ref}")
+        if done.returncode != 0:
+            return None
+        head, _, log = done.stdout.strip().partition("\n")
+        stamps: list[float] = []
+        with suppress(OSError):
+            stamps.append((self.repo_root / head).stat().st_mtime)
+        with suppress(OSError, UnicodeDecodeError):
+            lines = (self.repo_root / log).read_text(encoding="utf-8").splitlines()
+            if lines and (m := re.search(r"> (\d+) [+-]\d{4}\t", lines[-1])):
+                stamps.append(float(m.group(1)))
+        return datetime.fromtimestamp(max(stamps), timezone.utc) if stamps else None
+
+    def set_control(self, mode: str, reason: str | None, actor: str) -> Outcome:
+        """Halt or resume the board (#582): write the control file through
+        `sync_and_push`, one commit of that file alone onto origin's default
+        branch. Halting a halted board refreshes it; resuming one that is not
+        halted is a no-op."""
+        rel = self._control_rel()
+        at = _now().isoformat(timespec="seconds")
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            if mode == "running" and not self._control_at(read).halted:
+                return NoOp("the board is not halted; nothing to resume")
+            data = {"mode": mode, "reason": reason, "by": actor, "at": at}
+            text = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
+            verb = "Halt" if mode == "halt" else "Resume"
+            return Change({rel: text}, f"{verb} the board ({actor})")
+
+        return self.sync_and_push(mutate)
 
     @staticmethod
     def _as_datetime(value: Any) -> datetime | None:
