@@ -19,9 +19,10 @@ a. "One line" is pinned as: the output has exactly one non-blank line, and it
    starts with ``Error: ``. The outcome's own message still follows the prefix.
 b. The prefix is exactly ``Error: `` (capital E, colon, space), as ``_refuse``
    prints it; no doubled ``Error: Error:``.
-c. The line is counted on stdout, where ``_refuse`` prints every other refusal.
-   ``sync_and_push`` logs each rejected push as a WARNING to stderr; that is not
-   the outcome's line and is not pinned here.
+c. The line is counted on stderr, where ``refuse()`` prints every refusal
+   (#1080; ruled edit for #1086), and stdout stays empty. ``sync_and_push``
+   logs each rejected push as a WARNING; a log record is not the outcome's line
+   and is not pinned here.
 """
 
 from __future__ import annotations
@@ -75,9 +76,14 @@ def invoke(world: World, monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> An
 
 
 def lines(result: Any) -> list[str]:
-    """Stdout's non-blank lines: the retry warnings logged to stderr are not the
-    outcome's line (reading c)."""
-    return [ln for ln in (result.stdout or "").splitlines() if ln.strip()]
+    """Stderr's non-blank lines, less the retry warnings logged there, which are
+    not the outcome's line (reading c); stdout carries nothing (#1080)."""
+    assert not (result.stdout or "").strip(), f"refusal on stdout: {result.stdout!r}"
+    return [
+        ln
+        for ln in (result.stderr or "").splitlines()
+        if ln.strip() and not ln.startswith(("WARNING", "INFO", "DEBUG"))
+    ]
 
 
 def assert_error_line(result: Any, code: int, must_say: str | None = None) -> None:
