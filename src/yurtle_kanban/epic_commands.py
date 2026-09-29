@@ -15,7 +15,6 @@ from datetime import date
 
 import click
 from rich.console import Console
-from rich.markup import escape
 from rich.table import Table
 
 from ._click import Group, pull_note, refuse, safe
@@ -230,8 +229,8 @@ def _do_create(title: str, priority: str, items: str | None, push: bool, group: 
         )
 
     console.print(
-        f"Created {type_label} [bold green]{escape(item.id)}[/bold green]: "
-        f"{escape(title)}"
+        f"Created {type_label} [bold green]{safe(item.id)}[/bold green]: "
+        f"{safe(title)}"
     )
     item_ids = [i.strip() for i in items.split(",") if i.strip()] if items else []
     if push and not result.get("local", True):
@@ -245,7 +244,7 @@ def _do_create(title: str, priority: str, items: str | None, push: bool, group: 
                 f"{safe(', '.join(item_ids))}[/yellow]"
             )
         return
-    console.print(f"  File: {escape(str(item.file_path))}")
+    console.print(f"  File: {safe(str(item.file_path))}")
 
     if push and item_ids:
         console.print(
@@ -259,9 +258,9 @@ def _do_create(title: str, priority: str, items: str | None, push: bool, group: 
             linked = service.get_item(linked_id)
             shown = linked.id if linked is not None else linked_id
             if _update_item_related(service, linked_id, item.id):
-                console.print(f"  Linked {escape(shown)} → {escape(item.id)}")
+                console.print(f"  Linked {safe(shown)} → {safe(item.id)}")
             elif _already_linked(service, linked_id, item.id):
-                console.print(f"  {escape(shown)} already linked")
+                console.print(f"  {safe(shown)} already linked")
             # otherwise _update_item_related printed why it didn't link
 
 
@@ -314,7 +313,7 @@ def _do_show(epic_id: str):
         cmd = "voyage" if epic_item.item_type == WorkItemType.VOYAGE else "epic"
         console.print("  No linked items found.")
         console.print(
-            f"  [dim]Link items with: yurtle-kanban {cmd} add {escape(epic_id)} ITEM-ID[/dim]"
+            f"  [dim]Link items with: yurtle-kanban {cmd} add {safe(epic_id)} ITEM-ID[/dim]"
         )
         return
 
@@ -367,12 +366,12 @@ def _do_add(epic_id: str, item_id: str):
             raise click.ClickException(escape_nonprintable(str(e))) from None
 
     if _update_item_related(service, item_id, epic_id):
-        console.print(f"Linked [bold]{escape(item.id)}[/bold] → [bold]{escape(epic_id)}[/bold]")
+        console.print(f"Linked [bold]{safe(item.id)}[/bold] → [bold]{safe(epic_id)}[/bold]")
     else:
         if item is None:
             raise click.ClickException(f"Item {escape_nonprintable(fold_id(item_id))} not found")
         elif _already_linked(service, item_id, epic_id):
-            console.print(f"{escape(item.id)} is already linked to {escape(epic_id)}")
+            console.print(f"{safe(item.id)} is already linked to {safe(epic_id)}")
         # otherwise _update_item_related printed why it didn't link
 
 
