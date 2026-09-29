@@ -63,9 +63,9 @@ def _recursive(call: ast.Call) -> bool:
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
         return "**" in first.value
     if isinstance(first, ast.JoinedStr):
-        return any(
-            isinstance(v, ast.Constant) and "**" in str(v.value) for v in first.values
-        )
+        # a placeholder may be empty: `f"*{x}*"` can be `**` (#1035)
+        joined = "".join(str(v.value) for v in first.values if isinstance(v, ast.Constant))
+        return "**" in joined
     return False
 
 
@@ -136,3 +136,9 @@ def test_recursive_anywhere_and_keyword_pattern_are_flagged() -> None:
         call = ast.parse(src).body[0].value
         assert _recursive(call), src
     assert not _recursive(ast.parse('repo.glob("*.md")').body[0].value)
+
+
+def test_fstring_star_around_a_placeholder_is_flagged() -> None:
+    """`f"*{x}*"` is `**` when `x` is empty (#1035); `f"*{ext}"` never is."""
+    assert _recursive(ast.parse('repo.glob(f"*{x}*")').body[0].value)
+    assert not _recursive(ast.parse('repo.glob(f"*{ext}")').body[0].value)
