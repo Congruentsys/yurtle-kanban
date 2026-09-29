@@ -36,30 +36,57 @@ def argv_requests_json(args: list[str], root: click.Command | None = None) -> bo
         arg = args[i]
         if arg == "--json":
             return True
-        if arg.startswith("-") and "=" not in arg:
-            i += 1 if _value_follows(cmd, arg) else 0  # its value is never an option
+        if arg.startswith("-") and arg != "-" and "=" not in arg:
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            step = _value_follows(cmd, arg, nxt)
+            if step is None:  # click fails here: a later `--json` was still asked for
+                return "--json" in args[i + 1 :]
+            i += 1 if step else 0  # its value is never an option
         elif isinstance(cmd, click.Group) and arg in cmd.commands:
             cmd = cmd.commands[arg]
         i += 1
     return False
 
 
-def _value_follows(cmd: click.Command, arg: str) -> bool:
-    """Whether option token `arg` of `cmd` takes the NEXT argument as its value. A short
-    cluster (`-vn`) is read as click reads it: flags up to the first letter that takes a
-    value, which takes the rest of the token, or the next argument when none is left
-    (#971)."""
-    def takes_value(name: str) -> bool:
-        return any(
-            name in p.opts + p.secondary_opts and not p.is_flag and not p.count
-            for p in cmd.params if isinstance(p, click.Option)
-        )
+def _help_names(cmd: click.Command) -> list[str]:
+    """`--help` and the like: options click adds that are not in `cmd.params`."""
+    ctx = click.Context(cmd)
+    return list(ctx.help_option_names)
+
+
+def _value_follows(cmd: click.Command, arg: str, nxt: str | None = None) -> bool | None:
+    """Whether option token `arg` of `cmd` takes the NEXT argument (`nxt`) as its
+    value, read as click reads it (#971, #1021):
+    - an option that takes a value takes the next argument;
+    - an optional-value option (`is_flag=False` with a `flag_value`) takes it only
+      when it doesn't look like an option, else it gets its `flag_value`;
+    - a short cluster (`-vn`) is flags up to the first letter that takes a value,
+      which takes the rest of the token, or the next argument when none is left.
+    None when click fails on `arg`: an unknown option, or an unknown letter in a
+    cluster before any value-taking one (#1021)."""
+    def kind(name: str) -> str | None:
+        for p in cmd.params:
+            # `_flag_needs_value` is click's own (private) optional-value marker
+            if isinstance(p, click.Option) and name in p.opts + p.secondary_opts:
+                if p.is_flag or p.count:
+                    return "flag"
+                return "optional" if getattr(p, "_flag_needs_value", False) else "value"
+        return None
+
+    def takes_next(name: str) -> bool:
+        k = kind(name)
+        if k == "optional":
+            return nxt is not None and not nxt.startswith("-")
+        return k == "value"
 
     if arg.startswith("--") or len(arg) <= 2:
-        return takes_value(arg)
+        return None if kind(arg) is None and arg not in _help_names(cmd) else takes_next(arg)
     for n, letter in enumerate(arg[1:], 1):
-        if takes_value(f"-{letter}"):
-            return n == len(arg) - 1
+        k = kind(f"-{letter}")
+        if k is None:
+            return None  # click fails here, before any later letter
+        if k in ("value", "optional"):
+            return n == len(arg) - 1 and takes_next(f"-{letter}")
     return False
 
 
