@@ -47,6 +47,7 @@ from tests.issues.test_346_semantic_extras_fallback import (  # noqa: F401 (fixt
     runner,
 )
 from tests.issues.test_358_query_json_and_broken_extra import (  # noqa: F401 (fixtures)
+    _has_install_hint,  # the one copy (#985, #1011)
     broken_extra,
 )
 from yurtle_kanban.cli import get_service, main
@@ -84,10 +85,6 @@ def _json_rows(stdout: str) -> list[dict[str, Any]]:
         raise AssertionError(f"stdout is not valid JSON ({e}):\n{stdout!r}") from e
     assert isinstance(rows, list), stdout
     return rows
-
-
-def _has_install_hint(text: str) -> bool:
-    return "[search]" in text or "sentence-transformers" in text.lower()
 
 
 class _TorchBrokenFinder:

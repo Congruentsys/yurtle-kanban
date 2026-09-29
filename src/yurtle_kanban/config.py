@@ -138,13 +138,17 @@ def _is_bool(value: Any) -> bool:
 
 
 def _shape(value: Any) -> str:
-    """`int 5`: a wrong value as a refusal names it, cut to 60 characters (#964): a
-    401-digit `version` isn't echoed whole, and an int past Python's str-digits limit,
-    whose `repr` raises, is named by its size."""
+    """`int 5`: a wrong value as a refusal names it (#964). A `repr` over 60
+    characters is cut to its first 50 plus `… (N chars)`, so a 401-digit `version`
+    isn't echoed whole; an int past Python's str-digits limit, whose `repr` raises,
+    is named by its size, with its sign (#1011)."""
     try:
         shown = repr(value)
     except ValueError:
-        shown = f"<{value.bit_length()}-bit number>" if isinstance(value, int) else "<unprintable>"
+        if isinstance(value, int):
+            shown = f"{'-' if value < 0 else ''}<{value.bit_length()}-bit number>"
+        else:
+            shown = "<unprintable>"
     if len(shown) > 60:
         shown = f"{shown[:50]}… ({len(shown)} chars)"
     return f"{type(value).__name__} {shown}"
