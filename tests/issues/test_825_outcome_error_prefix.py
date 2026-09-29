@@ -76,14 +76,9 @@ def invoke(world: World, monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> An
 
 
 def lines(result: Any) -> list[str]:
-    """Stderr's non-blank lines, less the retry warnings logged there, which are
-    not the outcome's line (reading c); stdout carries nothing (#1080)."""
+    """Stderr's non-blank lines (reading c); stdout carries nothing (#1080)."""
     assert not (result.stdout or "").strip(), f"refusal on stdout: {result.stdout!r}"
-    return [
-        ln
-        for ln in (result.stderr or "").splitlines()
-        if ln.strip() and not ln.startswith(("WARNING", "INFO", "DEBUG"))
-    ]
+    return [ln for ln in (result.stderr or "").splitlines() if ln.strip()]
 
 
 def assert_error_line(result: Any, code: int, must_say: str | None = None) -> None:
