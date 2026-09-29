@@ -179,5 +179,7 @@ def pull_note(result: dict[str, Any]) -> str:
     uncommitted edit would block that pull, to commit or stash it (#585, #625, #674)."""
     from .service import pull_note_text
 
-    note = pull_note_text(result.get("branch") or "main", result.get("dirty_parent"))
+    note = pull_note_text(
+        result.get("branch") or "main", result.get("dirty_parent"), result.get("ff_why")
+    )
     return f"[yellow]  {safe(note)}[/yellow]"

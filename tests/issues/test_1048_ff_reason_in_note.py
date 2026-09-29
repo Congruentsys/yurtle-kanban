@@ -42,3 +42,18 @@ def test_up_to_date_checkout_has_no_reason(world) -> None:  # noqa: F811
     both = " ".join((out + err).split())
     assert code == 0, both
     assert "fast-forward refused" not in both, both
+
+
+def test_create_push_note_says_why(world) -> None:  # noqa: F811
+    """`create --push` prints its pull note from the result: the reason rides in it
+    too (PR #1052 review)."""
+    _seed_ready(world)
+    _diverge(world)
+
+    code, out, err = _cli(world, "create", "expedition", "Why not updated", "--push")
+    both = " ".join((out + err).split())
+
+    assert code == 0, both
+    assert "not in this checkout yet" in both, both
+    assert "fast-forward refused:" in both, both
+    assert "hint:" not in both.lower(), both

@@ -509,12 +509,15 @@ class LineEndings:
         return run[::-1]
 
 
-def pull_note_text(branch: str, dirty: str | None = None) -> str:
+def pull_note_text(branch: str, dirty: str | None = None, why: str | None = None) -> str:
     """Where a `--push` create landed when it isn't in this checkout (a feature
     branch, detached HEAD, diverged main), and to pull: the one wording the CLI
     line and the service message share (#625, #637). `dirty` names a file the
-    pull would overwrite, whose uncommitted edit must be dealt with first (#674)."""
+    pull would overwrite, whose uncommitted edit must be dealt with first (#674).
+    `why` is git's reason the fast-forward was refused (#1048)."""
     note = f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
+    if why:
+        note += f" (fast-forward refused: {why})"
     if dirty is None:
         return note
     return f"{note}; commit or stash your edit to {dirty} before pulling"
@@ -530,10 +533,7 @@ def _created_and_pushed_message(
     message = f"Created and pushed {item_id} to origin/{branch}: {title}"
     if local:
         return message
-    note = pull_note_text(branch, dirty)
-    if why:  # git's reason the fast-forward was refused (#1048)
-        note += f" (fast-forward refused: {why})"
-    return f"{message.removesuffix('.')}. {note}"
+    return f"{message.removesuffix('.')}. {pull_note_text(branch, dirty, why)}"
 
 
 class KanbanService:
@@ -2344,9 +2344,9 @@ class KanbanService:
                 (rel.as_posix() for rel in made["linked"] if self._uncommitted(top / rel)),
                 None,
             )
+            why = None if local else self._ff_why
             message = _created_and_pushed_message(
-                current_id, branch, title, local=local, dirty=dirty,
-                why=None if local else self._ff_why,
+                current_id, branch, title, local=local, dirty=dirty, why=why
             )
             return {
                 "success": True,
@@ -2359,6 +2359,7 @@ class KanbanService:
                 # why no link, from the copy it was built against (#724)
                 "parent_state": made.get("parent_state"),
                 "dirty_parent": dirty,
+                "ff_why": why,  # git's reason, for the CLI's pull note (#1048)
                 "message": message,
             }
 
