@@ -21,6 +21,7 @@ Usage:
     yurtle-kanban export --format FORMAT [--output FILE]
 """
 
+import dataclasses
 import json
 import os
 import re
@@ -78,6 +79,7 @@ from .models import (
 from .service import (
     BoardHalted,
     ControlState,
+    DepNode,
     KanbanService,
     age_text,
     git_toplevel,
@@ -1925,17 +1927,90 @@ def comment(item_id: str, body: str | None, body_file: str | None, agent: str | 
 
 
 @main.command()
-def blocked():
-    """List blocked items."""
-    service = get_service()
-    items = service.get_blocked_items()
+@click.option("--board", "board_name", help="Only this board's items (dependencies: every board)")
+@click.option("--all", "show_all", is_flag=True, help="Also backlog items with unmet dependencies")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def blocked(board_name: str | None, show_all: bool, as_json: bool):
+    """List blocked items, each once, with what they wait on (#577).
 
-    if not items:
+    An item is listed when it is status-blocked (canonical blocked and not
+    finished, so hdd abandoned is not) or dependency-blocked (ready, in_progress
+    or review, and a depends_on item is not done). --all adds backlog items with
+    unmet dependencies. Under each item, its unmet dependencies as a tree: a node
+    already shown under that item is `(see above)`, a cycle ends at `↻ cycle`.
+
+    Only depends_on is followed: for hdd `implements` edges, see
+    `hdd critical-path --dev-blockers`.
+    """
+    service = get_service()
+    waiting = {WorkItemStatus.READY, WorkItemStatus.IN_PROGRESS, WorkItemStatus.REVIEW}
+    if show_all:
+        waiting.add(WorkItemStatus.BACKLOG)
+    listed: list[tuple[WorkItem, bool, list[DepNode]]] = []
+    for item in service.get_items(board=board_name):
+        if service.is_finished(item):
+            continue
+        status_blocked = item.status == WorkItemStatus.BLOCKED
+        if not status_blocked and item.status not in waiting:
+            continue
+        unmet = service.unmet_dependencies(item) if item.depends_on else []
+        if status_blocked or unmet:
+            listed.append((item, status_blocked, unmet))
+
+    if as_json:
+        data = []
+        for item, status_blocked, unmet in listed:
+            board = service._get_board_for_item(item)
+            data.append({
+                "id": item.id,
+                "board": board.name if board else None,
+                "status": service.status_label(item),
+                "canonical_status": item.status.value,
+                "assignee": item.assignee,
+                "status_blocked": status_blocked,
+                "unmet": [dataclasses.asdict(n) for n in unmet],
+            })
+        click.echo(json.dumps({"items": data}, indent=2))
+        return
+    if not listed:
         console.print("[green]No blocked items.[/green]")
         return
 
-    console.print(f"[bold red]Blocked Items ({len(items)})[/bold red]")
-    render_list(items, console, status_label=service.status_label)
+    console.print(f"[bold red]Blocked Items ({safe(len(listed))})[/bold red]")
+    for item, _, unmet in listed:
+        root = f"{item.id} ({_status_with(service.status_label(item), item.assignee)})"
+        click.echo(f"{root}  waiting on:" if unmet else root)
+        _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1)
+
+
+def _status_with(status: str | None, assignee: Any) -> str:
+    return f"{status}, {assignee}" if assignee else str(status)
+
+
+def _echo_dep_tree(nodes: list[DepNode], path: list[str], shown: set[str], depth: int) -> None:
+    """`blocked`'s tree of `unmet_dependencies` (#577): a node already shown under
+    this root is `(see above)`; one on `path` (the IDs from the root down) closes
+    a `↻ cycle` line."""
+    pad = "  " * depth
+    for node in nodes:
+        key = fold_id(node.id)
+        on_path = [fold_id(p) for p in path]
+        if key in on_path:
+            ids = [*path[on_path.index(key):], node.id]
+            click.echo(f"{pad}↻ cycle: {' → '.join(ids)}")
+            continue
+        if key in shown:
+            click.echo(f"{pad}{node.id} (see above)")
+            continue
+        shown.add(key)
+        if node.state == "unknown":
+            click.echo(f"{pad}{node.id} — unknown ID")
+            continue
+        line = f"{pad}{node.id} ({_status_with(node.status, node.assignee)})"
+        if node.state == "dead":
+            line += " — dead: needs a human to re-point or drop the dependency"
+        click.echo(line)
+        _echo_dep_tree(node.children, [*path, node.id], shown, depth + 1)
 
 
 @main.command()

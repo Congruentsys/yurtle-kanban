@@ -21,48 +21,47 @@ Mark an item as blocked with a clear reason so other agents know why and who can
 
 ## Steps
 
-### 1. Move to Blocked Status
+> **hdd boards:** there `blocked` is the canonical name of `abandoned`, so
+> `move … blocked` on an hdd hypothesis or experiment **abandons** it. Don't use this
+> skill to pause hdd work; record a dependency (step 1a) or a comment instead.
+
+### 1a. The blocker is another item: record a dependency
+
+When the item waits on another item (FEAT-YYY), don't move it to blocked. Record the
+dependency and leave the status alone (or move it back to `ready`):
+
+```bash
+yurtle-kanban update FEAT-XXX --add-dep FEAT-YYY
+```
+
+`yurtle-kanban blocked` then lists FEAT-XXX with FEAT-YYY under it until FEAT-YYY
+is done, and nobody has to remember to unblock it.
+
+### 1b. The blocker is not an item: move to blocked, reason in a comment
+
+Only for a decision, hardware, an external party or anything else that isn't on a
+board:
 
 ```bash
 yurtle-kanban move FEAT-XXX blocked --agent <your-agent-name>
+yurtle-kanban comment FEAT-XXX --agent <your-agent-name> --body-file - <<'EOF'
+BLOCKED: [reason]
+Can unblock: [agent-name or "anyone"]
+EOF
 ```
 
-### 2. Update Item File
+### 2. Commit and Push
 
-Add a blocked section to the item file:
-
-Find the item file and add after the frontmatter:
-
-```markdown
-> **BLOCKED**: [reason]
-> **Since:** YYYY-MM-DD
-> **Can unblock:** [agent-name or "anyone"]
-```
-
-Also add a Change Log entry:
-
-```markdown
-### YYYY-MM-DD: BLOCKED
-
-**Reason:** [reason]
-**Can unblock:** [who]
-**Context:** [any additional context]
-```
-
-### 3. Commit and Push
+`update`, `move` and `comment` each commit the item file; push them:
 
 ```bash
-git add kanban-work/features/FEAT-XXX*.md
-git commit -m "blocked(feat-XXX): [short reason]
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
 git push origin HEAD
 ```
 
-### 4. Confirm Block
+### 3. Confirm Block
 
 Show:
-- Current blocked items count
+- `yurtle-kanban blocked` (status- and dependency-blocked items, each once)
 - Who can unblock
 - Suggest notifying the unblocking agent
 
@@ -73,14 +72,13 @@ Show:
 | "Waiting for external API" | whoever manages the dependency |
 | "Needs architecture decision" | tech lead |
 | "Waiting for PR review" | any agent |
-| "Blocked by FEAT-XXX" | whoever finishes that feature |
+| "Blocked by FEAT-XXX" | nobody: record a dependency (step 1a) |
 | "Needs stakeholder input" | project owner |
 | "External dependency" | depends |
 
 ## Unblocking
 
-When you unblock an item:
-
-1. Remove the `> **BLOCKED**` section from the file
-2. Add Change Log entry: "Unblocked: [what changed]"
-3. Move status: `yurtle-kanban move FEAT-XXX in_progress --agent <your-agent-name>`
+- A dependency (1a): nothing to do; the item leaves `blocked` when FEAT-YYY is done.
+  To drop the dependency instead: `yurtle-kanban update FEAT-XXX --rm-dep FEAT-YYY`.
+- A status block (1b): add a comment saying what changed, then
+  move it back: `yurtle-kanban move FEAT-XXX in_progress --agent <your-agent-name>`
