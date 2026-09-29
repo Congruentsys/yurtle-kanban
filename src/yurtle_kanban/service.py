@@ -6355,8 +6355,13 @@ class KanbanService:
         }
 
     def get_blocked_items(self) -> list[WorkItem]:
-        """Get all blocked items."""
-        return self.get_items(status=WorkItemStatus.BLOCKED)
+        """The status-blocked items that aren't finished: hdd `abandoned` maps to
+        canonical blocked but is closed, never blocked (#1075). The dependency-aware
+        view is `blocked()` (#577)."""
+        return [
+            item for item in self.get_items(status=WorkItemStatus.BLOCKED)
+            if not self.is_finished(item)
+        ]
 
     def refuse_unknown_board(self, board: str | None) -> None:
         """Raise `InputRefused` (`Unknown board: X`, as `states` says it) for a board
