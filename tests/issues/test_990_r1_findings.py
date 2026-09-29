@@ -224,3 +224,25 @@ def test_f3_held_ready_item_with_unfinished_dependency_has_no_hint(world) -> Non
     assert "--take-over" not in out.message, out.message
     # and the take-over the hint would have suggested does refuse
     assert claim(world.a, A, take_over=True).kind == "refused"
+
+
+# --- F4 ---------------------------------------------------------------------------------
+
+
+def test_f4_exit_7_last_is_truncated(world, monkeypatch) -> None:
+    _seed_three(world)
+    long = "Can't claim EXP-003: " + "x" * 400
+
+    def claim_item(self: KanbanService, item_id: str, **kw: Any) -> Outcome:
+        return Outcome("refused", long)  # every candidate refuses, at length
+
+    monkeypatch.setattr(KanbanService, "claim_item", claim_item)
+    monkeypatch.setattr(cli.console, "width", 1000)
+
+    result = _claim_next(world, monkeypatch, "--agent", A)
+
+    out = flat(result.output)
+    assert result.exit_code == 7, out
+    assert "last: Can't claim EXP-003" in out, out
+    assert "x" * 200 not in out, f"last: repeats the whole message: {out}"
+    assert "…" in out, out

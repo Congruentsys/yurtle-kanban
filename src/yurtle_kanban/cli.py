@@ -940,7 +940,9 @@ def _claim_next(service: KanbanService, actor: str) -> NoReturn:
         _print_outcome(wip)
     message = f"nothing pickable for {actor}"
     if picks:
-        message += f" ({tried} tried: each refused or lost; last: {last})"
+        # `last:` kept to one short clause: a refusal can be long (#990)
+        brief = last if last is None or len(last) <= 120 else last[:119].rstrip() + "…"
+        message += f" ({tried} tried: each refused or lost; last: {brief})"
     console.print(f"[red]Error: {safe(message)}[/red]", soft_wrap=True)
     sys.exit(NOTHING_PICKABLE)
 
