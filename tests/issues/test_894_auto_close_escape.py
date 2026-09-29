@@ -35,8 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.issues import _bashes
-from tests.issues._bashes import each_bash  # noqa: F401  (autouse: each bash, #940)
+from tests.issues._bashes import bash  # noqa: F401  (fixture: each bash, #940, #981)
 from tests.issues.test_574_claim import ITEM, ITEM_ID, item_text, push_from_a
 from tests.issues.test_860_auto_close_take_over import (
     PR_URL,
@@ -71,7 +70,7 @@ def unescape(text: str) -> str:
     return text.replace("%0A", "\n").replace("%0D", "\r").replace("%25", "%")
 
 
-def run_with_stub(tmp_path: Path) -> tuple[int, bytes]:
+def run_with_stub(tmp_path: Path, bash: str) -> tuple[int, bytes]:
     """Run the step with a failing stub `yurtle-kanban` first on PATH; return exit and log."""
     stub_dir = tmp_path / "stub"
     stub_dir.mkdir()
@@ -94,7 +93,7 @@ def run_with_stub(tmp_path: Path) -> tuple[int, bytes]:
     script = tmp_path / "move_items.sh"
     script.write_text(move_step_script())
     proc = subprocess.run(
-        [_bashes.BASH, "--noprofile", "--norc", "-e", str(script)],  # each bash (#940)
+        [bash, "--noprofile", "--norc", "-e", str(script)],  # each bash (#940, #981)
         cwd=tmp_path,
         env=env,
         capture_output=True,
@@ -117,8 +116,8 @@ def test_stub_prints_the_refusal_verbatim(tmp_path) -> None:
 # --- 1. the failed move's warning escapes the output ------------------------------------------
 
 
-def test_failed_move_warning_escapes_output_as_workflow_command_data(tmp_path) -> None:
-    code, raw = run_with_stub(tmp_path)
+def test_failed_move_warning_escapes_output_as_workflow_command_data(tmp_path, bash) -> None:
+    code, raw = run_with_stub(tmp_path, bash)
     log = raw.decode()
     assert code == 0, f"a failed move must warn, not fail the job:\n{log}"
 
@@ -143,10 +142,10 @@ def test_failed_move_warning_escapes_output_as_workflow_command_data(tmp_path) -
 # --- 2. control: a successful move warns nothing ----------------------------------------------
 
 
-def test_control_successful_move_emits_no_warning(world, tmp_path) -> None:
+def test_control_successful_move_emits_no_warning(world, tmp_path, bash) -> None:
     push_from_a(world, {ITEM: item_text("review")}, "EXP-001 review")
 
-    proc, outputs = run_move_step(world.a, tmp_path, ITEM_ID)
+    proc, outputs = run_move_step(world.a, tmp_path, ITEM_ID, bash)
     log = f"{proc.stdout}\n{proc.stderr}"
 
     assert proc.returncode == 0, log
