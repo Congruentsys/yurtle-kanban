@@ -55,13 +55,17 @@ def offenders(source: str) -> list[int]:
 
 
 def _recursive(call: ast.Call) -> bool:
-    """A `glob` whose pattern (a string literal or f-string) starts with `**`."""
-    first = call.args[0] if call.args else None
+    """A `glob` whose pattern (a string literal or f-string, positional or
+    `pattern=`) has `**` anywhere: `*/**/x.md` matches `.git` too (#1011)."""
+    first = call.args[0] if call.args else next(
+        (k.value for k in call.keywords if k.arg == "pattern"), None
+    )
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
-        return first.value.startswith("**")
-    if isinstance(first, ast.JoinedStr) and first.values:
-        head = first.values[0]
-        return isinstance(head, ast.Constant) and str(head.value).startswith("**")
+        return "**" in first.value
+    if isinstance(first, ast.JoinedStr):
+        return any(
+            isinstance(v, ast.Constant) and "**" in str(v.value) for v in first.values
+        )
     return False
 
 
@@ -124,3 +128,11 @@ def test_recursive_glob_and_self_repo_are_flagged() -> None:
         'repo.glob("x.md")\n'
     )
     assert offenders(source) == [1, 2, 3]
+
+
+def test_recursive_anywhere_and_keyword_pattern_are_flagged() -> None:
+    """`*/**/x.md` and `pattern="**/x"` recurse through `.git` too (#1011)."""
+    for src in ('repo.glob("*/**/x.md")', 'repo.glob(pattern="**/x")', 'repo.glob(f"*/**/{n}")'):
+        call = ast.parse(src).body[0].value
+        assert _recursive(call), src
+    assert not _recursive(ast.parse('repo.glob("*.md")').body[0].value)
