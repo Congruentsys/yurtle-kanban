@@ -39,7 +39,6 @@ from ._click import (
     Group,
     argv_requests_json,
     json_refusal,
-    json_requested,
     pull_note,
     refuse,
     safe,
@@ -630,15 +629,10 @@ def list_items(
             given = f"No priority given; valid: {', '.join(PRIORITIES)}"
             _refuse(given, f"[red]{given}[/red]")
         invalid = [p for p in priority_filter if p not in PRIORITIES]
-        if invalid and json_requested():
-            json_refusal("; ".join(unknown_priority_message(v) for v in invalid))
-        # one message per value, each rendered like everywhere else (#190, #238)
-        for value in invalid:
-            console.print(
-                f"[red]{escape(unknown_priority_message(value))}[/red]", soft_wrap=True
-            )
         if invalid:
-            sys.exit(1)
+            # one line per value, each rendered like everywhere else (#190, #238)
+            messages = [unknown_priority_message(v) for v in invalid]
+            _refuse("; ".join(messages), "\n".join(f"[red]{escape(m)}[/red]" for m in messages))
 
     if resolution is not None and resolution not in RESOLUTIONS:  # (#581)
         unknown = f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
