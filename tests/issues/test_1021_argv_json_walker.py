@@ -178,3 +178,25 @@ def test_help_names_follow_context_settings() -> None:
     def withh() -> None: ...
 
     assert _help_names(withh) == ["-h", "--help"]
+
+
+# --- #1036 round 2 (PR #1040 review): single-dash `=` is a cluster, as click reads it ---
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["c", "-vn=3", "-n", "--json"],   # -v, -n takes "=3", then -n takes --json
+        ["c", "-vo=1", "-n", "--json"],
+        ["c", "-n=3", "--json"],          # -n takes "=3": --json is a request
+        ["c", "-v=1", "-n", "--json"],    # -v, then "=" is no option: click fails
+        ["c", "--opt=1", "-n", "--json"],   # --opt takes "1", then -n takes --json
+    ],
+)
+def test_equals_forms_match_click(args: list[str]) -> None:
+    assert argv_requests_json(args, root) is click_requests_json(args), args
+
+
+def test_json_given_a_value_is_still_a_request() -> None:
+    """`--json=1`: click refuses a value on a flag, but JSON was asked for (#1036)."""
+    assert argv_requests_json(["c", "--json=1"], root) is True

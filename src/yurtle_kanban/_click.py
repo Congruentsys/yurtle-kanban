@@ -36,14 +36,19 @@ def argv_requests_json(args: list[str], root: click.Command | None = None) -> bo
         arg = args[i]
         if arg == "--json":
             return True
-        if arg.startswith("-") and arg != "-" and "=" in arg:
-            # `--name=value`: an option cmd doesn't know is where click fails (#1036)
+        if arg.startswith("--") and "=" in arg:
+            # `--name=value`: click fails on an option cmd doesn't know, and on a
+            # flag (or `--help`) given a value (#1036); a single-dash token with `=`
+            # is a short cluster, walked below (`-vn=3` is `-v`, `-n` taking `=3`)
             name = arg.split("=", 1)[0]
-            known = any(
-                name in p.opts + p.secondary_opts
-                for p in cmd.params if isinstance(p, click.Option)
-            )
-            if not known and name not in _help_names(cmd):
+            if name == "--json":  # `--json=1`: JSON was asked for, however malformed
+                return True
+            takes = [
+                not (p.is_flag or p.count)
+                for p in cmd.params
+                if isinstance(p, click.Option) and name in p.opts + p.secondary_opts
+            ]
+            if not any(takes):
                 return "--json" in args[i + 1 :]
         elif arg.startswith("-") and arg != "-":
             nxt = args[i + 1] if i + 1 < len(args) else None
