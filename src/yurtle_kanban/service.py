@@ -727,8 +727,10 @@ class KanbanService:
         self._items: dict[str, WorkItem] = {}
         # IDs the last scan found in more than one file, with every file; `_items`
         # keeps only one of them, so this is recorded before the merge (#576)
-        self.duplicate_ids: dict[str, list[Path]] = {}  # keyed upper-case (#732)
+        # keyed upper-case (#732), one entry per id as `_id_key` compares them (#795)
+        self.duplicate_ids: dict[str, list[Path]] = {}
         self._folded_items: dict[str, WorkItem] = {}
+        self._keyed_items: dict[tuple[str, int] | str, WorkItem] = {}  # by `_dup_key`
         # Files that look like items (start with `---`) but don't parse, with a
         # reason; the CLI reports them instead of dropping them silently (#139)
         self.parse_warnings: list[tuple[Path, str]] = []
@@ -892,22 +894,44 @@ class KanbanService:
 
     def _index_item(self, item: WorkItem) -> None:
         """Put a scanned item in `_items`, recording its ID in `duplicate_ids` when
-        another file already holds it (#576), IDs compared folded (`fold_id`) so
-        `exp-5` and `EXP-5` are one ID (#732, #817): the dict keeps one, silently."""
-        key = fold_id(item.id)
-        prior = self._folded_items.get(key)
+        another file already holds it (#576), IDs compared as `_holders_at` compares
+        them (`_dup_key`): `exp-5` is `EXP-5` (#732, #817) and `EXP-3` is `EXP-003`
+        (#641, #795). The entry is keyed by the first holder's folded ID."""
+        key = self._dup_key(item.id)
+        prior = self._keyed_items.get(key)
         if prior is not None and prior.file_path.resolve() != item.file_path.resolve():
-            files = self.duplicate_ids.setdefault(key, [prior.file_path])
+            name = self._duplicate_key(item.id) or fold_id(prior.id)
+            files = self.duplicate_ids.setdefault(name, [prior.file_path])
             if item.file_path not in files:
                 files.append(item.file_path)
-        self._folded_items[key] = item
+        self._folded_items[fold_id(item.id)] = item
+        self._keyed_items[key] = item
         self._items[item.id] = item
+
+    @classmethod
+    def _dup_key(cls, item_id: str) -> tuple[str, int] | str:
+        """What two ids share when they are one id: `_id_key`, else the folded id
+        (an id that ends in no number) (#641, #795)."""
+        return cls._id_key(item_id) or fold_id(item_id)
+
+    def _duplicate_key(
+        self, item_id: str, duplicated: dict[str, list[Path]] | None = None
+    ) -> str | None:
+        """The key `duplicated` (default `duplicate_ids`) records `item_id` under, in
+        whatever spelling of the id it was first seen (`EXP-3` finds `EXP-003`), or
+        None when the id is not duplicated (#795)."""
+        duplicated = self.duplicate_ids if duplicated is None else duplicated
+        if (folded := fold_id(item_id)) in duplicated:
+            return folded
+        key = self._dup_key(item_id)
+        return next((k for k in duplicated if self._dup_key(k) == key), None)
 
     def _scan(self) -> list[WorkItem]:
         self._control_cache = None  # read the halt state afresh per scan (#1067)
         self._items.clear()
         self.duplicate_ids = {}
         self._folded_items = {}
+        self._keyed_items = {}
         self.parse_warnings = []
         self._parse_warned = set()
 
@@ -1916,7 +1940,8 @@ class KanbanService:
         """Refuse `action` ("a move", "an update", ...) on an item whose ID, case
         folded, is on more than one board: which copy it meant is ambiguous
         (#721, #732, #742). Names every file."""
-        files = self.duplicate_ids.get(fold_id(item.id))
+        key = self._duplicate_key(item.id)  # `EXP-3` is `EXP-003` (#795)
+        files = self.duplicate_ids.get(key) if key is not None else None
         if files:
             where = ", ".join(self._display_path(f) for f in files)
             raise InputRefused(
@@ -5151,6 +5176,7 @@ class KanbanService:
             judge._scanning = False
             judge._items = {}
             judge._folded_items = {}
+            judge._keyed_items = {}
             judge.duplicate_ids = {}
             judge.parse_warnings = []
             judge._parse_warned = set()  # its own, not self's (#921)
@@ -7149,15 +7175,17 @@ class KanbanService:
         top = self._git_toplevel()
         files: dict[str, list[Path]] = {}
         found_at = [(top / path, found) for path, found in self._ids_at(rev)[1]]
-        seen: dict[str, set[Path]] = {}
+        seen: dict[tuple[str, int] | str, set[Path]] = {}
+        names: dict[tuple[str, int] | str, str] = {}  # keyed as the scan keys (#795)
         for path, found in [*found_at, *((i.file_path, i.id) for i in outside)]:
             # one file however it is reached (`/tmp` vs `/private/tmp`, a
             # symlinked board), as the scan compares (#879)
             real = path.resolve()
-            if real in seen.setdefault(fold_id(found), set()):
+            key = self._dup_key(found)  # `EXP-3` is `EXP-003` (#795)
+            if real in seen.setdefault(key, set()):
                 continue
-            seen[fold_id(found)].add(real)
-            files.setdefault(fold_id(found), []).append(path)
+            seen[key].add(real)
+            files.setdefault(names.setdefault(key, fold_id(found)), []).append(path)
         return graph, {i: f for i, f in files.items() if len(f) > 1}
 
     def _items_outside_repo(self) -> list[WorkItem]:
@@ -7241,8 +7269,8 @@ class KanbanService:
         for target in added:
             if target == me:
                 raise InputRefused(f"{me} can't depend on itself")
-            if target in duplicated:
-                where = ", ".join(self._display_path(f) for f in duplicated[target])
+            if (dup := self._duplicate_key(target, duplicated)) is not None:
+                where = ", ".join(self._display_path(f) for f in duplicated[dup])
                 raise InputRefused(
                     f"{target} is on more than one board ({where}): a dependency on it "
                     "is ambiguous; fix the duplicate ID first"
