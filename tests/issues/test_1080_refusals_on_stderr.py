@@ -18,6 +18,7 @@ refusals already on stderr (``blocked``, ``next-id``), and the same commands wit
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -210,6 +211,21 @@ def test_stderr_file_gets_no_ansi_when_stdout_is_a_terminal(board: Path) -> None
     logged = err_log.read_bytes()
     assert proc.returncode == 1, logged
     assert logged == b"Error: Unknown board: nosuch\n", logged
+
+
+def test_swapped_console_force_terminal_is_copied(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A caller's console forced to a terminal (tests swap one in) renders the
+    refusal on stderr as a terminal too: its explicit settings are copied."""
+    tty = Console(file=io.StringIO(), force_terminal=True, width=200)
+    with pytest.raises(SystemExit) as exc:
+        refuse("boom", console=tty)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "\x1b[" in captured.err, repr(captured.err)
+    assert "Error: boom" in captured.err, repr(captured.err)
 
 
 def test_default_console_on_non_tty_stderr_is_plain(
