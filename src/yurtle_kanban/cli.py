@@ -21,7 +21,6 @@ Usage:
     yurtle-kanban export --format FORMAT [--output FILE]
 """
 
-import dataclasses
 import json
 import os
 import re
@@ -1943,35 +1942,10 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
     `hdd critical-path --dev-blockers`.
     """
     service = get_service()
-    waiting = {WorkItemStatus.READY, WorkItemStatus.IN_PROGRESS, WorkItemStatus.REVIEW}
-    if show_all:
-        waiting.add(WorkItemStatus.BACKLOG)
-    listed: list[tuple[WorkItem, bool, list[DepNode]]] = []
-    for item in service.get_items(board=board_name):
-        if service.is_finished(item):
-            continue
-        status_blocked = item.status == WorkItemStatus.BLOCKED
-        if not status_blocked and item.status not in waiting:
-            continue
-        unmet = service.unmet_dependencies(item) if item.depends_on else []
-        if status_blocked or unmet:
-            listed.append((item, status_blocked, unmet))
-
-    if as_json:
-        data = []
-        for item, status_blocked, unmet in listed:
-            board = service._get_board_for_item(item)
-            data.append({
-                "id": item.id,
-                "board": board.name if board else None,
-                "status": service.status_label(item),
-                "canonical_status": item.status.value,
-                "assignee": item.assignee,
-                "status_blocked": status_blocked,
-                "unmet": [dataclasses.asdict(n) for n in unmet],
-            })
-        click.echo(json.dumps({"items": data}, indent=2))
+    if as_json:  # one service function with MCP `kanban_get_blocked` (#1066)
+        click.echo(json.dumps(service.blocked_report(board_name, show_all), indent=2))
         return
+    listed = service.blocked(board_name, show_all)
     if not listed:
         console.print("[green]No blocked items.[/green]")
         return

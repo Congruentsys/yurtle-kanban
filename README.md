@@ -386,7 +386,7 @@ yurtle-kanban-mcp
 | `kanban_move_item` | Move item to new status |
 | `kanban_get_board` | Get full board state |
 | `kanban_get_my_items` | Get items for assignee |
-| `kanban_get_blocked` | Get blocked items |
+| `kanban_get_blocked` | Blocked items, as `blocked --json` (optional `board`, `all`) |
 | `kanban_suggest_next` | Suggest next item to work on |
 | `kanban_add_comment` | Add comment to item |
 | `kanban_update_item` | Update item properties |

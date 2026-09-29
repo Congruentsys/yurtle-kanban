@@ -48,6 +48,7 @@ STRING_PROPS: dict[str, list[str]] = {
     "kanban_create_item": ["item_type", "title", "priority", "assignee", "description"],
     "kanban_move_item": ["item_id", "new_status", "agent", "resolution", "superseded_by"],
     "kanban_get_my_items": ["assignee"],
+    "kanban_get_blocked": ["board"],  # #1066: `blocked --board`, as the CLI
     "kanban_suggest_next": ["assignee"],
     "kanban_add_comment": ["item_id", "comment", "author"],
     "kanban_update_item": ["item_id", "title", "priority", "assignee", "description"],
