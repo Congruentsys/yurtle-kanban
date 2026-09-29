@@ -4510,7 +4510,13 @@ class KanbanService:
         if resolution is None:
             # only a resolved item is reopened: a stray hand-written superseded_by
             # stays as written (#583)
-            if finished or not item.resolution:
+            if not item.resolution:
+                return {}, None
+            if finished:
+                # `completed` goes with canonical done only: a finished move off it
+                # drops it (#1053); any other resolution stays
+                if item.resolution == "completed" and proposed.status != WorkItemStatus.DONE:
+                    return {"resolution": None}, item.resolution
                 return {}, None
             return {"resolution": None, "superseded_by": []}, item.resolution
         if resolution not in RESOLUTIONS:
@@ -4543,9 +4549,14 @@ class KanbanService:
         if key == own:
             raise InputRefused(f"{item.id} can't be superseded by itself")
         path, end = self._supersession_walk(key, index)
-        if own in path or end == "cycle":
+        if own in path:
             shown = " → ".join([item.id, *path])
             raise InputRefused(f"--superseded-by {target.id} would make a cycle: {shown}")
+        if end == "cycle":  # a cycle already there, which `item` is not on (#1053)
+            raise InputRefused(
+                f"--superseded-by {target.id} leads into a supersession cycle: "
+                f"{' → '.join(path)}"
+            )
         if len(path) > 1:
             final = index.get(path[-1])
             raise InputRefused(
@@ -6276,11 +6287,13 @@ class KanbanService:
     def _dep_state(
         self, dep_id: str, index: dict[str, WorkItem], graph: dict[str, list[str]]
     ) -> tuple[str, WorkItem | None, list[str] | None]:
-        """(state, the item, the cycle when `cycle`) of dependency `dep_id`."""
+        """(state, the item, the cycle when `cycle`) of dependency `dep_id`. An
+        `unknown` one has no item; its third element is the ID on no board — a
+        redirect's final target, not the redirecting item (#1053)."""
         key = fold_id(dep_id.strip())
         dep = index.get(key)
         if dep is None:
-            return "unknown", None, None
+            return "unknown", None, [dep_id]
         if self.is_finished(dep):
             # a resolution beats the column (#581 [steer] 4): `wont_do` is dead, a
             # redirect takes its final target's state (the target returned)
@@ -6386,7 +6399,8 @@ class KanbanService:
                     "dead": f"dead: {self._dead_why(dep)}" if dep else "dead",
                     "cycle": f"cycle: {' → '.join(cycle or [])}",
                 }[state]
-                return False, f"waiting on {dep.id if dep else dep_id} ({detail})"
+                name = dep.id if dep else (cycle or [dep_id])[-1]
+                return False, f"waiting on {name} ({detail})"
         return True, "pickable"
 
     def _dead_why(self, dep: WorkItem) -> str:
