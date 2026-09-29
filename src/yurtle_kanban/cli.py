@@ -1950,7 +1950,7 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
     for item, _, unmet in listed:
         root = f"{item.id} ({_status_with(service.status_label(item), item.assignee)})"
         click.echo(f"{root}  waiting on:" if unmet else root)
-        _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1)
+        _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1, service)
 
 
 def _refuse_unknown_board(service: Any, board_name: str | None) -> None:
@@ -1966,17 +1966,27 @@ def _status_with(status: str | None, assignee: Any) -> str:
     return f"{status}, {assignee}" if assignee else str(status)
 
 
-def _echo_dep_tree(nodes: list[DepNode], path: list[str], shown: set[str], depth: int) -> None:
+def _echo_dep_tree(
+    nodes: list[DepNode], path: list[str], shown: set[str], depth: int, service: Any
+) -> None:
     """`blocked`'s tree of `unmet_dependencies` (#577): a node already shown under
     this root is `(see above)`; one on `path` (the IDs from the root down) closes
-    a `↻ cycle` line. A `cycle` node no `↻` line below it runs through (a
-    supersession cycle, #581) is marked `— cycle` (#1068, #1077)."""
-    for line in _dep_tree_lines(nodes, path, shown, depth)[0]:
+    a `↻ cycle` line. A `cycle` node no `↻` line below it runs through is marked
+    `— cycle` (#1068, #1077), and so is one on a supersession cycle (#581) whatever
+    runs below it (#1081)."""
+    for line in _dep_tree_lines(nodes, path, shown, depth, service)[0]:
         click.echo(line)
 
 
+def _on_supersession_cycle(node: DepNode, service: Any) -> bool:
+    """Whether a `cycle` node's cycle is a supersession one (#1081): `_dep_state`
+    says `cycle` of a finished item only from its `superseded_by` walk (#581)."""
+    item = service.get_item(node.id)
+    return item is not None and service.is_finished(item)
+
+
 def _dep_tree_lines(
-    nodes: list[DepNode], path: list[str], shown: set[str], depth: int
+    nodes: list[DepNode], path: list[str], shown: set[str], depth: int, service: Any
 ) -> tuple[list[str], set[str]]:
     """`_echo_dep_tree`'s lines, and the (folded) IDs its `↻ cycle` lines run through."""
     pad = "  " * depth
@@ -2000,8 +2010,12 @@ def _dep_tree_lines(
         line = f"{pad}{node.id} ({_status_with(node.status, node.assignee)})"
         if node.state == "dead":
             line += " — dead: needs a human to re-point or drop the dependency"
-        below, below_arrowed = _dep_tree_lines(node.children, [*path, node.id], shown, depth + 1)
-        if node.state == "cycle" and key not in below_arrowed:
+        below, below_arrowed = _dep_tree_lines(
+            node.children, [*path, node.id], shown, depth + 1, service
+        )
+        if node.state == "cycle" and (
+            key not in below_arrowed or _on_supersession_cycle(node, service)
+        ):
             line += " — cycle"
         lines += [line, *below]
         arrowed |= below_arrowed
