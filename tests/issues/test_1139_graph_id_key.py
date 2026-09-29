@@ -111,6 +111,23 @@ def test_add_dep_closing_cycle_through_stored_spelling_is_refused(repo: Repo) ->
     _refused(repo, ["update", "EXP-5", "--add-dep", "EXP-006"], "cycle")
 
 
+def test_self_edge_through_stored_spelling_is_a_cycle(repo: Repo) -> None:
+    """EXP-5's own file says `EXP-05`: a one-node cycle, not a dangling target."""
+    repo.write("EXP-5", ["EXP-05"])
+    repo.commit("EXP-5 -> EXP-05")
+    result = invoke(["validate"])
+    assert result.exit_code == 1, result.output
+    assert "DEPENDENCY CYCLE: EXP-5 → EXP-5" in _flat(result.output), result.output
+    assert _cycles(repo) == [["EXP-5", "EXP-5"]]
+    assert ("EXP-5", "EXP-05") not in repo.service().dangling_dependencies()
+    assert _unmet(repo, "EXP-5") == {"EXP-5": "cycle"}
+    service = repo.service()
+    five = service.get_item("EXP-5")
+    assert five is not None
+    ok, why = service.pickable(five, None)
+    assert not ok and why == "waiting on EXP-5 (cycle: EXP-5 → EXP-5)", why
+
+
 # --- controls ----------------------------------------------------------------------------
 
 
