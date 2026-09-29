@@ -299,7 +299,9 @@ def test_a1_every_resolution_on_canonical_done(
     item, target = ids(prefix)
     moved(invoke(["move", item, done, "--resolution", resolution,
                   *target_args(resolution, target)]))
-    assert repo.service().status_label(repo.item(item)) == done
+    # the label is the theme's own name for canonical done: nautical's is `arrived`
+    label = {"nautical": "arrived"}.get(board, done)
+    assert repo.service().status_label(repo.item(item)) == label
     assert_resolved(repo, item, resolution, target if target_args(resolution, target) else None)
 
 
