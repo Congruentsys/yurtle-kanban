@@ -290,7 +290,8 @@ def board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _commit(root, "add EXP-4", DATE_4)
     _write(root, "EXP-4", item_md("EXP-4", "ready", title="Renamed", created=date(2026, 5, 1)))
     _commit(root, "retitle EXP-4", DATE_LATE)
-    # EXP-11: no history of its own; a comment pastes a canonical block
+    # EXP-11: no history of its own; a comment pastes a canonical block, which is
+    # read as legacy history ([steer] bucket-1's known limit)
     _write(root, "EXP-11", item_md("EXP-11", "ready", pasted=[("ready", iso(NOW - HOUR))]))
     _commit(root, "add EXP-11", DATE_11)
     # uncommitted: EXP-5 has `created:`, EXP-6 has nothing
@@ -468,8 +469,9 @@ def test_a2_one_git_log_per_invocation(
     monkeypatch.setattr(subprocess, "Popen", Spy)
     data = by_id(rows([]))
     monkeypatch.setattr(subprocess, "Popen", real)
-    # three committed items need the git source...
-    for item_id in ("EXP-3", "EXP-4", "EXP-11"):
+    # two committed items need the git source (EXP-11's lone block after
+    # `## Comments` is legacy history: [steer] bucket-1)...
+    for item_id in ("EXP-3", "EXP-4"):
         assert data[item_id]["since_source"] == "git", data[item_id]
     # ...and one `git log` serves them all
     logs = [c for c in calls if c and Path(c[0]).name.startswith("git") and "log" in c]
@@ -516,9 +518,13 @@ def test_a5_comment_block_does_not_change_since(board: Path, clock: datetime) ->
     real = data["EXP-10"]  # real history first, pasted block in a comment
     assert real["since_source"] == "history", real
     assert since_of(real) == NOW - 30 * HOUR
+    # Ruled ([steer] bucket-1): a lone canonical block after `## Comments` is
+    # legacy history (an item commented on before its first move). On an item
+    # with no real history a pasted block can't be told apart from it: the
+    # known limit, pinned here.
     only = data["EXP-11"]  # the pasted block is the only yurtle block
-    assert only["since_source"] == "git", only
-    assert since_of(only) == datetime.fromisoformat(DATE_11)
+    assert only["since_source"] == "history", only
+    assert since_of(only) == NOW - HOUR
 
 
 # --- Acceptance 6: --stale with the default 24h ------------------------------------
@@ -547,7 +553,8 @@ def test_a7_older_than_excludes_finished(board: Path, clock: datetime) -> None:
     listed = ids(rows(["--older-than", "2d"]))
     # EXP-12 (done) and H1.1 (hdd abandoned) are 10 days old but finished
     assert "EXP-12" not in listed and "H1.1" not in listed, listed
-    assert listed == ["EXP-13", "EXP-5", "EXP-4", "EXP-11", "H1.2", "EXP-6"], listed
+    # EXP-11 (legacy history, 1h: [steer] bucket-1) is too young
+    assert listed == ["EXP-13", "EXP-5", "EXP-4", "H1.2", "EXP-6"], listed
 
 
 # --- Acceptance 8: a bad DURATION ---------------------------------------------------
