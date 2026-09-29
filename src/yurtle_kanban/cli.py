@@ -620,7 +620,9 @@ def list_items(
         if _fold_status_name(status) not in known:
             _refuse(f"Unknown status: {status}", f"[red]Unknown status: {safe(status)}[/red]")
 
-    type_match = _type_filter(service, item_type, board_name) if item_type else None
+    # the board is loaded once: `--type`'s valid list reads it too (#1141)
+    loaded = service.get_items(board=board_name)
+    type_match = _type_filter(service, item_type, loaded) if item_type else None
 
     priority_filter = None
     if priority:
@@ -639,7 +641,7 @@ def list_items(
         unknown = f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
         _refuse(unknown, f"[red]{escape(unknown)}[/red]")
 
-    items = service.get_items(assignee=assignee, board=board_name, priority=priority_filter)
+    items = service.filter_items(loaded, assignee=assignee, priority=priority_filter)
     if type_match is not None:
         items = [i for i in items if type_match(i)]
     if status:
@@ -1572,6 +1574,9 @@ def roadmap(
     Use --ranked to sort by Captain's priority_rank instead.
     Use --by-type to group by item type.
 
+    --type takes a type declared by any item on the board, done ones included
+    (#1141): a type only done items declare shows an empty roadmap, not a refusal.
+
     Examples:
         yurtle-kanban roadmap
         yurtle-kanban roadmap --ranked
@@ -1580,18 +1585,19 @@ def roadmap(
         yurtle-kanban roadmap --export md
     """
     service = get_service()
+    # every item, done ones included: `--type`'s valid list reads them (#1141)
+    loaded = service.get_items()
 
     if ranked:
         # Use ranked ordering: priority_rank first, then priority_score
         items = service.get_ranked_items()
     else:
-        # Get all non-done items (sorted by priority_score)
-        items = service.get_items()
-        items = [i for i in items if i.status != WorkItemStatus.DONE]
+        # All non-done items (sorted by priority_score)
+        items = [i for i in loaded if i.status != WorkItemStatus.DONE]
 
     # Optional type filter
     if item_type:
-        type_match = _type_filter(service, item_type)
+        type_match = _type_filter(service, item_type, loaded)
         items = [i for i in items if type_match(i)]
 
     if as_json:
@@ -1936,14 +1942,15 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
 
 
 def _type_filter(
-    service: KanbanService, name: str, board_name: str | None = None
+    service: KanbanService, name: str, items: list[WorkItem]
 ) -> Callable[[WorkItem], bool]:
-    """`list`'s and `roadmap`'s `--type` (#1131): the service's `type_filter`, its
-    refusal as `Unknown type: NAME` and a `Valid types:` line."""
+    """`list`'s and `roadmap`'s `--type` (#1131): the service's `type_filter` over
+    the items the command already loaded (#1141), its refusal as `Unknown type:
+    NAME` and a `Valid types:` line."""
     try:
-        return service.type_filter(name, board_name)
+        return service.type_filter(name, items)
     except InputRefused as e:
-        valid = ", ".join(service.valid_types(board_name))
+        valid = ", ".join(service.valid_types(items))
         _refuse(e, f"[red]Unknown type: {safe(name)}[/red]\nValid types: {escape(valid)}")
 
 

@@ -2029,6 +2029,19 @@ class KanbanService:
                 self.scan()
             items = list(self._items.values())
 
+        return self.filter_items(
+            items, status=status, item_type=item_type, assignee=assignee, priority=priority
+        )
+
+    @staticmethod
+    def filter_items(
+        items: list[WorkItem],
+        status: WorkItemStatus | None = None,
+        item_type: WorkItemType | None = None,
+        assignee: str | None = None,
+        priority: list[str] | None = None,
+    ) -> list[WorkItem]:
+        """`get_items`'s filters and order, over items already loaded (#1141)."""
         if status:
             items = [i for i in items if i.status == status]
         if item_type:
@@ -2040,11 +2053,13 @@ class KanbanService:
 
         return sorted(items, key=lambda i: (-i.priority_score, -i.numeric_id))
 
-    def type_filter(self, name: str, board: str | None = None) -> Callable[[WorkItem], bool]:
+    @classmethod
+    def type_filter(cls, name: str, items: list[WorkItem]) -> Callable[[WorkItem], bool]:
         """`--type`'s item filter (#1131): a canonical type matches `item_type`, as
         before; any other name matches `declared_type` case-insensitively. Refused
-        (InputRefused) when no item on the board (`board`, else every board)
-        declares it; the valid list names the canonical types and those declared."""
+        (InputRefused) when no item in `items` declares it; the valid list names the
+        canonical types and those declared. `items` is the caller's already-loaded,
+        unfiltered board (done items included), never rescanned here (#1141)."""
         try:
             canonical = WorkItemType.from_string(name)
         except InputRefused:
@@ -2052,16 +2067,18 @@ class KanbanService:
         else:
             return lambda i: i.item_type == canonical
         folded = name.lower()
-        valid = self.valid_types(board)
+        valid = cls.valid_types(items)
         if folded not in valid:
             raise InputRefused(f"Unknown type: {name}; valid types: {', '.join(valid)}")
         return lambda i: i.declared_type.lower() == folded
 
-    def valid_types(self, board: str | None = None) -> list[str]:
+    @staticmethod
+    def valid_types(items: list[WorkItem]) -> list[str]:
         """The names `type_filter` accepts (#1131): the canonical types, then the
-        other types declared by an item on `board` (else every board), lowercased."""
+        other types declared by an item in `items`, lowercased. `items` is what the
+        caller already loaded; nothing is rescanned (#1141)."""
         known = [t.value for t in WorkItemType]
-        declared = {i.declared_type.lower() for i in self.get_items(board=board)}
+        declared = {i.declared_type.lower() for i in items}
         return known + sorted(declared - set(known))
 
     def _get_type_directory(self, item_type: WorkItemType, board_name: str | None = None) -> Path:
