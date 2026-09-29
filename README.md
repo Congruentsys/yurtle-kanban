@@ -130,7 +130,7 @@ yurtle-kanban export --format json
 | `metrics` | Flow metrics (cycle time, lead time) |
 | `next` | Suggest next item to work on (`--agent`; `--json`: `{"id", "kind", "reason"}`, or `null` and exit 7 when nothing is left) |
 | `next-id` | **Allocate next ID atomically (prevents duplicates!)** |
-| `blocked` | List blocked items |
+| `blocked` | Status- and dependency-blocked items, each once, with a tree of what they wait on (`--board`, `--all`, `--json`); hdd `implements`: `hdd critical-path --dev-blockers` |
 | `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`) |
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
