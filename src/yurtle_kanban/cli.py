@@ -27,6 +27,7 @@ import re
 import shutil
 import sys
 import unicodedata
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -523,7 +524,10 @@ def _duration(ctx: click.Context, param: click.Parameter, value: str | None) -> 
     "--status", "-s",
     help="Filter by status: canonical or the item's theme's name (active, provisioning…)",
 )
-@click.option("--type", "-t", "item_type", help="Filter by type (feature, bug, epic, task)")
+@click.option(
+    "--type", "-t", "item_type",
+    help="Filter by type: canonical (feature, bug, task...) or as items declare it (spec)",
+)
 @click.option("--assignee", help="Filter by assignee (who holds the item)")
 @click.option(
     "--priority", "-p",
@@ -616,12 +620,7 @@ def list_items(
         if _fold_status_name(status) not in known:
             _refuse(f"Unknown status: {status}", f"[red]Unknown status: {safe(status)}[/red]")
 
-    type_filter = None
-    if item_type:
-        try:
-            type_filter = WorkItemType.from_string(item_type)
-        except ValueError:
-            _refuse(f"Unknown type: {item_type}", f"[red]Unknown type: {safe(item_type)}[/red]")
+    type_match = _type_filter(service, item_type, board_name) if item_type else None
 
     priority_filter = None
     if priority:
@@ -640,12 +639,9 @@ def list_items(
         unknown = f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
         _refuse(unknown, f"[red]{escape(unknown)}[/red]")
 
-    items = service.get_items(
-        item_type=type_filter,
-        assignee=assignee,
-        board=board_name,
-        priority=priority_filter,
-    )
+    items = service.get_items(assignee=assignee, board=board_name, priority=priority_filter)
+    if type_match is not None:
+        items = [i for i in items if type_match(i)]
     if status:
         items = [i for i in items if service.resolve_status_name(i, status) == i.status]
     if resolution is not None:
@@ -1595,11 +1591,8 @@ def roadmap(
 
     # Optional type filter
     if item_type:
-        try:
-            type_filter = WorkItemType.from_string(item_type)
-            items = [i for i in items if i.item_type == type_filter]
-        except ValueError:
-            _refuse(f"Unknown type: {item_type}", f"[red]Unknown type: {safe(item_type)}[/red]")
+        type_match = _type_filter(service, item_type)
+        items = [i for i in items if type_match(i)]
 
     if as_json:
         data = [item.to_dict() for item in items]
@@ -1940,6 +1933,18 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
         root = f"{item.id} ({_status_with(service.status_label(item), item.assignee)})"
         click.echo(f"{root}  waiting on:" if unmet else root)
         _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1)
+
+
+def _type_filter(
+    service: KanbanService, name: str, board_name: str | None = None
+) -> Callable[[WorkItem], bool]:
+    """`list`'s and `roadmap`'s `--type` (#1131): the service's `type_filter`, its
+    refusal as `Unknown type: NAME` and a `Valid types:` line."""
+    try:
+        return service.type_filter(name, board_name)
+    except InputRefused as e:
+        valid = ", ".join(service.valid_types(board_name))
+        _refuse(e, f"[red]Unknown type: {safe(name)}[/red]\nValid types: {escape(valid)}")
 
 
 def _refuse_unknown_board(service: Any, board_name: str | None) -> None:
