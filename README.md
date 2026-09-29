@@ -112,10 +112,10 @@ yurtle-kanban export --format json
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize with theme, scaffold directories + templates |
-| `list` | List work items with optional filters (`--pickable` for what `--agent` may pick up now, in pick order; `--explain` also shows each ready item that isn't pickable, and why); aging: `--older-than DURATION`, `--stale`, `--stale-after DURATION` (default `24h`; `m/h/d/w`), and `--json` rows carry `since`, `since_source`, `age_seconds`, `stale`, `clock_skew`, `board` |
+| `list` | List work items with optional filters (`--pickable` for what `--agent` may pick up now, in pick order; `--explain` also shows each ready item that isn't pickable, and why); aging: `--older-than DURATION`, `--stale`, `--stale-after DURATION` (default `24h`; `m/h/d/w`), and `--json` rows carry `since`, `since_source`, `age_seconds`, `stale`, `clock_skew`, `board`; `--resolution R`: a done item with none counts as `completed` |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
 | `claim` | Claim an item race-free: move it to in progress, held by you (`--agent`, `--take-over`); `claim --next` claims the first pickable item you win (exit 7 when none) |
-| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`) |
+| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`, `--resolution completed\|superseded\|duplicate\|wont_do`, `--superseded-by ID`); a move to a status that is not finished clears the resolution |
 | `bounce` | Give an ill-defined item back (`--reason TEXT` or `--reason-file PATH\|-`; `--agent`, `--take-over`): to backlog, unassigned, not pickable until its body is edited |
 | `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
 | `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |

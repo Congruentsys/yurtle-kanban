@@ -65,6 +65,7 @@ from .hdd_commands import experiment, hdd, hypothesis, idea, literature, measure
 from .inputs import advisory_actor, check_identity, read_text_option, resolve_actor
 from .models import (
     PRIORITIES,
+    RESOLUTIONS,
     InputRefused,
     WorkItem,
     WorkItemStatus,
@@ -174,6 +175,23 @@ def _print_outcome(outcome: Outcome) -> NoReturn:
 def _refuse(e: object, plain: str | None = None) -> NoReturn:
     """The shared `refuse` (#962) on this module's console."""
     refuse(e, plain, console=console)
+
+
+class _Once(click.Option):
+    """An option that may be given once: click keeps the last of a repeated one
+    silently, this refuses it (a usage error, exit 2; #581)."""
+
+    def add_to_parser(self, parser: Any, ctx: click.Context) -> None:
+        parser.add_option(
+            obj=self, opts=self.opts, dest=self.name, action="append", nargs=self.nargs
+        )
+
+    def process_value(self, ctx: click.Context, value: Any) -> Any:
+        if isinstance(value, list):
+            if len(value) > 1:
+                raise click.BadParameter("given more than once", ctx=ctx, param=self)
+            value = value[0]
+        return super().process_value(ctx, value)
 
 
 class _Main(Group):
@@ -499,6 +517,11 @@ def _duration(ctx: click.Context, param: click.Parameter, value: str | None) -> 
 )
 @click.option("--board", "-b", "board_name", help="Filter to a specific board (multi-board mode)")
 @click.option(
+    "--resolution",
+    help=f"Filter by resolution ({', '.join(RESOLUTIONS)}); completed includes a done "
+    "item with none",
+)
+@click.option(
     "--pickable", is_flag=True,
     help="Only the items you may pick up now, in pick order (not the same as --status ready)",
 )
@@ -529,6 +552,7 @@ def list_items(
     assignee: str | None,
     priority: str | None,
     board_name: str | None,
+    resolution: str | None,
     pickable: bool,
     agent: str | None,
     explain: bool,
@@ -601,6 +625,10 @@ def list_items(
         if invalid:
             sys.exit(1)
 
+    if resolution is not None and resolution not in RESOLUTIONS:  # (#581)
+        unknown = f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
+        _refuse(unknown, f"[red]{escape(unknown)}[/red]")
+
     items = service.get_items(
         item_type=type_filter,
         assignee=assignee,
@@ -609,6 +637,13 @@ def list_items(
     )
     if status:
         items = [i for i in items if service.resolve_status_name(i, status) == i.status]
+    if resolution is not None:
+        # absent means completed, on a done item (#581)
+        items = [
+            i for i in items
+            if (i.resolution or ("completed" if i.status == WorkItemStatus.DONE else None))
+            == resolution
+        ]
 
     if pickable:
         _list_pickable(service, items, agent, explain, as_json)
@@ -821,6 +856,14 @@ def create(
 )
 @click.option("--force", "-f", is_flag=True, help="Skip WIP limit and workflow validation")
 @click.option("--closed-by", help="URI recording what triggered this move (e.g., PR URL)")
+@click.option(
+    "--resolution", type=click.Choice(RESOLUTIONS),
+    help="How it was finished (a finished status only; completed on done only)",
+)
+@click.option(
+    "--superseded-by", cls=_Once,
+    help="The item replacing it (with --resolution superseded or duplicate)",
+)
 @click.option("--skip-gates", is_flag=True, help="Skip transition gate checks (Captain override)")
 @click.option("--self-reviewed", is_flag=True, help="Confirm self-review was performed")
 @click.option(
@@ -840,6 +883,8 @@ def move(
     export_board: str | None,
     force: bool,
     closed_by: str | None,
+    resolution: str | None,
+    superseded_by: str | None,
     skip_gates: bool,
     self_reviewed: bool,
     take_over: bool,
@@ -855,6 +900,10 @@ def move(
         yurtle-kanban move EXP-123 review --self-reviewed  # Pass self-review gate
         yurtle-kanban move EXP-123 review --skip-gates  # Skip all transition gates
         yurtle-kanban move EXP-123 review --take-over --agent Claude-M5
+        yurtle-kanban move EXP-123 done --resolution duplicate --superseded-by EXP-99
+
+    --resolution (#581) records how it was finished, on a finished status only (done,
+    or a closed column such as hdd abandoned); a move to any other status clears it.
 
     An item someone else holds in progress is refused unless you are its holder
     (--agent / $YURTLE_AGENT) or pass --take-over; --force does not override that.
@@ -906,6 +955,8 @@ def move(
             skip_gates=skip_gates or force,
             gate_context=gate_context,
             take_over=take_over,
+            resolution=resolution,
+            superseded_by=superseded_by,
         )
         # named the way the item's theme names it (hdd `active`) (#448)
         moved_to = safe(service.status_label(item))
@@ -2011,6 +2062,7 @@ def validate(fix: bool, as_json: bool):
     - Required fields present (id, title, status, type)
     - A bounce stamp is well formed (bounce_sha a sha256 hex digest, bounces a count,
       bounced_at an ISO-8601 time with an offset, bounced_by non-empty)
+    - A superseded or duplicate item's superseded_by is on a board, with no cycle
     """
     service = get_service()
     items = service.get_items()
@@ -2053,6 +2105,15 @@ def validate(fix: bool, as_json: bool):
                 "id": item_id,
                 "target": target,
                 "message": f"{item_id} depends on {target}, which is on no board",
+            }
+        )
+
+    for item_id, problem in service.supersession_problems():  # (#581)
+        issues.append(
+            {
+                "type": "bad_supersession",
+                "id": item_id,
+                "message": f"{item_id} {problem}",
             }
         )
 
@@ -2163,6 +2224,10 @@ def validate(fix: bool, as_json: bool):
                 f"[yellow]DANGLING DEPENDENCY:[/yellow] {safe(issue['id'])} depends on "
                 f"{safe(issue['target'])}, which is on no board",
                 soft_wrap=True,
+            )
+        elif issue["type"] == "bad_supersession":
+            console.print(
+                f"[yellow]BAD SUPERSESSION:[/yellow] {safe(issue['message'])}", soft_wrap=True
             )
 
         console.print()

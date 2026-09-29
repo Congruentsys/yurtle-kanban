@@ -23,6 +23,7 @@ from ..config import KanbanConfig
 from ..inputs import advisory_actor, resolve_actor
 from ..models import (
     PRIORITIES,
+    RESOLUTIONS,
     InputRefused,
     WorkItemStatus,
     WorkItemType,
@@ -176,6 +177,22 @@ class KanbanMCPServer:
                                 " $YURTLE_AGENT, then the server's git user.name."
                                 " An item someone else holds in progress is refused"
                                 " unless this names its holder"
+                            ),
+                        },
+                        "resolution": {
+                            "type": "string",
+                            "enum": list(RESOLUTIONS),
+                            "description": (
+                                "How it was finished, on a finished status only"
+                                " (completed on done only); a move to any other"
+                                " status clears it"
+                            ),
+                        },
+                        "superseded_by": {
+                            "type": "string",
+                            "description": (
+                                "The item replacing it, with resolution superseded"
+                                " or duplicate"
                             ),
                         },
                     },
@@ -545,7 +562,10 @@ class KanbanMCPServer:
             valid = ", ".join(self.service.listed_status_names(target))
             return {"error": f"Unknown status: {args['new_status']}. Valid statuses: {valid}"}
 
-        item = self.service.move_item(item_id, new_status, actor=actor)
+        item = self.service.move_item(
+            item_id, new_status, actor=actor, resolution=args.get("resolution"),
+            superseded_by=args.get("superseded_by"),
+        )
 
         return {
             "success": True,

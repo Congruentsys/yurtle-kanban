@@ -232,6 +232,10 @@ def render_item_detail(
         at = at.isoformat() if hasattr(at, "isoformat") else at
         by = item.metadata.get("bounced_by")
         table.add_row("Bounced", escape(f"Bounced {item.bounces}× (last by {by} at {at})"))
+    if item.resolution:  # (#581)
+        table.add_row("Resolution", escape(str(item.resolution)))
+    if item.superseded_by:
+        table.add_row("Superseded by", escape(", ".join(str(t) for t in item.superseded_by)))
 
     if item.created:
         table.add_row("Created", item.created.isoformat())

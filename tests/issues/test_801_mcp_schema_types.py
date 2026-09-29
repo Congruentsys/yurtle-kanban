@@ -46,7 +46,7 @@ STRING_PROPS: dict[str, list[str]] = {
     "kanban_list_items": ["status", "item_type", "assignee"],
     "kanban_get_item": ["item_id"],
     "kanban_create_item": ["item_type", "title", "priority", "assignee", "description"],
-    "kanban_move_item": ["item_id", "new_status", "agent"],
+    "kanban_move_item": ["item_id", "new_status", "agent", "resolution", "superseded_by"],
     "kanban_get_my_items": ["assignee"],
     "kanban_suggest_next": ["assignee"],
     "kanban_add_comment": ["item_id", "comment", "author"],

@@ -23,6 +23,12 @@ if TYPE_CHECKING:
 # terms in Turtle blocks, so free text is not allowed there)
 PRIORITIES = ("critical", "high", "medium", "low")
 
+# How a finished item was finished (#581): the parser, `move --resolution`, MCP and
+# `list --resolution` all read this one tuple. Absent means completed.
+RESOLUTIONS = ("completed", "superseded", "duplicate", "wont_do")
+# the resolutions that point at the item that replaces this one (`superseded_by`)
+REDIRECTS = ("superseded", "duplicate")
+
 
 def unknown_priority_message(value: object) -> str:
     """The one wording for a refused priority, everywhere (CLI, MCP, service; #171):
@@ -319,7 +325,7 @@ class WorkItem:
     description: str | None = None
     comments: list[Comment] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
-    resolution: str | None = None  # completed, superseded, wont_do, duplicate, obsolete, merged
+    resolution: str | None = None  # one of RESOLUTIONS (#581)
     superseded_by: list[str] = field(default_factory=list)  # list of item IDs
     graph: Graph | None = None  # RDF graph from frontmatter + fenced blocks
     priority_rank: int | None = None  # Explicit priority rank (lower = higher priority)

@@ -46,6 +46,8 @@ if TYPE_CHECKING:
 from .models import (
     ID_PREFIX_FORM,
     PRIORITIES,
+    REDIRECTS,
+    RESOLUTIONS,
     Board,
     Column,
     Comment,
@@ -1044,14 +1046,10 @@ class KanbanService:
             # Parse resolution fields
             resolution = frontmatter.get("resolution")
             if resolution is not None:
-                valid_resolutions = {
-                    "completed", "superseded", "wont_do",
-                    "duplicate", "obsolete", "merged",
-                }
-                if resolution not in valid_resolutions:
+                if resolution not in RESOLUTIONS:  # (#581)
                     logger.warning(
                         f"Unknown resolution '{resolution}' in {file_path}. "
-                        f"Valid values: {', '.join(sorted(valid_resolutions))}"
+                        f"Valid values: {', '.join(RESOLUTIONS)}"
                     )
             superseded_by = _list_text(frontmatter.get("superseded_by", []))
 
@@ -4323,6 +4321,8 @@ class KanbanService:
         gate_context: dict[str, Any] | None = None,
         actor: str | None = None,
         take_over: bool = False,
+        resolution: str | None = None,
+        superseded_by: str | None = None,
     ) -> WorkItem:
         """Move a work item to a new status.
 
@@ -4347,6 +4347,10 @@ class KanbanService:
                 $YURTLE_AGENT; git user.name is not enough). The actor becomes
                 the holder unless `assignee` is given. Gates, WIP and legality
                 still apply.
+            resolution: How the item was finished, one of RESOLUTIONS (#581): only
+                on a finished status, `completed` only on canonical done.
+            superseded_by: The item replacing it, with resolution `superseded` or
+                `duplicate` (required then, refused otherwise).
 
         The holder guard (#574 §4): an item whose canonical status is in progress
         and whose assignee is not the actor is refused unless `take_over`; `--force`
@@ -4376,6 +4380,12 @@ class KanbanService:
         changes: dict[str, Any] = {"status": new_status, "updated": datetime.now()}
         if assignee:
             changes["assignee"] = assignee
+        # the resolution rides on the proposed item too; a move to a status that is
+        # not finished clears it (#581)
+        resolved, cleared = self._resolution_changes(
+            item, replace(item, **changes), resolution, superseded_by
+        )
+        changes.update(resolved)
         proposed = replace(item, **changes)
 
         # Validate transition using workflow if available; the state machine
@@ -4419,6 +4429,8 @@ class KanbanService:
             proposed, old_status, new_status, assignee,
             actor=actor, forced=forced, closed_by=closed_by,
             gates_skipped=gates_skipped, taken_over_from=taken_over_from,
+            resolution=(proposed.resolution, proposed.superseded_by) if resolved else None,
+            cleared_resolution=cleared,
         )
         for name, value in changes.items():
             setattr(item, name, value)
@@ -4481,6 +4493,85 @@ class KanbanService:
             )
 
         return item
+
+    def _resolution_changes(
+        self, item: WorkItem, proposed: WorkItem, resolution: str | None,
+        superseded_by: str | None,
+    ) -> tuple[dict[str, Any], str | None]:
+        """(the `resolution`/`superseded_by` changes, the resolution a reopening
+        clears) of moving `item` to `proposed`'s status (#581). Refuses a resolution
+        on a status that is not finished, `completed` on one that is not canonical
+        done, and a missing, stray or bad `superseded_by`."""
+        if superseded_by is not None and resolution not in REDIRECTS:
+            raise InputRefused(
+                "--superseded-by goes with --resolution superseded or duplicate"
+            )
+        finished = self.is_finished(proposed)
+        if resolution is None:
+            # only a resolved item is reopened: a stray hand-written superseded_by
+            # stays as written (#583)
+            if finished or not item.resolution:
+                return {}, None
+            return {"resolution": None, "superseded_by": []}, item.resolution
+        if resolution not in RESOLUTIONS:
+            raise InputRefused(
+                f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
+            )
+        label = self.status_label(proposed)
+        if not finished:
+            raise InputRefused(
+                f"--resolution needs a finished status (done or a closed column), not {label}"
+            )
+        if resolution == "completed" and proposed.status != WorkItemStatus.DONE:
+            raise InputRefused(f"--resolution completed needs done, not {label}")
+        targets: list[str] = []
+        if resolution in REDIRECTS:
+            if not superseded_by:
+                raise InputRefused(f"--resolution {resolution} needs --superseded-by ID")
+            targets = [self._supersession_target(item, superseded_by)]
+        return {"resolution": resolution, "superseded_by": targets}, None
+
+    def _supersession_target(self, item: WorkItem, raw: str) -> str:
+        """The ID `item` may be superseded by, `raw` folded and looked up on every
+        board (#581): refused when unknown, `item` itself, itself redirected (the
+        message names its final target) or when it would close a cycle."""
+        index = self._dep_index()
+        key, own = fold_id(raw.strip()), fold_id(item.id)
+        target = index.get(key)
+        if target is None:
+            raise InputRefused(f"Unknown --superseded-by item: {key}")
+        if key == own:
+            raise InputRefused(f"{item.id} can't be superseded by itself")
+        path, end = self._supersession_walk(key, index)
+        if own in path or end == "cycle":
+            shown = " → ".join([item.id, *path])
+            raise InputRefused(f"--superseded-by {target.id} would make a cycle: {shown}")
+        if len(path) > 1:
+            final = index.get(path[-1])
+            raise InputRefused(
+                f"{target.id} is itself {target.resolution}: use its final target "
+                f"{final.id if final else path[-1]}"
+            )
+        return target.id
+
+    def _supersession_walk(
+        self, key: str, index: dict[str, WorkItem]
+    ) -> tuple[list[str], str]:
+        """The folded IDs from `key` along `superseded_by` while the item there is
+        `superseded`/`duplicate`, and how the walk ends (#581): `final` (the last is
+        not redirected), `unknown` (the last is on no board) or `cycle` (the last
+        was already walked)."""
+        path = [key]
+        while True:
+            item = index.get(path[-1])
+            if item is None:
+                return path, "unknown"
+            targets = self._id_list(item.superseded_by)
+            if item.resolution not in REDIRECTS or not targets:
+                return path, "final"
+            path.append(targets[0])
+            if path[-1] in path[:-1]:
+                return path, "cycle"
 
     @staticmethod
     def _holder_guard(item: WorkItem, actor: str, take_over: bool) -> str | None:
@@ -5389,6 +5480,8 @@ class KanbanService:
         *,
         actor: str,
         taken_over_from: str | None = None,
+        resolution: tuple[str | None, list[str]] | None = None,
+        cleared_resolution: str | None = None,
     ) -> None:
         """Update file and append status change to yurtle knowledge block.
 
@@ -5415,7 +5508,8 @@ class KanbanService:
         content = self._history_text(
             content, item, new_status, assignee, actor=actor, forced=forced,
             closed_by=closed_by, gates_skipped=gates_skipped,
-            taken_over_from=taken_over_from,
+            taken_over_from=taken_over_from, resolution=resolution,
+            cleared_resolution=cleared_resolution,
         )
         self._write_item_text(item.file_path, content, eol)
 
@@ -5432,13 +5526,17 @@ class KanbanService:
         gates_skipped: bool = False,
         taken_over_from: str | None = None,
         bounced: bool = False,
+        resolution: tuple[str | None, list[str]] | None = None,
+        cleared_resolution: str | None = None,
     ) -> str:
         """`content` (an item's LF text) moved to `new_status`: the frontmatter
         status and assignee edits and the status-history node that
         `_update_item_file_with_history` writes, text to text, so `claim` makes the
         same edit to a fetched file (#574). `taken_over_from` records
         `kb:takenOverFrom` (`""`: there was no holder); `bounced`, `kb:bounced`
-        (#578)."""
+        (#578). `resolution` (value, targets) sets or removes the `resolution` and
+        `superseded_by` keys, recording `kb:resolution`/`kb:supersededBy`;
+        `cleared_resolution` records `kb:clearedResolution` (#581)."""
         # Determine board-native status name (e.g., 'active' for HDD), on a single
         # board too (#439)
         native_status = self._item_reverse_status_mapping(item).get(
@@ -5453,6 +5551,15 @@ class KanbanService:
             content = self._add_or_update_frontmatter_field(
                 content, "assignee", yaml_scalar(assignee),
             )
+        if resolution is not None:
+            value, targets = resolution
+            for key, text in (
+                ("resolution", value), ("superseded_by", targets and yaml_flow_list(targets)),
+            ):
+                content = (
+                    self._add_or_update_frontmatter_field(content, key, text) if text
+                    else self._remove_frontmatter_field(content, key)
+                )
 
         # Create TTL status change entry (use canonical name for RDF consistency)
         timestamp = _now().isoformat(timespec="seconds")  # with its offset (#579)
@@ -5474,6 +5581,12 @@ class KanbanService:
             ttl_entry += f'\n    kb:closedBy <{closed_by}> ;'
         if taken_over_from is not None:
             ttl_entry += f'\n    kb:takenOverFrom "{_turtle_string(taken_over_from)}" ;'
+        if resolution is not None and resolution[0]:
+            ttl_entry += f'\n    kb:resolution "{_turtle_string(resolution[0])}" ;'
+            for target in resolution[1]:
+                ttl_entry += f'\n    kb:supersededBy "{_turtle_string(target)}" ;'
+        if cleared_resolution:
+            ttl_entry += f'\n    kb:clearedResolution "{_turtle_string(cleared_resolution)}" ;'
 
         # Only the canonical block is updated: a block pasted into a comment can
         # never capture a move (#579)
@@ -5703,15 +5816,7 @@ class KanbanService:
             return content
 
         frontmatter = match.group(1)
-        # A run of blank lines or column-0 `#` comments belongs to the value only
-        # when a continuation line follows it (a paragraph break inside a `|`
-        # block scalar, a comment inside a block list, #128); blank lines and
-        # comments before the next key or the closing `---` are kept.
-        key = re.escape(field)
-        pattern = (
-            rf"^(?P<key>{key}|'{key}'|\"{key}\")[ \t]*:(?P<head>.*)"
-            r"(?P<rest>(?:(?:\n[ \t]*|\n#.*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*)$"
-        )
+        pattern = self._field_pattern(field)
 
         def replace(m: re.Match[str]) -> str:
             # a trailing comment on the key line is kept, with its spacing (#619)
@@ -5755,6 +5860,30 @@ class KanbanService:
                 self._value_preserving(frontmatter, body, gap, line) if gap else body + line
             )
 
+        return content[: match.start(1)] + frontmatter + content[match.end(1) :]
+
+    @staticmethod
+    def _field_pattern(field: str) -> str:
+        """The frontmatter line(s) of key `field`, quoted or not, with its value.
+
+        A run of blank lines or column-0 `#` comments belongs to the value only
+        when a continuation line follows it (a paragraph break inside a `|`
+        block scalar, a comment inside a block list, #128); blank lines and
+        comments before the next key or the closing `---` are kept."""
+        key = re.escape(field)
+        return (
+            rf"^(?P<key>{key}|'{key}'|\"{key}\")[ \t]*:(?P<head>.*)"
+            r"(?P<rest>(?:(?:\n[ \t]*|\n#.*)*\n(?:[ \t]+\S.*|-(?:[ \t].*)?))*)$"
+        )
+
+    def _remove_frontmatter_field(self, content: str, field: str) -> str:
+        """`content` without frontmatter key `field` and its value (#581)."""
+        match = self._FRONTMATTER_RE.match(content)
+        if not match:
+            return content
+        frontmatter = re.sub(
+            self._field_pattern(field) + r"\n?", "", match.group(1), flags=re.MULTILINE
+        )
         return content[: match.start(1)] + frontmatter + content[match.end(1) :]
 
     @staticmethod
@@ -6153,6 +6282,15 @@ class KanbanService:
         if dep is None:
             return "unknown", None, None
         if self.is_finished(dep):
+            # a resolution beats the column (#581 [steer] 4): `wont_do` is dead, a
+            # redirect takes its final target's state (the target returned)
+            if dep.resolution == "wont_do":
+                return "dead", dep, None
+            path, end = self._supersession_walk(key, index)
+            if end == "cycle":
+                return "cycle", dep, [index[k].id for k in path]
+            if len(path) > 1:
+                return self._dep_state(path[-1], index, graph)
             return ("met" if dep.status == WorkItemStatus.DONE else "dead"), dep, None
         cycle = self.find_cycle(key, graph)  # #576's walk; cycle beats unfinished
         if cycle:
@@ -6160,9 +6298,11 @@ class KanbanService:
         return "unfinished", dep, None
 
     def dependency_state(self, dep_id: str) -> str:
-        """`met` (finished and done), `dead` (finished, not done: hdd `abandoned`),
-        `unknown` (on no board), `cycle` (on a dependency cycle) or `unfinished`,
-        looked up across every board, IDs folded (#575)."""
+        """`met` (finished and done), `dead` (finished, not done: hdd `abandoned`;
+        or `wont_do`), `unknown` (on no board), `cycle` (on a dependency or
+        supersession cycle) or `unfinished`, looked up across every board, IDs
+        folded (#575). A `superseded`/`duplicate` item has its final target's
+        state (#581)."""
         index = self._dep_index()
         return self._dep_state(dep_id, index, self._dep_graph(index))[0]
 
@@ -6202,7 +6342,8 @@ class KanbanService:
         1. canonical status `ready` (hdd has none: never pickable);
         2. no assignee, or `actor` is it (`same_actor`);
         3. no unrepaired bounce: `bounce_sha` differs from the body hash (#578);
-        4. every `depends_on` is `met`.
+        4. every `depends_on` is `met` (a superseded or duplicate one: its final
+           target; a `wont_do` one is dead, #581).
         """
         return self._pickable(item, actor)
 
@@ -6242,11 +6383,15 @@ class KanbanService:
                 detail = {
                     "unfinished": "unfinished",
                     "unknown": "unknown ID",
-                    "dead": f"dead: {self.status_label(dep)}" if dep else "dead",
+                    "dead": f"dead: {self._dead_why(dep)}" if dep else "dead",
                     "cycle": f"cycle: {' → '.join(cycle or [])}",
                 }[state]
                 return False, f"waiting on {dep.id if dep else dep_id} ({detail})"
         return True, "pickable"
+
+    def _dead_why(self, dep: WorkItem) -> str:
+        """Why a dead dependency is dead: `wont_do` (#581), else its status."""
+        return "wont_do" if dep.resolution == "wont_do" else self.status_label(dep)
 
     @staticmethod
     def pick_order(item: WorkItem) -> tuple[bool, int, int, int, str]:
@@ -6881,6 +7026,24 @@ class KanbanService:
                 ring = ring[first:] + ring[:first]
                 cycles.setdefault(tuple(ring), [*ring, ring[0]])
         return list(cycles.values())
+
+    def supersession_problems(self) -> list[tuple[str, str]]:
+        """(ID, what is wrong) of each `superseded`/`duplicate` item whose
+        `superseded_by` is missing, on no board, or on a supersession cycle (#581)."""
+        index = self._dep_index()
+        problems = []
+        for key, item in sorted(index.items()):
+            if item.resolution not in REDIRECTS:
+                continue
+            path, end = self._supersession_walk(key, index)
+            if len(path) == 1:
+                problems.append((item.id, f"is {item.resolution} but has no superseded_by"))
+            elif end == "unknown":
+                problems.append((item.id, f"is superseded by {path[-1]}, which is on no board"))
+            elif end == "cycle":
+                where = "is on" if path[0] == path[-1] else "leads into"
+                problems.append((item.id, f"{where} a supersession cycle: {' → '.join(path)}"))
+        return problems
 
     def dangling_dependencies(self) -> list[tuple[str, str]]:
         """`(item, target)` for each `depends_on` target that is on no board (#576)."""
