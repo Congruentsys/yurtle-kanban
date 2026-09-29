@@ -1265,6 +1265,7 @@ class KanbanService:
                 priority_rank=priority_rank,
                 value_summary=value_summary,
                 compute_requirement=compute_requirement,
+                declared_type=str(item_type_str),  # as written (#682)
             )
 
         except Exception as e:

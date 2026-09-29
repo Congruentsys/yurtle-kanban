@@ -331,10 +331,15 @@ class WorkItem:
     priority_rank: int | None = None  # Explicit priority rank (lower = higher priority)
     value_summary: str | None = None  # Brief value statement for prioritization
     compute_requirement: str | None = None  # e.g. dgx-training, gpu, cpu-safe
+    # the frontmatter `type` as written (`spec`, a custom theme's type); `item_type`
+    # stays the canonical enum for workflows and prefixes. "" means item_type's (#682)
+    declared_type: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.updated is None:
             self.updated = datetime.now()
+        if not self.declared_type:
+            self.declared_type = self.item_type.value
 
     @property
     def uri(self) -> str:
@@ -393,6 +398,7 @@ class WorkItem:
             "id": self.id,
             "title": self.title,
             "item_type": self.item_type.value,
+            "declared_type": self.declared_type,  # the theme's own type (#682)
             "status": self.status.value,
             "file_path": str(self.file_path),
             "priority": self.priority,

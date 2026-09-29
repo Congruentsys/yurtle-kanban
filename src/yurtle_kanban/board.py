@@ -58,6 +58,12 @@ TYPE_ICONS = {
 }
 
 
+def type_icon(item: WorkItem) -> str:
+    """The icon for the item's declared type: a theme-only type (`spec`) has none,
+    rather than the icon of the canonical type it maps to (#682)."""
+    return TYPE_ICONS.get(item.declared_type.lower(), "•")
+
+
 def render_board(board: Board, console: Console | None = None) -> None:
     """Render a kanban board to the terminal."""
     if console is None:
@@ -162,7 +168,7 @@ def render_card(item: WorkItem) -> Panel:
         lines.append(Text.from_markup(markup, overflow=overflow))
 
     # ID and type icon
-    icon = TYPE_ICONS.get(item.item_type.value, "•")
+    icon = type_icon(item)
     line(f"[dim]{icon}[/dim] [bold]{safe(item.id)}[/bold]", overflow="fold")
 
     # Title (truncate if too long)
@@ -214,7 +220,7 @@ def render_item_detail(
     if console is None:
         console = Console()
 
-    icon = TYPE_ICONS.get(item.item_type.value, "•")
+    icon = type_icon(item)
 
     console.print()
     console.print(
@@ -229,7 +235,7 @@ def render_item_detail(
     table.add_column("Field", style="dim")
     table.add_column("Value")
 
-    table.add_row("Type", item.item_type.value)
+    table.add_row("Type", safe(item.declared_type))  # the theme's own type (#682)
     # the theme's name for it (hdd `draft`) when the caller knows the theme (#448)
     table.add_row("Status", safe(status_label(item) if status_label else item.status.value))
     if next_statuses is not None:
@@ -319,6 +325,7 @@ def render_list(
     )
 
     table.add_column("ID", style="cyan")
+    table.add_column("Type")  # the declared type (#682)
     table.add_column("Title")
     table.add_column("Status")
     table.add_column("Priority")
@@ -328,7 +335,6 @@ def render_list(
         table.add_column("Since", style="dim")
 
     for n, item in enumerate(items):
-        icon = TYPE_ICONS.get(item.item_type.value, "•")
         priority_color = PRIORITY_COLORS.get(item.priority or "medium", "white")
         status_color = STATUS_COLORS.get(item.status.value, "white")
 
@@ -343,7 +349,8 @@ def render_list(
         assignee = assignee or "-"
 
         cells = [
-            f"{icon} {safe(item.id)}",
+            safe(item.id),
+            safe(item.declared_type),  # the Type column names it; no icon (#682)
             safe(title),
             f"[{status_color}]"
             f"{safe(status_label(item) if status_label else item.status.value)}"
