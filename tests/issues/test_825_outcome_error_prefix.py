@@ -28,6 +28,7 @@ c. The line is counted on stderr, where ``refuse()`` prints every refusal
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -71,7 +72,13 @@ def world(tmp_path: Path) -> World:
 
 
 def invoke(world: World, monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> Any:
+    """Run `argv` in clone A. The retry WARNINGs keep propagating (to pytest's
+    capture when its logging plugin is on) but a NullHandler stops
+    `logging.lastResort` writing them to stderr when it is off (#1092), so the
+    stderr count (reading c) sees only the outcome's own lines."""
     monkeypatch.chdir(world.a)
+    logger = logging.getLogger("yurtle-kanban")
+    monkeypatch.setattr(logger, "handlers", [*logger.handlers, logging.NullHandler()])
     return CliRunner().invoke(main, argv)
 
 
