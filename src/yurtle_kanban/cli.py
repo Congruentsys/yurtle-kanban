@@ -9,6 +9,7 @@ Usage:
     yurtle-kanban create TYPE TITLE [--priority PRIORITY] [--assign NAME]
                          [--body TEXT | --body-file PATH|-] [--push]
     yurtle-kanban move ID STATUS [--assign NAME] [--agent ACTOR]
+    yurtle-kanban bounce ID (--reason TEXT | --reason-file PATH|-) [--agent ACTOR]
     yurtle-kanban comment ID (--body TEXT | --body-file PATH|-) [--agent ACTOR]
     yurtle-kanban show ID
     yurtle-kanban board
@@ -22,6 +23,7 @@ Usage:
 
 import json
 import os
+import re
 import shutil
 import sys
 import unicodedata
@@ -114,6 +116,9 @@ def _get_skills_dir() -> Path:
     """Get the path to the skills directory in the package."""
     return _get_shared_data_dir("skills")
 
+
+# a bounce stamp's body hash (#578)
+HEX64 = re.compile(r"[0-9a-f]{64}")
 
 console = Console()
 # messages that must not mix into piped/--json stdout: hints, errors (#360, #371)
@@ -915,6 +920,56 @@ def claim(item_id: str | None, agent: str | None, take_over: bool, next_: bool):
             _claim_next(service, actor)
         assert item_id is not None
         outcome = service.claim_item(fold_id(item_id), actor=actor, take_over=take_over)
+    except InputRefused as e:
+        _refuse(e)
+    _print_outcome(outcome)
+
+
+@main.command()
+@click.argument("item_id")
+@click.option("--reason", help="Why it goes back (prefer --reason-file: no shell expansion)")
+@click.option(
+    "--reason-file",
+    help="Read the reason from PATH, or from stdin with '-' (pipe it: a quoted heredoc <<'EOF')",
+)
+@click.option("--agent", help="Who is bouncing it; default $YURTLE_AGENT (never git user.name)")
+@click.option(
+    "--take-over",
+    is_flag=True,
+    help="Bounce an item someone else holds (recorded as kb:takenOverFrom)",
+)
+def bounce(
+    item_id: str, reason: str | None, reason_file: str | None, agent: str | None,
+    take_over: bool,
+):
+    """Give an ill-defined item back: to the backlog, unassigned, not pickable again
+    until its body is edited (#578).
+
+    One compare-and-swap commit on origin's default branch, as claim makes: the
+    item moves to its theme's backlog status (exempt from the transition table and
+    WIP limits; `* -> backlog` gates still apply), the frontmatter records
+    bounce_sha (the body hash), bounced_by, bounced_at and bounces, and the reason
+    is added as a comment. claim, next and list --pickable skip the item until its
+    body (title line included) changes. Only an item that is unassigned or yours,
+    unless --take-over; never a finished one. Exit codes as claim's.
+
+    Examples:
+        yurtle-kanban bounce EXP-123 --reason "Which endpoint?" --agent Claude-M5
+        yurtle-kanban bounce EXP-123 --reason-file - --agent Claude-M5 <<'EOF'
+    """
+    # the whole text is read before any subprocess can touch stdin (#580)
+    try:
+        text = read_text_option(reason, reason_file, "reason", required=True)
+        assert text is not None  # required=True: None is a usage error
+    except ValueError as e:
+        _refuse(e)
+    service = get_service()
+    try:
+        # every session on a machine shares git user.name: no fallback (#574)
+        actor = resolve_actor(agent, allow_git_fallback=False, cwd=service.repo_root)
+        outcome = service.bounce_item(
+            fold_id(item_id), actor=actor, reason=text, take_over=take_over
+        )
     except InputRefused as e:
         _refuse(e)
     _print_outcome(outcome)
@@ -1857,6 +1912,7 @@ def validate(fix: bool, as_json: bool):
     - No dependency cycles, across every board
     - Every depends_on target is on a board
     - Required fields present (id, title, status, type)
+    - A bounce stamp is well formed (bounce_sha a sha256 hex digest, bounces a count)
     """
     service = get_service()
     items = service.get_items()
@@ -1922,6 +1978,24 @@ def validate(fix: bool, as_json: bool):
             )
 
     for item in items:
+        # a bounce stamp the pickable gate can't read (#578)
+        for key, bad in (
+            ("bounce_sha", lambda v: not (isinstance(v, str) and HEX64.fullmatch(v))),
+            ("bounces", lambda v: isinstance(v, bool) or not isinstance(v, int) or v < 0),
+        ):
+            if key in item.metadata and bad(value := item.metadata[key]):
+                issues.append(
+                    {
+                        "type": "malformed_bounce_stamp",
+                        "id": item.id,
+                        "key": key,
+                        "message": f"{item.id}: malformed {key}: {value!r} "
+                        f"({'a sha256 hex digest' if key == 'bounce_sha' else 'a count'} "
+                        "expected)",
+                    }
+                )
+
+    for item in items:
         # Check file name matches ID
         file_stem = item.file_path.stem  # e.g., "EXP-300-Some-Title"
         expected_prefix = item.id  # e.g., "EXP-300"
@@ -1975,6 +2049,11 @@ def validate(fix: bool, as_json: bool):
                 f"[yellow]SWALLOWING FENCE:[/yellow] {safe(issue['id'])}: the body's code "
                 f"fence on line {safe(str(issue['line']))} runs over "
                 f"{safe(issue['swallows'])}: close it, or reword a quoted heading inside it",
+                soft_wrap=True,
+            )
+        elif issue["type"] == "malformed_bounce_stamp":
+            console.print(
+                f"[yellow]MALFORMED BOUNCE STAMP:[/yellow] {safe(issue['message'])}",
                 soft_wrap=True,
             )
         elif issue["type"] == "dangling_dependency":
