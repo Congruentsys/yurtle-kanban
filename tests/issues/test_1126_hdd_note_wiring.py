@@ -7,7 +7,8 @@ silently lose the note with nothing going red. This static check finds every
 `<group>.command("create")` in `hdd_commands.py` that takes a `--push` option —
 discovered from the click decorators, not a hard-coded list — and asserts its
 `if push:` branch calls `_print_created_file` (or `pull_note` directly) on its
-success path — not only in the failure branch of `if result["success"]` (#1137).
+success path — not only in the failure branch of `if result["success"]` (#1137),
+after an early success exit, or in an `except` handler (#1147).
 """
 
 from __future__ import annotations
@@ -67,47 +68,82 @@ def _tests_push(test: ast.expr) -> bool:
     return any(isinstance(n, ast.Name) and n.id == "push" for n in ast.walk(test))
 
 
-def _success_polarity(test: ast.expr) -> bool | None:
-    """True for `if ...success...:`, False for `if not ...success...:`, else None.
+def _mentions_success(test: ast.expr) -> bool:
+    """`test` reads "success": a subscript key (`result["success"]`), an attribute
+    (`result.success`) or a bare name (`success`)."""
+    return any(
+        (isinstance(n, ast.Constant) and n.value == "success")
+        or (isinstance(n, ast.Attribute) and n.attr == "success")
+        or (isinstance(n, ast.Name) and n.id == "success")
+        for n in ast.walk(test)
+    )
 
-    "success" is matched as a subscript key (`result["success"]`), an attribute
-    (`result.success`) or a bare name (`success`).
+
+def _success_polarity(test: ast.expr) -> bool | None:
+    """For a test that mentions success: True when its body runs only on success,
+    False when only on failure, None when that can't be decided (#1147).
+
+    `not` inverts. An `and` keeps the one polarity its success operands agree on
+    (`result["success"] and x` → True). An `or` over success is undecided:
+    `not result["success"] or strict` runs its body on failure.
     """
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         inner = _success_polarity(test.operand)
         return None if inner is None else not inner
-    for n in ast.walk(test):
-        if isinstance(n, ast.Constant) and n.value == "success":
-            return True
-        if isinstance(n, ast.Attribute) and n.attr == "success":
-            return True
-        if isinstance(n, ast.Name) and n.id == "success":
-            return True
-    return None
+    if isinstance(test, ast.BoolOp):
+        polarities = {_success_polarity(v) for v in test.values if _mentions_success(v)}
+        if isinstance(test.op, ast.And) and len(polarities) == 1:
+            return polarities.pop()
+        return None
+    return True
+
+
+def _always_exits(stmts: list[ast.stmt]) -> bool:
+    """`stmts` never falls through: it ends in return / raise / break / continue /
+    `exit(...)`, or in an if/else whose branches both do."""
+    if not stmts:
+        return False
+    last = stmts[-1]
+    if isinstance(last, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+        return True
+    if isinstance(last, ast.Expr) and _call_name(last.value) == "exit":
+        return True
+    if isinstance(last, ast.If):
+        return _always_exits(last.body) and _always_exits(last.orelse)
+    return False
 
 
 def _success_path_calls_note(stmts: list[ast.stmt]) -> bool:
-    """A note helper is called in `stmts` outside every failure-only branch (#1137).
+    """A note helper is called in `stmts` on the success path (#1137, #1147).
 
-    The failure-only branch of `if <success>:` is its `else:`; of
-    `if not <success>:` it is the body. Every other branch is walked.
+    `if <success>:` walks only its body, `if not <success>:` only its `else:`,
+    an undecided success test neither; an if that doesn't read success walks
+    both. After an `if` whose success-or-undecided body always exits, the rest
+    of the block runs only on failure, so it is not walked. `except` handlers
+    are failure paths and are never walked. When unsure, a call doesn't count.
     """
     for stmt in stmts:
         if isinstance(stmt, ast.If):
-            polarity = _success_polarity(stmt.test)
             if any(_call_name(n) in NOTE_HELPERS for n in ast.walk(stmt.test)):
                 return True
-            if polarity is not False and _success_path_calls_note(stmt.body):
+            if not _mentions_success(stmt.test):
+                if _success_path_calls_note(stmt.body) or _success_path_calls_note(stmt.orelse):
+                    return True
+                continue
+            polarity = _success_polarity(stmt.test)
+            if polarity is True and _success_path_calls_note(stmt.body):
                 return True
-            if polarity is not True and _success_path_calls_note(stmt.orelse):
+            if polarity is False and _success_path_calls_note(stmt.orelse):
                 return True
+            if polarity is not False and _always_exits(stmt.body):
+                return False  # what follows runs only on failure (or can't tell)
             continue
         nested = [
             body
             for field in ("body", "orelse", "finalbody")
             if isinstance(body := getattr(stmt, field, None), list)
-        ] + [h.body for h in getattr(stmt, "handlers", [])]
-        if nested:  # for / while / with / try: walk each nested block the same way
+        ]  # `except` handlers are left out: failure paths (#1147)
+        if nested:  # for / while / with / try: walk each block the same way
             if any(_success_path_calls_note(block) for block in nested):
                 return True
             continue
@@ -233,4 +269,62 @@ def test_checker_flags_a_push_create_without_the_note() -> None:
         "helper_outside_push",
         "note_only_on_failure",
         "note_only_when_not_success",
+    ]
+
+
+SYNTHETIC_1147 = """
+import click
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_after_early_success_return(push):
+    if push:
+        result = service.create_item_and_push()
+        if result["success"]:
+            console.print(result["id"])
+            return
+        _print_created_file(result)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_when_not_success_or_strict(push, strict):
+    if push:
+        result = service.create_item_and_push()
+        if not result["success"] or strict:
+            _print_created_file(result)
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_only_in_except(push):
+    if push:
+        try:
+            result = service.create_item_and_push()
+        except RuntimeError:
+            _print_created_file({})
+
+@other.command("create")
+@click.option("--push", is_flag=True)
+def note_in_try_body(push):
+    if push:
+        try:
+            result = service.create_item_and_push()
+            _print_created_file(result)
+        except RuntimeError:
+            raise SystemExit(1)
+"""
+
+
+def test_checker_flags_early_return_negated_or_and_except_only() -> None:
+    """#1147: three shapes that reach the note only on failure are flagged."""
+    found, missing = _unwired(SYNTHETIC_1147)
+    assert found == [
+        "note_after_early_success_return",
+        "note_when_not_success_or_strict",
+        "note_only_in_except",
+        "note_in_try_body",
+    ]
+    assert missing == [
+        "note_after_early_success_return",
+        "note_when_not_success_or_strict",
+        "note_only_in_except",
     ]
