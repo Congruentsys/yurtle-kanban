@@ -21,7 +21,7 @@ TESTS = Path(__file__).resolve().parents[1]
 ROOT_NAMES = frozenset(
     {"repo", "root", "repo_root", "tmp_path", "clone", "work", "sw", "world_root"}
 )
-ROOT_ATTRS = frozenset({"a", "b", "root", "repo_root"})
+ROOT_ATTRS = frozenset({"a", "b", "root", "repo_root", "repo"})  # `self.repo` (#985)
 
 # The helper itself, and #266's equivalence tests, which call rglob on purpose to
 # check glob_outside_git against it.
@@ -42,15 +42,27 @@ def _is_root_receiver(node: ast.expr) -> bool:
 
 
 def offenders(source: str) -> list[int]:
-    """Line numbers of `<repo-root>.rglob(...)` calls in `source`."""
+    """Line numbers of `<repo-root>.rglob(...)` calls in `source`, and of
+    `<repo-root>.glob("**…")`, which walks `.git` just the same (#985)."""
     return sorted(
         node.lineno
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "rglob"
         and _is_root_receiver(node.func.value)
+        and (node.func.attr == "rglob" or node.func.attr == "glob" and _recursive(node))
     )
+
+
+def _recursive(call: ast.Call) -> bool:
+    """A `glob` whose pattern (a string literal or f-string) starts with `**`."""
+    first = call.args[0] if call.args else None
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value.startswith("**")
+    if isinstance(first, ast.JoinedStr) and first.values:
+        head = first.values[0]
+        return isinstance(head, ast.Constant) and str(head.value).startswith("**")
+    return False
 
 
 def _scan(files: list[Path]) -> list[str]:
@@ -101,3 +113,14 @@ def test_lint_is_not_vacuous() -> None:
     assert TESTS / "issues" / "test_952_no_rglob_on_repo_roots.py" in files
     # The exempt #266 module calls root.rglob on purpose: real source the scanner flags.
     assert _scan([TESTS / "issues" / "test_266_pattern_globs_prune_git.py"])
+
+
+def test_recursive_glob_and_self_repo_are_flagged() -> None:
+    """#985: `repo.glob("**/…")` walks `.git` like rglob; `self.repo` is a root."""
+    source = (
+        'repo.glob("**/x.md")\n'
+        'repo.glob(f"**/{name}")\n'
+        'self.repo.rglob("*")\n'
+        'repo.glob("x.md")\n'
+    )
+    assert offenders(source) == [1, 2, 3]

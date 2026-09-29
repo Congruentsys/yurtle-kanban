@@ -9,13 +9,14 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
+from tests.issues._snapshot import glob_outside_git
 from tests.issues.test_262_cyclic_frontmatter import _service, sw  # noqa: F401 (fixture)
 
 BROKEN = "---\nid: FEAT-009\ntitle: [unclosed\n---\n\nBody\n"
 
 
 def _broken(repo: Path) -> Path:
-    path = next(repo.glob("**/FEAT-001*.md")).parent / "FEAT-009-broken.md"
+    path = next(glob_outside_git(repo, "FEAT-001*.md")).parent / "FEAT-009-broken.md"
     path.write_text(BROKEN)
     return path
 

@@ -30,6 +30,7 @@ from tests.issues.test_346_semantic_extras_fallback import (  # noqa: F401 (fixt
     runner,
 )
 from tests.issues.test_358_query_json_and_broken_extra import (  # noqa: F401 (fixtures)
+    _has_install_hint,  # the one copy (#985)
     broken_extra,
 )
 from tests.issues.test_371_query_stderr import (  # noqa: F401 (fixtures)
@@ -39,10 +40,6 @@ from tests.issues.test_371_query_stderr import (  # noqa: F401 (fixtures)
 from yurtle_kanban.cli import main
 
 ARGS = ["query", "--json", "--semantic", "latency"]
-
-
-def _has_install_hint(text: str) -> bool:
-    return "[search]" in text or "sentence-transformers" in text.lower()
 
 
 def _refusal(result: Result) -> dict[str, Any]:
