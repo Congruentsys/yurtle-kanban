@@ -44,6 +44,7 @@ from ._click import (
     refuse,
     safe,
 )
+from ._logging import escape_nonprintable
 from .board import (
     render_board,
     render_history,
@@ -519,7 +520,7 @@ def _duration(ctx: click.Context, param: click.Parameter, value: str | None) -> 
     try:
         return parse_duration(value)
     except ValueError as e:
-        raise click.BadParameter(str(e), ctx=ctx, param=param) from None
+        raise click.BadParameter(escape_nonprintable(str(e)), ctx=ctx, param=param) from None
 
 
 @main.command("list")
