@@ -141,3 +141,14 @@ def test_control_exact_spelling_wins_on_a_duplicate(repo: Repo, padded: Path) ->
     graph = service.dependency_graph()
     assert graph["EXP-4"] == ["EXP-3"] and graph["EXP-003"] == ["EXP-4"], graph
     assert _cycles(repo) == []
+
+
+def test_blocked_tree_stops_at_the_node_either_way(repo: Repo) -> None:
+    """The tree walks a node once per root, however an edge spells it: each side
+    shows the other, then itself again, and stops."""
+    _loop(repo)
+    for item, _, unmet in repo.service().blocked():
+        if item.id in ("EXP-5", "EXP-006"):
+            (other,) = unmet
+            (back,) = other.children
+            assert back.id == item.id and back.children == [], (item.id, unmet)
