@@ -1605,8 +1605,8 @@ def update(
     closes a cycle is refused, and nothing is written.
 
     With --push the edit is made to the item as origin's default branch has it,
-    checked against that board as origin's own config, themes and workflows
-    define it (#831, #865), and pushed as one commit (a kanban-only commit);
+    checked against that board as origin's own config and theme define it
+    (#831, #865, #995), and pushed as one commit (a kanban-only commit);
     your checkout is not touched. Exit codes as claim's: 0 updated (or nothing
     to change), 1 refused, 4 remote unreachable, 5 remote busy, 6 push refused.
 
@@ -1894,6 +1894,8 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             console.print(f"  Number: {result['number']}")
             if not no_sync:
                 console.print("[dim]  (committed and pushed to remote)[/dim]")
+            if result.get("note"):  # the checkout wasn't fast-forwarded (#995)
+                console.print(f"[yellow]  {safe(result['note'])}[/yellow]", soft_wrap=True)
         else:
             console.print(
                 f"[red]Failed to allocate ID: {safe(result['message'])}[/red]", soft_wrap=True

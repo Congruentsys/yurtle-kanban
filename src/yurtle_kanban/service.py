@@ -2383,12 +2383,7 @@ class KanbanService:
         except _CasRefusedError as e:
             return failed(str(e))
         except subprocess.TimeoutExpired as e:
-            if "push" in [str(a) for a in (e.cmd or [])]:
-                return failed(
-                    f"Timed out pushing to origin/{branch}: the push may have landed. "
-                    f"Check origin/{branch} (git fetch origin, then look for the {what}) "
-                    "before creating it again"
-                )
+            # the push itself has no timeout (#925), so this was never it (#995)
             return failed(
                 f"Timed out talking to origin ({' '.join(map(str, e.cmd or []))}); "
                 "nothing was created"
@@ -2488,7 +2483,8 @@ class KanbanService:
                 continue
 
             # It has landed: from here on nothing may turn this into a failure (#603)
-            return landed(branch, self._fast_forward_to(branch, sha))
+            # each caller's result says the checkout wasn't updated itself (#995)
+            return landed(branch, self._fast_forward_to(branch, sha, warn=False))
 
         # Best effort: leave origin/<default> showing the commits that beat us
         with suppress(subprocess.TimeoutExpired, OSError):
@@ -2557,10 +2553,12 @@ class KanbanService:
             return None, f"Git commit failed: {bad.stderr.strip()}"
         return commit.stdout.strip(), None
 
-    def _fast_forward_to(self, branch: str, sha: str) -> bool:
+    def _fast_forward_to(self, branch: str, sha: str, *, warn: bool = True) -> bool:
         """After a push of `sha` to origin/`branch` has landed: fast-forward the
         checkout when it is on `branch`. Never fails (#603): a checkout that can't
-        be fast-forwarded just isn't updated, and False says so."""
+        be fast-forwarded just isn't updated, and False says so, with a warning of
+        git's `error:`/`fatal:` lines unless `warn` is False (the caller says it
+        itself) (#995)."""
         def said(out: bytes | str | None) -> str:
             # raw, decoded only to show: git may name a file whose name isn't
             # UTF-8, and a decode error must not follow a landed push (#928)
@@ -2569,20 +2567,40 @@ class KanbanService:
             return out or ""
 
         try:
-            head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD", text=False)
-            if said(head.stdout).strip() != branch:
+            if self._head_branch() != branch:
                 return False
-            merged = self._git_run("merge", "--ff-only", "--quiet", sha, text=False)
+            # runs the user's post-merge hook: no timeout (#584, #995)
+            merged = self._git_run(
+                "merge", "--ff-only", "--quiet", sha, text=False, timeout=None
+            )
             if merged.returncode != 0:
-                logger.warning(
-                    f"Pushed {sha[:12]}, but the local checkout was not updated: "
-                    f"{' '.join((said(merged.stderr) or said(merged.stdout)).split())}"
-                )
+                if warn:
+                    out = said(merged.stderr) or said(merged.stdout)
+                    # git's own failure, not its `hint:` advice (#995)
+                    why = [
+                        line.strip() for line in out.splitlines()
+                        if line.lstrip().lower().startswith(("error:", "fatal:"))
+                    ]
+                    logger.warning(
+                        f"Pushed {sha[:12]}, but the local checkout was not updated"
+                        + (f": {' '.join(' '.join(why).split())}" if why else "")
+                    )
                 return False
             return True
         except (subprocess.TimeoutExpired, OSError, UnicodeError) as e:
-            logger.warning(f"Pushed {sha[:12]}, but the local checkout was not updated: {e}")
+            if warn:
+                logger.warning(f"Pushed {sha[:12]}, but the local checkout was not updated: {e}")
             return False
+
+    def _head_branch(self) -> str | None:
+        """The branch this checkout is on, or None (detached HEAD). Read raw and
+        decoded only to compare: a branch name need not be UTF-8 (#928)."""
+        head = self._git_run("symbolic-ref", "--quiet", "--short", "HEAD", text=False)
+        if head.returncode != 0:
+            return None
+        out = head.stdout
+        text = out.decode("utf-8", "replace") if isinstance(out, bytes) else out or ""
+        return text.strip()
 
     def sync_and_push(
         self,
@@ -2695,13 +2713,7 @@ class KanbanService:
                     attempts=attempt + 1,
                 )
         except subprocess.TimeoutExpired as e:
-            if "push" in [str(a) for a in (e.cmd or [])]:
-                return Outcome(
-                    "unreachable",
-                    f"Timed out pushing to origin/{branch}: the push may have landed. "
-                    f"Fetch origin/{branch} and check before trying again",
-                    attempts=tried,
-                )
+            # the push itself has no timeout (#925), so this was never it (#995)
             return Outcome(
                 "unreachable",
                 f"Timed out talking to origin ({' '.join(map(str, e.cmd or []))}); "
@@ -4180,13 +4192,23 @@ class KanbanService:
             def landed(branch: str, local: bool) -> dict[str, Any]:
                 space = self._id_space(made["id"])  # `H130.2` has no dash (#655)
                 num = space[1] if space else None
-                return {
+                result = {
                     "success": True,
                     "id": made["id"],
                     "prefix": prefix,
                     "number": num,
                     "message": f"Allocated {made['id']} on origin/{branch}",
                 }
+                # on the branch, yet not fast-forwarded (a diverged main): say so
+                # here, once, without git's advice (#995); never a failure (#603)
+                with suppress(subprocess.TimeoutExpired, OSError):
+                    if not local and self._head_branch() == branch:
+                        result["note"] = (
+                            f"Your checkout of {branch} was not updated (it could not "
+                            f"be fast-forwarded to origin/{branch}): pull {branch} to "
+                            "see the allocation record"
+                        )
+                return result
 
             result = self._cas_on_default_branch(build, landed, 3, "allocation")
             if not result["success"]:
