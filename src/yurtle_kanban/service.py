@@ -521,7 +521,8 @@ def pull_note_text(branch: str, dirty: str | None = None) -> str:
 
 
 def _created_and_pushed_message(
-    item_id: str, branch: str, title: str, *, local: bool, dirty: str | None = None
+    item_id: str, branch: str, title: str, *, local: bool, dirty: str | None = None,
+    why: str | None = None,
 ) -> str:
     """The service result message for a `--push` create: where it landed, and the
     pull note when this checkout doesn't have it yet (#637), without doubling a
@@ -529,7 +530,10 @@ def _created_and_pushed_message(
     message = f"Created and pushed {item_id} to origin/{branch}: {title}"
     if local:
         return message
-    return f"{message.removesuffix('.')}. {pull_note_text(branch, dirty)}"
+    note = pull_note_text(branch, dirty)
+    if why:  # git's reason the fast-forward was refused (#1048)
+        note += f" (fast-forward refused: {why})"
+    return f"{message.removesuffix('.')}. {note}"
 
 
 class KanbanService:
@@ -557,6 +561,7 @@ class KanbanService:
         # board themes memoised per board within a scan scope (#665)
         self._board_theme_cache: dict[str, dict | None] = {}
         self._scanning = False
+        self._ff_why: str | None = None  # the last refused fast-forward's reason (#1048)
         if getattr(config, "repo_root", None) is None:
             # a config with no repo_root (built directly, or from load for a missing
             # file) resolves themes in this service's repo, not the cwd; one loaded from
@@ -2340,7 +2345,8 @@ class KanbanService:
                 None,
             )
             message = _created_and_pushed_message(
-                current_id, branch, title, local=local, dirty=dirty
+                current_id, branch, title, local=local, dirty=dirty,
+                why=None if local else self._ff_why,
             )
             return {
                 "success": True,
@@ -2566,6 +2572,7 @@ class KanbanService:
                 return out.decode("utf-8", "replace")
             return out or ""
 
+        self._ff_why = None  # git's reason, for the caller's note (#1048)
         try:
             if self._head_branch() != branch:
                 return False
@@ -2574,22 +2581,23 @@ class KanbanService:
                 "merge", "--ff-only", "--quiet", sha, text=False, timeout=None
             )
             if merged.returncode != 0:
+                out = said(merged.stderr) or said(merged.stdout)
+                # git's own failure, not its `hint:` advice (#995), with the
+                # indented lines that continue a kept line, e.g. file names (#1043)
+                why: list[str] = []
+                keep = False
+                for line in out.splitlines():
+                    if line.lstrip().lower().startswith(("error:", "fatal:")):
+                        keep = True
+                    elif not (keep and line[:1] in ("\t", " ")):
+                        keep = False
+                    if keep:
+                        why.append(line.strip())
+                self._ff_why = " ".join(" ".join(why).split()) or None
                 if warn:
-                    out = said(merged.stderr) or said(merged.stdout)
-                    # git's own failure, not its `hint:` advice (#995), with the
-                    # indented lines that continue a kept line, e.g. file names (#1043)
-                    why: list[str] = []
-                    keep = False
-                    for line in out.splitlines():
-                        if line.lstrip().lower().startswith(("error:", "fatal:")):
-                            keep = True
-                        elif not (keep and line[:1] in ("\t", " ")):
-                            keep = False
-                        if keep:
-                            why.append(line.strip())
                     logger.warning(
                         f"Pushed {sha[:12]}, but the local checkout was not updated"
-                        + (f": {' '.join(' '.join(why).split())}" if why else "")
+                        + (f": {self._ff_why}" if self._ff_why else "")
                     )
                 return False
             return True
@@ -2784,6 +2792,8 @@ class KanbanService:
                 f". Your checkout does not show this yet: pull {branch}, and start "
                 f"feature branches from origin/{branch}"
             )
+            if self._ff_why:  # why, when git refused the fast-forward (#1048)
+                message += f" (fast-forward refused: {self._ff_why})"
         return Outcome("won", message, sha=sha, attempts=attempts, data=change.data)
 
     def _board_outside_repo(self) -> bool:
