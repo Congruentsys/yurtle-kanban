@@ -5,6 +5,7 @@ Provides beautiful terminal-based kanban board visualization.
 """
 
 from collections.abc import Callable
+from typing import Any
 
 from rich import box
 from rich.console import Console, Group
@@ -275,13 +276,26 @@ def render_item_detail(
     console.print()
 
 
+def _format_age(seconds: int | None) -> str:
+    """An age for people: `3d 4h`, `5h 12m`, `7m`; `unknown` for None (#579)."""
+    if seconds is None:
+        return "unknown"
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    if days:
+        return f"{days}d {hours}h"
+    return f"{hours}h {rest // 60}m" if hours else f"{rest // 60}m"
+
+
 def render_list(
     items: list[WorkItem],
     console: Console | None = None,
     status_label: Callable[[WorkItem], str] | None = None,
+    ages: list[dict[str, Any]] | None = None,
 ) -> None:
     """Render a list of work items; `status_label` names each status the way the
-    item's theme does (hdd `draft`), else the canonical value (#439)."""
+    item's theme does (hdd `draft`), else the canonical value (#439). With `ages`
+    (`KanbanService.aging`, one per item), Age and Since columns too (#579)."""
     if console is None:
         console = Console()
 
@@ -296,8 +310,11 @@ def render_list(
     table.add_column("Status")
     table.add_column("Priority")
     table.add_column("Assignee", style="dim")
+    if ages is not None:
+        table.add_column("Age")
+        table.add_column("Since", style="dim")
 
-    for item in items:
+    for n, item in enumerate(items):
         icon = TYPE_ICONS.get(item.item_type.value, "•")
         priority_color = PRIORITY_COLORS.get(item.priority or "medium", "white")
         status_color = STATUS_COLORS.get(item.status.value, "white")
@@ -312,7 +329,7 @@ def render_list(
             assignee = ", ".join(str(a) for a in assignee if a)
         assignee = assignee or "-"
 
-        table.add_row(
+        cells = [
             f"{icon} {escape(item.id)}",
             escape(title),
             f"[{status_color}]"
@@ -320,7 +337,12 @@ def render_list(
             f"[/{status_color}]",
             f"[{priority_color}]{escape(str(item.priority or 'medium'))}[/{priority_color}]",
             escape(assignee),
-        )
+        ]
+        if ages is not None:
+            row = ages[n]
+            since = f"{row['since'] or '-'} ({row['since_source']})"
+            cells += [_format_age(row["age_seconds"]), escape(since)]
+        table.add_row(*cells)
 
     console.print(table)
 

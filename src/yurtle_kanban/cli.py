@@ -51,7 +51,7 @@ from .board import (
     render_roadmap,
     render_stats,
 )
-from .config import BoardConfig, KanbanConfig, _under
+from .config import BoardConfig, KanbanConfig, _fold_status_name, _under
 from .epic_commands import epic, voyage
 from .export import (
     export_expedition_index,
@@ -73,7 +73,7 @@ from .models import (
     id_prefix,
     unknown_priority_message,
 )
-from .service import KanbanService, git_toplevel
+from .service import KanbanService, git_toplevel, parse_duration
 from .sync import NOTHING_PICKABLE, Outcome
 
 
@@ -475,8 +475,21 @@ def _warn_unparseable(service: KanbanService) -> None:
         click.echo(f"warning: skipped {shown}: {reason}", err=True)
 
 
+def _duration(ctx: click.Context, param: click.Parameter, value: str | None) -> Any:
+    """A DURATION option (#579): `^\\d+(m|h|d|w)$`, else a usage error (exit 2)."""
+    if value is None:
+        return None
+    try:
+        return parse_duration(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e), ctx=ctx, param=param) from None
+
+
 @main.command("list")
-@click.option("--status", "-s", help="Filter by status (backlog, ready, in_progress, review, done)")
+@click.option(
+    "--status", "-s",
+    help="Filter by status: canonical or the item's theme's name (active, provisioning…)",
+)
 @click.option("--type", "-t", "item_type", help="Filter by type (feature, bug, epic, task)")
 @click.option("--assignee", help="Filter by assignee (who holds the item)")
 @click.option(
@@ -496,6 +509,18 @@ def _warn_unparseable(service: KanbanService) -> None:
     "--explain", is_flag=True,
     help="With --pickable: also each ready item that is not pickable, and why",
 )
+@click.option(
+    "--older-than", callback=_duration, metavar="DURATION",
+    help="Only open items in their status this long or longer (e.g. 2d; m/h/d/w)",
+)
+@click.option(
+    "--stale", is_flag=True,
+    help="Only in-progress items in progress for --stale-after or longer",
+)
+@click.option(
+    "--stale-after", callback=_duration, default="24h", show_default=True,
+    metavar="DURATION", help="When an in-progress item counts as stale",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def list_items(
     status: str | None,
@@ -506,6 +531,9 @@ def list_items(
     pickable: bool,
     agent: str | None,
     explain: bool,
+    older_than: Any,
+    stale: bool,
+    stale_after: Any,
     as_json: bool,
 ):
     """List work items.
@@ -517,6 +545,14 @@ def list_items(
     identity at all, only unassigned items are shown. A dependency cycle among
     ready items is warned about on stderr. It reads the local tree: claim is the
     authoritative gate.
+
+    Aging (#579): --older-than DURATION lists open (not finished) items that have
+    been in their status that long; --stale lists in-progress items in progress
+    for --stale-after (default 24h) or longer. Both sort oldest first, items of
+    unknown age last, and add Age and Since columns; --stale prints the
+    `claim ID --take-over` command for each row. `since` is the item's last
+    history node when it names the current status, else the author date of the
+    last commit that changed its `status:` line, else `created:`, else unknown.
     """
     if pickable and (status is not None or assignee is not None):
         raise click.UsageError(
@@ -531,12 +567,12 @@ def list_items(
             _refuse(e)
     service = get_service()
 
-    # Parse filters
-    status_filter = None
+    # Parse filters: a status name is resolved through each item's own theme
+    # (#579, #587); refused only when no board in scope knows it
     if status:
-        try:
-            status_filter = WorkItemStatus.from_string(status)
-        except ValueError:
+        scope = service.config.get_board(board_name) if board_name else None
+        known = service._get_column_status_map(scope)
+        if _fold_status_name(status) not in known:
             _refuse(f"Unknown status: {status}", f"[red]Unknown status: {safe(status)}[/red]")
 
     type_filter = None
@@ -565,28 +601,45 @@ def list_items(
             sys.exit(1)
 
     items = service.get_items(
-        status=status_filter,
         item_type=type_filter,
         assignee=assignee,
         board=board_name,
         priority=priority_filter,
     )
+    if status:
+        items = [i for i in items if service.resolve_status_name(i, status) == i.status]
 
     if pickable:
         _list_pickable(service, items, agent, explain, as_json)
         return
 
+    ages = service.aging(items, stale_after) if as_json or stale or older_than else []
+    if stale or older_than:
+        kept = [
+            (item, row) for item, row in zip(items, ages)
+            if (not stale or row["stale"])
+            and (older_than is None or (
+                not service.is_finished(item)
+                and (row["age_seconds"] is None
+                     or row["age_seconds"] >= older_than.total_seconds())
+            ))
+        ]
+        kept.sort(key=lambda p: (p[1]["age_seconds"] is None, -(p[1]["age_seconds"] or 0)))
+        items, ages = [p[0] for p in kept], [p[1] for p in kept]
+
     _warn_unparseable(service)
 
+    if as_json:  # an empty list is `[]`, never prose (#877)
+        data = [{**item.to_dict(), **row} for item, row in zip(items, ages)]
+        click.echo(json.dumps(data, indent=2))
+        return
     if not items:
         console.print("[dim]No work items found.[/dim]")
         return
-
-    if as_json:
-        data = [item.to_dict() for item in items]
-        click.echo(json.dumps(data, indent=2))
-    else:
-        render_list(items, console, status_label=service.status_label)
+    render_list(items, console, status_label=service.status_label, ages=ages or None)
+    if stale:
+        for item in items:
+            click.echo(f"  yurtle-kanban claim {item.id} --take-over --agent <you>")
 
 
 def _list_pickable(
