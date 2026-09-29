@@ -209,13 +209,16 @@ class _Claimed:
 class DepNode:
     """One unmet dependency, as `unmet_dependencies` walks it (#575): `status` is its
     native status (None when it is on no board), `state` its `dependency_state`
-    and `children` its own unmet dependencies. #577 renders it."""
+    and `children` its own unmet dependencies. #577 renders it. `cycle_kind` is
+    set when `state` is `cycle`: `supersession` (its `superseded_by` walk, #581)
+    or `depends_on` (a dependency cycle, #576); None otherwise (#1083)."""
 
     id: str
     status: str | None
     assignee: str | None
     state: str
     children: list[DepNode] = dataclasses.field(default_factory=list)
+    cycle_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -6481,29 +6484,31 @@ class KanbanService:
 
     def _dep_state(
         self, dep_id: str, index: dict[str, WorkItem], graph: dict[str, list[str]]
-    ) -> tuple[str, WorkItem | None, list[str] | None]:
-        """(state, the item, the cycle when `cycle`) of dependency `dep_id`. An
-        `unknown` one has no item; its third element is the ID on no board — a
-        redirect's final target, not the redirecting item (#1053)."""
+    ) -> tuple[str, WorkItem | None, list[str] | None, str | None]:
+        """(state, the item, the cycle when `cycle`, the cycle's kind) of dependency
+        `dep_id`. An `unknown` one has no item; its third element is the ID on no
+        board — a redirect's final target, not the redirecting item (#1053). The
+        kind is `supersession` or `depends_on` when the state is `cycle`, decided
+        here and nowhere else (#1083); None otherwise."""
         key = fold_id(dep_id.strip())
         dep = index.get(key)
         if dep is None:
-            return "unknown", None, [dep_id]
+            return "unknown", None, [dep_id], None
         if self.is_finished(dep):
             # a resolution beats the column (#581 [steer] 4): `wont_do` is dead, a
             # redirect takes its final target's state (the target returned)
             if dep.resolution == "wont_do":
-                return "dead", dep, None
+                return "dead", dep, None, None
             path, end = self._supersession_walk(key, index)
             if end == "cycle":
-                return "cycle", dep, [index[k].id for k in path]
+                return "cycle", dep, [index[k].id for k in path], "supersession"
             if len(path) > 1:
                 return self._dep_state(path[-1], index, graph)
-            return ("met" if dep.status == WorkItemStatus.DONE else "dead"), dep, None
+            return ("met" if dep.status == WorkItemStatus.DONE else "dead"), dep, None, None
         cycle = self.find_cycle(key, graph)  # #576's walk; cycle beats unfinished
         if cycle:
-            return "cycle", dep, cycle
-        return "unfinished", dep, None
+            return "cycle", dep, cycle, "depends_on"
+        return "unfinished", dep, None, None
 
     def dependency_state(self, dep_id: str) -> str:
         """`met` (finished and done), `dead` (finished, not done: hdd `abandoned`;
@@ -6533,7 +6538,7 @@ class KanbanService:
     ) -> list[DepNode]:
         nodes = []
         for dep_id in self._id_list(item.depends_on):
-            state, dep, extra = self._dep_state(dep_id, index, graph)
+            state, dep, extra, cycle_kind = self._dep_state(dep_id, index, graph)
             if state == "met":
                 continue
             node = DepNode(  # an unknown one: the ID on no board, as `pickable` (#1061)
@@ -6541,6 +6546,7 @@ class KanbanService:
                 status=self.status_label(dep) if dep else None,
                 assignee=dep.assignee if dep else None,
                 state=state,
+                cycle_kind=cycle_kind,
             )
             if dep is not None and state in ("unfinished", "cycle") and dep_id not in path:
                 node.children = self._unmet(dep, index, graph, path | {dep_id})
@@ -6600,7 +6606,7 @@ class KanbanService:
             index = self._dep_index() if index is None else index
             graph = self._dep_graph(index) if graph is None else graph
             for dep_id in deps:
-                state, dep, extra = self._dep_state(dep_id, index, graph)
+                state, dep, extra, _ = self._dep_state(dep_id, index, graph)
                 if state == "met":
                     continue
                 detail = {
