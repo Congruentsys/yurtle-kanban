@@ -126,7 +126,7 @@ NEVER_LISTED = {"EXP-3", "EXP-14", "EXP-60", "H1.1", "H1.2", "H1.4"}
 ITEM_KEYS = {
     "id", "board", "status", "canonical_status", "assignee", "status_blocked", "unmet",
 }
-NODE_KEYS = {"id", "status", "assignee", "state", "children"}
+NODE_KEYS = {"id", "status", "assignee", "state", "children", "cycle_kind"}  # cycle_kind added (#1083)
 STATES = {"unfinished", "unknown", "dead", "cycle"}
 
 ID_AT_START = re.compile(r"^(?:EXP-\d+|H\d+(?:\.\d+)*)\b")
@@ -252,11 +252,11 @@ def test_a1_chain_tree(graph: Repo) -> None:
 
 def test_a1_chain_json(graph: Repo) -> None:
     exp3 = {"id": "EXP-3", "status": "harbor", "assignee": None,
-            "state": "unfinished", "children": []}
+            "state": "unfinished", "children": [], "cycle_kind": None}  # cycle_kind added (#1083)
     got = entries()
     assert got["EXP-1"]["unmet"] == [
         {"id": "EXP-2", "status": "underway", "assignee": "Mini",
-         "state": "unfinished", "children": [exp3]},
+         "state": "unfinished", "children": [exp3], "cycle_kind": None},  # cycle_kind added (#1083)
     ]
     assert got["EXP-2"] == {
         "id": "EXP-2", "board": "development", "status": "underway",
@@ -302,7 +302,8 @@ def test_a3_unknown_id(graph: Repo) -> None:
     assert [n[1] for n in nodes] == ["EXP-99"], block
     assert "unknown ID" in nodes[0][2], nodes[0][2]
     assert entries()["EXP-20"]["unmet"] == [
-        {"id": "EXP-99", "status": None, "assignee": None, "state": "unknown", "children": []}
+        {"id": "EXP-99", "status": None, "assignee": None, "state": "unknown", "children": [],
+         "cycle_kind": None}  # cycle_kind added (#1083)
     ]
 
 
@@ -330,7 +331,8 @@ def test_a3_cycle_json_state(graph: Repo) -> None:
 
 def test_a4_cross_board_dead(graph: Repo) -> None:
     assert entries()["EXP-30"]["unmet"] == [
-        {"id": "H1.1", "status": "abandoned", "assignee": None, "state": "dead", "children": []}
+        {"id": "H1.1", "status": "abandoned", "assignee": None, "state": "dead", "children": [],
+         "cycle_kind": None}  # cycle_kind added (#1083)
     ]
     nodes = node_lines(human()["EXP-30"])
     assert [n[1] for n in nodes] == ["H1.1"], nodes
@@ -354,7 +356,7 @@ def test_a5_active_listed_only_with_unmet_deps(graph: Repo) -> None:
         "id": "H1.3", "board": "research", "status": "active",
         "canonical_status": "in_progress", "assignee": None, "status_blocked": False,
         "unmet": [{"id": "EXP-3", "status": "harbor", "assignee": None,
-                   "state": "unfinished", "children": []}],
+                   "state": "unfinished", "children": [], "cycle_kind": None}],  # cycle_kind added (#1083)
     }
 
 
