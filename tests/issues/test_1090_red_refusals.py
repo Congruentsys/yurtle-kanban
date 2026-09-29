@@ -26,6 +26,13 @@ after only further ``console.print`` / ``err_console.print`` lines (a ``Valid
 types:`` / ``Available presets:`` / ``Example:`` hint) — by an exit
 (``sys.exit(...)``, ``ctx.exit(...)`` or ``raise SystemExit(...)``). Such a run is
 a refusal written by hand; it goes through ``refuse()`` instead.
+
+Widened by #1099: in those files, no function may hold such a red print with a
+non-zero exit anywhere LATER in the same function (not in a nested def) — red rows
+in a ``for`` loop and ``sys.exit(1)`` in a later ``if invalid:`` is the same
+refusal (``list --priority`` before #1098 r1 F1). The report commands that exit
+after red report rows (``validate``, ``hdd validate``) are allowlisted by name in
+``REPORT_COMMANDS``, each with its reason.
 """
 
 from __future__ import annotations
@@ -368,8 +375,70 @@ def _refusals_in(source: str, name: str) -> list[str]:
     return found
 
 
+def _is_nonzero_exit(stmt: ast.stmt) -> bool:
+    """An exit whose code isn't a literal 0 / absent (`sys.exit()` is a success)."""
+    if not _is_exit(stmt):
+        return False
+    call = stmt.value if isinstance(stmt, ast.Expr) else stmt.exc  # type: ignore[attr-defined]
+    if not isinstance(call, ast.Call):
+        return False  # a bare `raise SystemExit` exits 0
+    if not call.args:
+        return False
+    code = call.args[0]
+    return not (isinstance(code, ast.Constant) and code.value in (0, None))
+
+
+def _own_statements(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterator[ast.stmt]:
+    """Every statement in `func`'s body, not descending into nested defs/classes."""
+    stack: list[ast.AST] = list(reversed(func.body))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.stmt):
+            yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        stack.extend(reversed(list(ast.iter_child_nodes(node))))
+
+
+# Functions that print red REPORT rows (one per finding) and then exit non-zero
+# because findings exist — the exit is the report's verdict, not a refusal of
+# the command, so the rows stay on stdout (#1090's ruling: report lines stay).
+# #1099's function-wide rule skips these; the same-block rule above still applies.
+REPORT_COMMANDS: frozenset[str] = frozenset(
+    {
+        # cli.py `validate`: `DUPLICATE ID` / `DEPENDENCY CYCLE` / `BAD CONTROL FILE`
+        # rows, one per issue found; `sys.exit(1)` afterwards says "issues found".
+        "validate",
+        # hdd_commands.py `hdd validate`: an indented `Error:` row per broken
+        # hypothesis/experiment link; `sys.exit(1)` afterwards says "errors found".
+        "hdd_validate",
+    }
+)
+
+
+def _sibling_refusals_in(source: str, name: str) -> list[str]:
+    """#1099: a red print with a non-zero exit LATER in the same function — in a
+    sibling or enclosing block (red rows in a `for`, then `if invalid: sys.exit(1)`),
+    which the same-block rule above can't see. Report commands are allowlisted."""
+    found = []
+    for node in ast.walk(ast.parse(source, filename=name)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name in REPORT_COMMANDS:
+            continue
+        stmts = list(_own_statements(node))
+        exits = [s.lineno for s in stmts if _is_nonzero_exit(s)]
+        for stmt in stmts:
+            if _is_red_print(stmt) and any(line > stmt.lineno for line in exits):
+                found.append(f"{name}:{stmt.lineno} ({node.name})")
+    return found
+
+
 def _hand_written_refusals(path: Path) -> list[str]:
-    return _refusals_in(path.read_text(), path.name)
+    source = path.read_text()
+    return sorted(
+        set(_refusals_in(source, path.name)) | set(_sibling_refusals_in(source, path.name))
+    )
 
 
 @pytest.mark.parametrize(
@@ -411,6 +480,58 @@ def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
 )
 def test_sweep_leaves_non_refusals_alone(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") == [], snippet
+
+
+# #1099: the `list --priority` shape before #1098 r1 F1 — red rows in a `for`,
+# the exit in a later sibling `if`
+_SIBLING_SHAPE = (
+    "def {name}(invalid):\n"
+    "    for value in invalid:\n"
+    '        console.print(f"[red]{{escape(value)}}[/red]", soft_wrap=True)\n'
+    "    if invalid:\n"
+    "        sys.exit(1)\n"
+)
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        _SIBLING_SHAPE.format(name="list_items"),
+        # the exit in an enclosing block, after the red print's `if`
+        "def f(ok):\n    if not ok:\n        err_console.print(\"[red]bad[/red]\")\n"
+        "    cleanup()\n    raise SystemExit(2)\n",
+        "def f(ctx, xs):\n    for x in xs:\n        if x:\n"
+        "            console.print(\"[red]x[/red]\")\n    ctx.exit(1)\n",
+    ],
+    ids=["list-priority-shape", "enclosing-raise", "nested-loop-ctx-exit"],
+)
+def test_sweep_finds_a_red_print_whose_exit_sits_in_a_sibling_block(snippet: str) -> None:
+    assert _sibling_refusals_in(snippet, "s.py") != [], snippet
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        # the same shape in a report command: the rows are output, the exit a verdict
+        _SIBLING_SHAPE.format(name="validate"),
+        _SIBLING_SHAPE.format(name="hdd_validate"),
+        # the exit belongs to a DIFFERENT function
+        'def a():\n    console.print("[red]row[/red]")\n'
+        "def b():\n    sys.exit(1)\n",
+        # a nested function's exit isn't the outer function's
+        'def a():\n    console.print("[red]row[/red]")\n'
+        "    def b():\n        sys.exit(1)\n    return b\n",
+        # the exit comes BEFORE the red print
+        'def a(x):\n    if x:\n        sys.exit(1)\n    console.print("[red]row[/red]")\n',
+        # a successful exit is not a refusal
+        'def a():\n    for r in rs:\n        console.print("[red]row[/red]")\n'
+        "    sys.exit(0)\n",
+    ],
+    ids=["allowlisted-validate", "allowlisted-hdd-validate", "exit-in-other-function",
+         "exit-in-nested-function", "exit-before", "exit-zero"],
+)
+def test_sibling_sweep_leaves_non_refusals_alone(snippet: str) -> None:
+    assert _sibling_refusals_in(snippet, "s.py") == [], snippet
 
 
 def test_no_hand_written_red_refusal_remains() -> None:
