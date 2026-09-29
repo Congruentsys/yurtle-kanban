@@ -590,8 +590,9 @@ def list_items(
     for --stale-after (default 24h) or longer. Both sort oldest first, items of
     unknown age last, and add Age and Since columns; --stale prints the
     `claim ID --take-over` command for each row. `since` is the item's last
-    history node when it names the current status, else the author date of the
-    last commit that changed its `status:` line, else `created:`, else unknown.
+    history node when it names the current status, else (under --older-than,
+    --stale or --stale-after only, #1055) the author date of the last commit that
+    changed its `status:` line, else `created:`, else unknown.
     """
     if pickable and (status is not None or assignee is not None):
         raise click.UsageError(
@@ -659,7 +660,13 @@ def list_items(
         _list_pickable(service, items, agent, explain, as_json)
         return
 
-    ages = service.aging(items, stale_after) if as_json or stale or older_than else []
+    # plain `--json` skips the costly git source; the aging flags keep it (#1055)
+    source = click.get_current_context().get_parameter_source("stale_after")
+    use_git = bool(stale or older_than or source != click.core.ParameterSource.DEFAULT)
+    ages = (
+        service.aging(items, stale_after, use_git=use_git)
+        if as_json or stale or older_than else []
+    )
     if stale or older_than:
         kept = [
             (item, row) for item, row in zip(items, ages)
