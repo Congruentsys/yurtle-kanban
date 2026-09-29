@@ -1670,10 +1670,11 @@ def metrics(item_id: str | None, as_json: bool):
             _refuse(f"Item not found: {fold_id(item_id)}")
         metrics_data = service.get_flow_metrics(item.id)
 
-        if "error" in metrics_data or (not as_json and not metrics_data["transitions"]):
+        if "error" in metrics_data:  # a refusal, in JSON too (#1012)
+            _refuse(metrics_data["error"])
+        if not as_json and not metrics_data["transitions"]:
             # plain output of a history-less item is unchanged (#962)
-            said = metrics_data.get("error", "No status history found")
-            console.print(f"[yellow]{safe(said)}[/yellow]")
+            console.print("[yellow]No status history found[/yellow]")
             console.print("[dim]Status history is recorded when items move between statuses.[/dim]")
             return
 
