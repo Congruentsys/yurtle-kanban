@@ -39,7 +39,6 @@ from ._click import (
     Group,
     argv_requests_json,
     json_refusal,
-    json_requested,
     pull_note,
     refuse,
     safe,
@@ -158,13 +157,10 @@ def get_service() -> KanbanService:
         try:
             config = KanbanConfig.load(config_path)
         except ValueError as e:  # a config value of the wrong kind (#220)
-            if json_requested():
-                json_refusal(f"Invalid {config_path}: {e}")
             # one line: a wrapped path breaks copy-paste and grep (#272)
-            console.print(
-                f"[red]Invalid {safe(config_path)}: {safe(e)}[/red]", soft_wrap=True
+            _refuse(
+                f"Invalid {config_path}: {e}", f"[red]Invalid {safe(config_path)}: {safe(e)}[/red]"
             )
-            sys.exit(1)
     else:
         config = KanbanConfig()  # Use defaults
 
@@ -231,8 +227,7 @@ class _Main(Group):
             except ValueError as e:
                 if argv_requests_json(args, self):  # before --json is parsed (#877)
                     json_refusal(e)
-                console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
-                ctx.exit(1)
+                _refuse(e, f"[red]{safe(e)}[/red]")
         ctx.meta["yurtle_kanban.argv"] = list(args)  # for a usage error's --json (#929)
         try:
             return super().parse_args(ctx, args)
@@ -635,15 +630,10 @@ def list_items(
             given = f"No priority given; valid: {', '.join(PRIORITIES)}"
             _refuse(given, f"[red]{given}[/red]")
         invalid = [p for p in priority_filter if p not in PRIORITIES]
-        if invalid and json_requested():
-            json_refusal("; ".join(unknown_priority_message(v) for v in invalid))
-        # one message per value, each rendered like everywhere else (#190, #238)
-        for value in invalid:
-            console.print(
-                f"[red]{escape(unknown_priority_message(value))}[/red]", soft_wrap=True
-            )
         if invalid:
-            sys.exit(1)
+            # one line per value, each rendered like everywhere else (#190, #238)
+            messages = [unknown_priority_message(v) for v in invalid]
+            _refuse("; ".join(messages), "\n".join(f"[red]{escape(m)}[/red]" for m in messages))
 
     if resolution is not None and resolution not in RESOLUTIONS:  # (#581)
         unknown = f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
@@ -789,9 +779,11 @@ def create(
     try:
         work_type = WorkItemType.from_string(item_type)
     except ValueError:
-        console.print(f"[red]Unknown type: {safe(item_type)}[/red]")
-        console.print(f"Valid types: {', '.join(t.value for t in WorkItemType)}")
-        sys.exit(1)
+        valid = ", ".join(t.value for t in WorkItemType)
+        _refuse(
+            f"Unknown type: {item_type}; valid types: {valid}",
+            f"[red]Unknown type: {safe(item_type)}[/red]\nValid types: {escape(valid)}",
+        )
 
     tag_list = [t.strip() for t in tags.split(",")] if tags else None
 
@@ -801,8 +793,7 @@ def create(
         check_encodable("assignee", assignee)
         check_encodable("tags", tag_list)
     except InputRefused as e:
-        console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
-        sys.exit(1)
+        _refuse(e, f"[red]{safe(e)}[/red]")
 
     if push:
         try:
@@ -842,8 +833,9 @@ def create(
                         "[/yellow]"
                     )
         else:
-            console.print(f"[red]Failed: {safe(result['message'])}[/red]")
-            sys.exit(1)
+            _refuse(
+                f"Failed: {result['message']}", f"[red]Failed: {safe(result['message'])}[/red]"
+            )
     else:
         try:
             item = service.create_item(
@@ -1240,20 +1232,17 @@ def show(item_id: str, as_json: bool):
                     {"file": str(path), "reason": reason} for path, reason in broken
                 ]
             click.echo(json.dumps(payload))
-        else:
-            console.print(f"[red]Item not found: {safe(item_id)}[/red]")
-            for path, reason in broken:
-                try:
-                    shown = path.relative_to(service.repo_root)
-                except ValueError:
-                    shown = path
-                # escape: a YAML error quotes the bad line, and `[...]` in it would
-                # otherwise be read as Rich markup (crash or swallowed text)
-                console.print(
-                    f"  found {safe(shown)}, but it doesn't parse: {safe(reason)}",
-                    soft_wrap=True,
-                )
-        sys.exit(1)
+            sys.exit(1)
+        lines = [f"[red]Item not found: {safe(item_id)}[/red]"]
+        for path, reason in broken:
+            try:
+                shown = path.relative_to(service.repo_root)
+            except ValueError:
+                shown = path
+            # escape: a YAML error quotes the bad line, and `[...]` in it would
+            # otherwise be read as Rich markup (crash or swallowed text)
+            lines.append(f"  found {safe(shown)}, but it doesn't parse: {safe(reason)}")
+        _refuse(f"Item not found: {item_id}", "\n".join(lines))
 
     next_statuses = service.next_statuses(item)
     if as_json:
@@ -1466,10 +1455,11 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
 
     # Validate preset exists
     if not _load_builtin_theme(preset, repo_root):
-        available = ["software", "nautical", "spec", "hdd"]
-        console.print(f"[red]Unknown preset: {safe(preset)}[/red]")
-        console.print(f"[dim]Available presets: {', '.join(available)}[/dim]")
-        sys.exit(1)
+        available = ", ".join(["software", "nautical", "spec", "hdd"])
+        _refuse(
+            f"Unknown preset: {preset}; available presets: {available}",
+            f"[red]Unknown preset: {safe(preset)}[/red]\n[dim]Available presets: {available}[/dim]",
+        )
 
     # Parse WIP limits
     wip_limits = {}
@@ -1481,8 +1471,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
                 if wip_limits[status] < 0:  # the same rule as a config limit (#420)
                     raise ValueError
             except ValueError:
-                console.print(f"[red]Invalid WIP limit: {safe(wip)}[/red]")
-                sys.exit(1)
+                _refuse(f"Invalid WIP limit: {wip}", f"[red]Invalid WIP limit: {safe(wip)}[/red]")
 
     # Upgrading to multi-board turns the single-board config into ONE board that
     # scans one path; if no path covers every scan path, items would silently
@@ -1501,23 +1490,21 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
             if not _within(Path(p).expanduser(), board_path)
         ]
         if uncovered:
-            # soft_wrap: never hard-wrap inside a path, or it can't be copied (#147)
-            console.print(
-                "[red]Can't upgrade to multi-board: a board scans one path, and no "
-                f"single path covers these scan paths: {safe(', '.join(uncovered))}[/red]",
-                soft_wrap=True,
+            # soft_wrap (refuse's): never hard-wrap inside a path, or it can't be copied (#147)
+            message = (
+                "Can't upgrade to multi-board: a board scans one path, and no "
+                f"single path covers these scan paths: {', '.join(uncovered)}"
             )
-            console.print(
+            _refuse(
+                message,
+                f"[red]{safe(message)}[/red]\n"
                 "[dim]Move them under a common folder (and set paths.root to it), "
                 "then run board-add again. .kanban/config.yaml was not changed.[/dim]",
-                soft_wrap=True,
             )
-            sys.exit(1)
 
     # Check if board already exists
     if config.is_multi_board and config.get_board(name):
-        console.print(f"[red]Board '{safe(name)}' already exists[/red]")
-        sys.exit(1)
+        _refuse(f"Board '{name}' already exists", f"[red]Board '{safe(name)}' already exists[/red]")
 
     # Create the new board config
     new_board = BoardConfig(
@@ -1662,8 +1649,7 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
             console.print(f"  Priority: {escape(str(item.priority))}")
         console.print(f"  Status: {safe(service.status_label(item))}")
     except ValueError as e:
-        console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
-        sys.exit(1)
+        _refuse(e, f"[red]{safe(e)}[/red]")
 
 
 @main.command()
@@ -2140,8 +2126,7 @@ def export_cmd(fmt: str, output: str | None, min_id: int, board_name: str | None
     elif fmt == "research-index":
         content = export_research_index(board)
     else:
-        console.print(f"[red]Unknown format: {safe(fmt)}[/red]")
-        sys.exit(1)
+        _refuse(f"Unknown format: {fmt}", f"[red]Unknown format: {safe(fmt)}[/red]")
 
     if output:
         Path(output).write_text(content)
@@ -2200,10 +2185,10 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             if result.get("note"):  # the checkout wasn't fast-forwarded (#995)
                 console.print(f"[yellow]  {safe(result['note'])}[/yellow]", soft_wrap=True)
         else:
-            console.print(
-                f"[red]Failed to allocate ID: {safe(result['message'])}[/red]", soft_wrap=True
+            _refuse(
+                f"Failed to allocate ID: {result['message']}",
+                f"[red]Failed to allocate ID: {safe(result['message'])}[/red]",
             )
-            sys.exit(1)
 
 
 _STAMP_EXPECTED = {  # what `validate` says each bounce-stamp key should hold (#578, #1041)
@@ -2520,10 +2505,7 @@ def query(
         try:
             results = ug.sparql(sparql_query)
         except Exception as e:
-            if as_json:
-                json_refusal(f"SPARQL error: {e}")
-            err_console.print(f"[red]SPARQL error:[/red] {safe(e)}", soft_wrap=True)
-            sys.exit(1)
+            _refuse(f"SPARQL error: {e}", f"[red]SPARQL error:[/red] {safe(e)}")
         results = _cap_to_top(results, top_k)  # JSON too, like the table (#387, #397)
 
         if as_json:
@@ -2551,10 +2533,7 @@ def query(
         except ImportError as e:
             # missing, or installed but broken (#346, #358): under --json one JSON
             # refusal on stdout (#877, #908); else one line on stderr, never wrapped
-            if as_json:
-                json_refusal(e)
-            err_console.print(f"[red]{safe(e)}[/red]", soft_wrap=True)
-            sys.exit(1)
+            _refuse(e, f"[red]{safe(e)}[/red]")
         hits = _cap_to_top(hits, top_k)  # the --top note (#397), outside the try (#405)
         if as_json:
             click.echo(json.dumps(
@@ -2583,14 +2562,11 @@ def query(
         return
 
     if not query_text:
-        if as_json:
-            json_refusal("Provide a query string, --sparql, or --semantic.")
-        console.print("[red]Provide a query string, --sparql, or --semantic.[/red]")
-        console.print(
-            '[dim]Example: yurtle-kanban query'
-            ' "not-done expeditions that improve brain"[/dim]'
+        _refuse(
+            "Provide a query string, --sparql, or --semantic.",
+            "[red]Provide a query string, --sparql, or --semantic.[/red]\n"
+            '[dim]Example: yurtle-kanban query "not-done expeditions that improve brain"[/dim]',
         )
-        sys.exit(1)
 
     # Hybrid NL query
     enable_semantic = not no_semantic

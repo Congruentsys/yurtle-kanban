@@ -185,7 +185,7 @@ def test_cli_invalid_config_line_never_wraps(tmp_path, monkeypatch, key):
     monkeypatch.setattr(cli_mod, "console", narrow)
     result = _list(base, monkeypatch, BUILDERS[key]("5"))
     assert result.exit_code == 1, result.output
-    out = narrow.file.getvalue()
+    out = result.stderr  # the refusal, at the swapped console's width (#1080)
     cfg = str(base / "repo" / ".kanban" / "config.yaml")
     assert len(cfg) >= 140 > 40, cfg  # far wider than the console: a wrap is certain
     start = out.find("Invalid ")
