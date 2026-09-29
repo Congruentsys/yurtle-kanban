@@ -41,3 +41,34 @@ def _hermetic_identity(monkeypatch: pytest.MonkeyPatch, _suite_gitconfig: Path) 
     monkeypatch.delenv("YURTLE_AGENT", raising=False)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_suite_gitconfig))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+# --- the #574 claim world and env, shared with tests/issues (#892) ----------------------
+# Defined here, not in tests/issues/conftest.py: pytest drops that conftest's fixtures
+# when one run's paths go tests/issues → tests → tests/issues (#1046). Their helpers are
+# imported inside the fixtures, so a run of top-level tests alone never loads them.
+
+
+@pytest.fixture
+def claim_env(monkeypatch: pytest.MonkeyPatch):  # -> Iterator[None]
+    """No prompting git, no inherited `YURTLE_AGENT`, an empty theme cache. NOT
+    autouse: a module asks for it with `pytestmark = pytest.mark.usefixtures("claim_env")`."""
+    from yurtle_kanban import config as config_mod
+
+    monkeypatch.setenv("GIT_TERMINAL_PROMPT", "0")
+    monkeypatch.delenv("YURTLE_AGENT", raising=False)
+    config_mod._theme_cache.clear()
+    yield
+    config_mod._theme_cache.clear()
+
+
+@pytest.fixture
+def world(tmp_path: Path):  # -> tests.issues.test_585_create_push_loop.World
+    """The #574 claim tests' world: origin and both clones hold EXP-001 at `ready`,
+    unassigned. A module that defines its own `world` still gets its own."""
+    from tests.issues.test_574_claim import ITEM, item_text, push_from_a
+    from tests.issues.test_585_create_push_loop import World
+
+    w = World(tmp_path)
+    push_from_a(w, {ITEM: item_text("ready")}, "seed EXP-001")
+    return w
