@@ -76,12 +76,17 @@ HELP_WIDTH = 10_000
 EXAMPLE_SEPARATOR = re.compile(r"\s{3,}")
 
 def _split_alternatives(text):
-    """`|` inside a synopsis's `[...]`, at any depth, as a word break (#936, #972)."""
-    out, depth = [], 0
-    for c in text:
-        depth += (c == "[") - (c == "]" and depth > 0)
-        out.append(" " if c == "|" and depth else c)
-    return "".join(out)
+    """`|` inside a synopsis's `[...]`, at any depth, as a word break (#936, #972);
+    only inside a group that closes, so after an unclosed `[` a shell pipe stays a
+    pipe, and a stray `]` never shifts a later group (#1007)."""
+    inside, opened = [False] * len(text), []
+    for i, c in enumerate(text):
+        if c == "[":
+            opened.append(i)
+        elif c == "]" and opened:
+            for j in range(opened.pop(), i):
+                inside[j] = True
+    return "".join(" " if c == "|" and inside[i] else c for i, c in enumerate(text))
 
 
 def _parse(line):
@@ -1000,3 +1005,22 @@ def test_every_mention_parses_or_is_allow_listed():
     # and every allow-list entry still earns its place
     for pattern, reason in NOT_COMMANDS.items():
         assert any(pattern.search(t) for _, t in mentions), f"stale allow-list: {reason}"
+
+
+# --- #1007: alternatives split only inside groups that close --------------------------
+
+
+def test_unclosed_bracket_keeps_a_later_pipe() -> None:
+    """`[--json | grep --count x` has no closing `]`: the `|` is a shell pipe."""
+    assert _split_alternatives("list [--json | grep --count x") == (
+        "list [--json | grep --count x"
+    )
+
+
+def test_stray_close_bracket_does_not_hide_a_later_group() -> None:
+    """A stray `]` before a group must not stop that group's `|` splitting."""
+    assert _split_alternatives("list x] [--a|--b]") == "list x] [--a --b]"
+
+
+def test_nested_groups_still_split() -> None:
+    assert _split_alternatives("list [--a [--b|--c]|--d]") == "list [--a [--b --c] --d]"
