@@ -14,10 +14,13 @@ runner passes ``color=True`` so click does not strip ANSI itself, as it would no
 on a real terminal.
 
 Static sweep, the rule pinned here: in every module under ``src/``, a
-``ClickException`` whose message is an f-string interpolates only ``safe(...)``
-calls (``safe(fold_id(x))`` included). No allowlist: a ClickException line is
-printed by click as plain text on stderr, so every value in it goes through
-``safe()``.
+``ClickException`` whose message is an f-string interpolates only
+``escape_nonprintable(...)`` or ``safe(...)`` calls (wrapping ``fold_id(x)`` is
+fine). No allowlist. Click prints a ClickException as plain text, not Rich markup,
+so the fixed sites use ``escape_nonprintable()``: ``safe()``'s markup escape would
+add a stray backslash to a legitimate ``[...]``. Control: an ID holding ``[#x]``
+(folded ``[#X]``, a form Rich's ``escape()`` does backslash, unlike ``[X]``) shows
+verbatim, no backslash.
 """
 
 from __future__ import annotations
@@ -95,6 +98,22 @@ def test_printable_id_is_unchanged(repo: Path) -> None:
     assert "Error: EPIC-404 not found\n" in err, repr(err)
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["epic", "show", "A[#x]"],
+        ["epic", "add", "A[#x]", "FEAT-001"],
+        ["epic", "add", "EPIC-001", "A[#x]"],
+    ],
+    ids=["show-epic", "add-epic", "add-item"],
+)
+def test_brackets_in_id_are_verbatim_no_backslash(repo: Path, args: list[str]) -> None:
+    # plain text, not markup: `safe()` would print `A\[#X]` here
+    err = _stderr(args)
+    assert "A[#X] not found\n" in err, repr(err)
+    assert "\\" not in err, repr(err)
+
+
 # --- static ---------------------------------------------------------------------------
 
 
@@ -118,11 +137,16 @@ def _click_exception_fstrings() -> list[tuple[str, int, list[str]]]:
 
 
 def _is_safe(expr: ast.expr) -> bool:
-    return isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "safe"
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        # plain text: escape_nonprintable, never safe()'s markup escape ([steer] on #1085)
+        and expr.func.id == "escape_nonprintable"
+    )
 
 
 def test_click_exception_fstrings_interpolate_only_safe() -> None:
     sites = _click_exception_fstrings()
     assert len(sites) >= 3, f"ClickException f-strings not found (check is vacuous): {sites}"
     bad = [(name, lineno, exprs) for name, lineno, exprs in sites if exprs]
-    assert not bad, f"ClickException values not routed through safe(): {bad}"
+    assert not bad, f"ClickException values not routed through escape_nonprintable()/safe(): {bad}"
