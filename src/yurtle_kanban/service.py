@@ -549,6 +549,12 @@ class LineEndings:
         return run[::-1]
 
 
+def _without_git_prefix(why: str) -> str:
+    """git's reason with its own `error: ` / `fatal: ` labels dropped, for a note that
+    already says what refused (#1057): "Not possible to fast-forward, aborting."."""
+    return re.sub(r"(?i)(?:^|(?<=\s))(?:error|fatal):\s*", "", why).strip()
+
+
 def pull_note_text(branch: str, dirty: str | None = None, why: str | None = None) -> str:
     """Where a `--push` create landed when it isn't in this checkout (a feature
     branch, detached HEAD, diverged main), and to pull: the one wording the CLI
@@ -557,7 +563,7 @@ def pull_note_text(branch: str, dirty: str | None = None, why: str | None = None
     `why` is git's reason the fast-forward was refused (#1048)."""
     note = f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
     if why:
-        note += f" (fast-forward refused: {why})"
+        note += f" (fast-forward refused: {_without_git_prefix(why)})"
     if dirty is None:
         return note
     return f"{note}; commit or stash your edit to {dirty} before pulling"
@@ -2834,7 +2840,7 @@ class KanbanService:
                 f"feature branches from origin/{branch}"
             )
             if self._ff_why:  # why, when git refused the fast-forward (#1048)
-                message += f" (fast-forward refused: {self._ff_why})"
+                message += f" (fast-forward refused: {_without_git_prefix(self._ff_why)})"
         return Outcome("won", message, sha=sha, attempts=attempts, data=change.data)
 
     def _board_outside_repo(self) -> bool:

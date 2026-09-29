@@ -30,8 +30,8 @@ def test_diverged_main_note_says_why(world, name: str) -> None:  # noqa: F811
 
     assert code == 0, both
     assert "does not show this yet" in both, both
-    assert "fast-forward refused:" in both, both
-    assert "fatal:" in both.lower(), both
+    assert "fast-forward refused: Not possible to fast-forward" in both, both
+    assert "fatal:" not in both.lower(), both  # git's own label dropped (#1057)
     assert "hint:" not in both.lower(), both  # git's advice stays out (#995)
 
 
@@ -55,5 +55,20 @@ def test_create_push_note_says_why(world) -> None:  # noqa: F811
 
     assert code == 0, both
     assert "not in this checkout yet" in both, both
-    assert "fast-forward refused:" in both, both
+    assert "fast-forward refused: Not possible to fast-forward" in both, both
+    assert "fatal:" not in both.lower(), both
     assert "hint:" not in both.lower(), both
+
+
+def test_pull_note_carries_the_reason_without_git_labels() -> None:
+    """The one line `create`, `hdd … --push` and `epic create --push` all print
+    (`_click.pull_note`) carries the reason, git's `error:`/`fatal:` dropped (#1057)."""
+    from yurtle_kanban._click import pull_note
+
+    line = pull_note({
+        "branch": "main", "dirty_parent": None,
+        "ff_why": "error: Your local changes to the following files would be "
+                  "overwritten by merge: README.md",
+    })
+    assert "fast-forward refused: Your local changes" in line, line
+    assert "error:" not in line.lower(), line
