@@ -6371,13 +6371,21 @@ class KanbanService:
         if include_backlog:
             waiting.add(WorkItemStatus.BACKLOG)
         listed: list[tuple[WorkItem, bool, list[DepNode]]] = []
+        # built once per run, on the first item with dependencies (#1068)
+        index: dict[str, WorkItem] | None = None
+        graph: dict[str, list[str]] | None = None
         for item in self.get_items(board=board):
             if self.is_finished(item):
                 continue
             status_blocked = item.status == WorkItemStatus.BLOCKED
             if not status_blocked and item.status not in waiting:
                 continue
-            unmet = self.unmet_dependencies(item) if item.depends_on else []
+            unmet: list[DepNode] = []
+            if item.depends_on:
+                if index is None or graph is None:
+                    index = self._dep_index()
+                    graph = self._dep_graph(index)
+                unmet = self.unmet_dependencies(item, index=index, graph=graph)
             if status_blocked or unmet:
                 listed.append((item, status_blocked, unmet))
         return listed
@@ -6488,12 +6496,18 @@ class KanbanService:
         index = self._dep_index()
         return self._dep_state(dep_id, index, self._dep_graph(index))[0]
 
-    def unmet_dependencies(self, item: WorkItem) -> list[DepNode]:
+    def unmet_dependencies(
+        self, item: WorkItem, *, index: dict[str, WorkItem] | None = None,
+        graph: dict[str, list[str]] | None = None,
+    ) -> list[DepNode]:
         """`item`'s dependencies that are not `met`, each with its own unmet ones
         below it (#575). Cycle-safe: a node already on the path is listed, not
-        walked again. #577 renders this; it adds no logic of its own."""
-        index = self._dep_index()
-        return self._unmet(item, index, self._dep_graph(index), {fold_id(item.id)})
+        walked again. #577 renders this; it adds no logic of its own. `index` and
+        `graph` (default: built here) let a caller walking many items build them
+        once (#1068)."""
+        index = self._dep_index() if index is None else index
+        graph = self._dep_graph(index) if graph is None else graph
+        return self._unmet(item, index, graph, {fold_id(item.id)})
 
     def _unmet(
         self, item: WorkItem, index: dict[str, WorkItem],
