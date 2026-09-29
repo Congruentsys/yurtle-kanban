@@ -195,3 +195,25 @@ def test_show_comments_are_escaped_line_by_line(
     assert "hello\\x1b[5m there" in hello, repr(out)
     assert "again" not in hello, repr(out)
     assert _line_with(out, "again").startswith("    again"), repr(out)
+
+
+# --- whitespace in multi-line text stays whitespace ------------------------------------
+
+
+def test_show_description_keeps_tabs_and_crlf_as_whitespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tab or a CRLF line end can't move the cursor or forge a line, so the
+    description shows them as whitespace, not `\\t` / `\\r` ([steer] on #1093);
+    ESC on the same line is still escaped."""
+    repo = _repo(tmp_path)
+    _item(repo, "FEAT-001", {"title": '"t"', "status": "backlog"})
+    path = repo / "work" / "FEAT-001.md"
+    body = "col\tumn \x1b[2J\r\nnext line\r\n"
+    path.write_bytes(path.read_bytes() + body.encode())
+    out = _run(repo, ["show", "FEAT-001"], monkeypatch)
+    _no_raw_control(out)
+    col = _line_with(out, "col")
+    assert "\\t" not in col and "\\r" not in out, repr(out)
+    assert "umn \\x1b[2J" in col, repr(out)
+    assert "next line" not in col and _line_with(out, "next line"), repr(out)
