@@ -659,7 +659,13 @@ def list_items(
         _list_pickable(service, items, agent, explain, as_json)
         return
 
-    ages = service.aging(items, stale_after) if as_json or stale or older_than else []
+    # plain `--json` skips the costly git source; the aging flags keep it (#1055)
+    source = click.get_current_context().get_parameter_source("stale_after")
+    use_git = bool(stale or older_than or source != click.core.ParameterSource.DEFAULT)
+    ages = (
+        service.aging(items, stale_after, use_git=use_git)
+        if as_json or stale or older_than else []
+    )
     if stale or older_than:
         kept = [
             (item, row) for item, row in zip(items, ages)

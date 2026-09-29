@@ -6766,7 +6766,8 @@ class KanbanService:
     # --- aging on `list` (#579) --------------------------------------------------
 
     def aging(
-        self, items: list[WorkItem], stale_after: timedelta = timedelta(hours=24)
+        self, items: list[WorkItem], stale_after: timedelta = timedelta(hours=24),
+        *, use_git: bool = True,
     ) -> list[dict[str, Any]]:
         """For each of `items`, in order, when it entered its current status and how
         long ago (#579): `since` (ISO with offset, or None), `since_source`
@@ -6774,11 +6775,13 @@ class KanbanService:
         `age_seconds` (None when unknown; a future `since` is clamped to 0 with
         `clock_skew`), `stale` (canonical in progress for `stale_after` or longer,
         or of unknown age) and `board`. The holder is the item's `assignee`: when
-        it took over is not known."""
+        it took over is not known. `use_git=False` skips the `git` source (its
+        `git log -G` walks the whole history): plain `list --json` does, the aging
+        flags don't (#1055, Captain's ruling)."""
         now = _now()
         found = [self._history_since(item) for item in items]
         need = [item for item, when in zip(items, found) if when is None]
-        git = self._git_status_dates(need) if need else {}
+        git = self._git_status_dates(need) if need and use_git else {}
         rows: list[dict[str, Any]] = []
         for item, when in zip(items, found):
             source = "history"
