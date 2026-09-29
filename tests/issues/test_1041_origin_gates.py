@@ -58,11 +58,11 @@ from yurtle_kanban.cli import main
 
 pytestmark = pytest.mark.usefixtures("claim_env")
 
-# --- 1. claim: `* -> in_progress` gates come from origin's config --------------------------
-
-
 # Item 1 (gates judged by origin's config) is not changed: #865's ruling keeps gate
 # checks local, pinned by test_865/test_831 ([steer] on #1041).
+
+
+# --- 2. bounce's usage line names --take-over ----------------------------------------------
 
 
 def test_module_usage_line_for_bounce_names_take_over() -> None:
@@ -74,7 +74,7 @@ def test_module_usage_line_for_bounce_names_take_over() -> None:
     assert any("--take-over" in line for line in lines), lines
 
 
-# --- 4. validate checks bounced_at / bounced_by --------------------------------------------
+# --- 3. validate checks bounced_at / bounced_by --------------------------------------------
 
 
 def validate_issues(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
