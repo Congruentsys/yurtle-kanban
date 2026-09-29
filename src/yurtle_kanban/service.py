@@ -764,10 +764,8 @@ class KanbanService:
 
         # The board always scans the type folders it writes into (#113), even
         # when the configured scan_paths leave one out
-        for type_dir in self._placement_dirs():
-            # Only folders inside the repo; an absolute root elsewhere is scanned
-            # (or not) exactly as its configured work paths say
-            if not type_dir.exists() or not type_dir.is_relative_to(self.repo_root):
+        for type_dir in self._scanned_placement_dirs():
+            if not type_dir.exists():  # the working tree's; rev readers skip this
                 continue
             rel = type_dir.relative_to(self.repo_root)
             if not any(rel == s or s in rel.parents for s in work_paths):
@@ -775,6 +773,14 @@ class KanbanService:
                     self._index_item(item)
 
         return list(self._items.values())
+
+    def _scanned_placement_dirs(self) -> set[Path]:
+        """The placement dirs a scan walks: only those inside the repo root; an
+        absolute root elsewhere is scanned (or not) exactly as its configured work
+        paths say (#113, #963, #1014). No `exists()` check: the fetched-tree readers
+        (`_board_loads`, `_rev_roots`) share it, and a folder may exist only at the
+        rev; `_scan` checks the working tree itself."""
+        return {d for d in self._placement_dirs() if d.is_relative_to(self.repo_root)}
 
     def _placement_dirs(self) -> set[Path]:
         """Every folder `create` can write into on a single board (#113)."""
@@ -2978,7 +2984,7 @@ class KanbanService:
         if not self.config.is_multi_board:
             roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
             # only those inside the repo root, as _scan loads them (#963)
-            roots += [d for d in self._placement_dirs() if d.is_relative_to(self.repo_root)]
+            roots += sorted(self._scanned_placement_dirs())
             heads = [
                 head.as_posix() for root in roots
                 if (head := self._repo_relative(root, top)) is not None
@@ -3048,17 +3054,24 @@ class KanbanService:
                     )
         return None
 
-    def _rev_roots(self, board_config: BoardConfig | None = None) -> list[str]:
-        """The folders a scan walks, relative to the work tree's top, sorted: the
-        board's path, or on a single board (None) its work paths and placement
+    def _rev_roots(
+        self, board_config: BoardConfig | None = None, scanned_only: bool = False
+    ) -> list[str]:
+        """The folders to read at a rev, relative to the work tree's top, sorted:
+        the board's path, or on a single board (None) its work paths and placement
         dirs; one computation for every reader of a fetched tree, so they can't
-        drift apart (#954, #986). A root outside the repository is left out."""
+        drift apart (#954, #986). A root outside the repository is left out.
+        `scanned_only`: only the placement dirs a scan walks, for readers of the
+        board's items (#1014); the id space reads them all, so an id committed in
+        one the scan skips is never reissued (#856's rule)."""
         top = self._git_toplevel()
         if board_config is not None:
             roots = [_under(self.repo_root, board_config.path)]
         else:
             roots = [_under(self.repo_root, p) for p in self.config.get_work_paths()]
-            roots += sorted(self._placement_dirs())
+            roots += sorted(
+                self._scanned_placement_dirs() if scanned_only else self._placement_dirs()
+            )
         return sorted({
             rel.as_posix() for root in roots
             if (rel := self._repo_relative(root, top)) is not None
@@ -4789,7 +4802,7 @@ class KanbanService:
         applied (#574). Raises `_TreeUnreadableError` when they can't all be read
         (#814): a short list would under-count."""
         top = self._git_toplevel()
-        rels = self._rev_roots(board_config)
+        rels = self._rev_roots(board_config, scanned_only=True)  # the board's items
         if not rels:
             return []
         listed = self._git_z(  # -z: names raw, never quoted (#808)
