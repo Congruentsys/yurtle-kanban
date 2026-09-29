@@ -1613,7 +1613,7 @@ def roadmap(
     elif export_fmt == "md":
         lines = ["# Roadmap\n"]
         for i, item in enumerate(items, 1):
-            priority = item.priority or "medium"
+            priority = escape_nonprintable(item.priority or "medium")
             # one list line per item: controls shown as `\x1b` / `\n` (#1101)
             assignee = escape_nonprintable(item.assignee or "unassigned")
             if item.priority_rank is not None:
