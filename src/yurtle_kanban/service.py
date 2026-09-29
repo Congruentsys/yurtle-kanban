@@ -28,6 +28,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from typing import Literal as _Literal
 from urllib.parse import urljoin
 
 import yaml
@@ -218,7 +219,7 @@ class DepNode:
     assignee: str | None
     state: str
     children: list[DepNode] = dataclasses.field(default_factory=list)
-    cycle_kind: str | None = None
+    cycle_kind: _Literal["supersession", "depends_on"] | None = None
 
 
 @dataclass(frozen=True)
