@@ -14,11 +14,6 @@ def test_abandoned_hdd_items_are_not_blocked(graph) -> None:
 
 
 def test_control_a_status_blocked_item_is_listed(graph) -> None:
-    svc = graph.service()
-    blocked = {i.id for i in svc.get_blocked_items()}
-    expected = {
-        i.id for i in svc.get_items()
-        if i.status.value == "blocked" and not svc.is_finished(i)
-    }
-    assert expected, "the fixture has no status-blocked item"
-    assert blocked == expected, (blocked, expected)
+    """Hard-coded, so a wrong `is_finished` can't agree with itself (#1078 review)."""
+    blocked = {i.id for i in graph.service().get_blocked_items()}
+    assert blocked == {"EXP-40", "EXP-41"}, blocked
