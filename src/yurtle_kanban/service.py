@@ -3712,8 +3712,9 @@ class KanbanService:
         r"|(?<![\w:-])(?:@prefix|(?i:prefix))\s+(" + _PN_PREFIX + r")?:\s*<([^<>\"{}|^`\\\s]*)>"
         r"|(?<![\w:-])(?:@base|(?i:base))\s+<([^<>\"{}|^`\\\s]*)>"
         r"|<([^<>\"{}|^`\\\s]*)>"
-        # a blank-node label, skipped whole: `_:a.b` is no `b:` name (#1001)
-        rf"|_:[\w][\w.{_PN_EXTRA}-]*(?<!\.)"
+        # a blank-node label, skipped whole: `_:a.b` is no `b:` name (#1001); a
+        # label holds no `:`, so a name right after it is read (`_:x:k`, #1020)
+        rf"|_:[\w][\w.{_PN_EXTRA}-]*(?<!\.)(?:({_PN_PREFIX})?:({_PN_LOCAL}))?"
         # a keyword ends at a `.`: `true.x:B` is `true`, `.`, `x:B` (#1001)
         rf"|(?<![\w:-])(?:true|false)(?![\w:{_PN_EXTRA}-])"
         rf"|(?<![\w:-])({_PN_PREFIX})?:({_PN_LOCAL})"
@@ -3745,7 +3746,9 @@ class KanbanService:
             return urljoin(base, ref)
 
         for match in cls._TURTLE_TERM_RE.finditer(text):
-            pfx, pfx_iri, base_iri, ref, prefix, name = match.groups()
+            pfx, pfx_iri, base_iri, ref, b_prefix, b_name, prefix, name = match.groups()
+            if b_name is not None:  # the name right after a blank-node label
+                prefix, name = b_prefix, b_name
             if pfx_iri is not None:
                 bound[pfx or ""] = resolve(pfx_iri)
                 continue
