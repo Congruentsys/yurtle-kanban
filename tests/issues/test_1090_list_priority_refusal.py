@@ -1,6 +1,7 @@
 """Issue #1090, review r1 F1: `list --priority` with an unknown value printed its
 red refusal lines on stdout (a `for` loop of prints, then `sys.exit(1)` in a
-sibling `if`, a shape the AST sweep in test_1090_red_refusals.py can't see).
+sibling `if`). The AST sweep in test_1090_red_refusals.py sees that shape since
+#1099 (its function-wide rule); this file is the behavioural pin.
 
 Expected: one refusal through `refuse()`: every unknown value's line on stderr,
 nothing on stdout, exit 1; under `--json` one object naming every value."""

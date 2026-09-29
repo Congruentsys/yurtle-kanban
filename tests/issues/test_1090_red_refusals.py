@@ -20,8 +20,8 @@ guard the fix. ``export``'s ``Unknown format`` is unreachable from argv
 
 The static sweep's rule (pinned here, widening #1086's): in ``cli.py``,
 ``hdd_commands.py`` and ``epic_commands.py``, no ``console.print`` /
-``err_console.print`` whose first argument's literal text starts with ``[red]``
-(plain or f-string, leading spaces ignored) is followed in its block — next, or
+``err_console.print`` whose first argument's literal text starts with a red markup
+tag (plain or f-string, leading spaces ignored) is followed in its block — next, or
 after only further ``console.print`` / ``err_console.print`` lines (a ``Valid
 types:`` / ``Available presets:`` / ``Example:`` hint) — by an exit
 (``sys.exit(...)``, ``ctx.exit(...)`` or ``raise SystemExit(...)``). Such a run is
@@ -31,14 +31,19 @@ Widened by #1099: in those files, no function may hold such a red print with a
 non-zero exit anywhere LATER in the same function (not in a nested def) — red rows
 in a ``for`` loop and ``sys.exit(1)`` in a later ``if invalid:`` is the same
 refusal (``list --priority`` before #1098 r1 F1). The report commands that exit
-after red report rows (``validate``, ``hdd validate``) are allowlisted by name in
-``REPORT_COMMANDS``, each with its reason.
+after red report rows (``validate``, ``hdd validate``) are allowlisted by (file,
+function) in ``REPORT_COMMANDS``, each with its reason.
+
+Widened by #1108: a red markup tag is any leading ``[...]`` tag whose
+whitespace-separated style words include ``red`` (``[red]``, ``[bold red]``,
+``[red bold]``, ``[bold red on white]``) — the style is incidental to a refusal.
 """
 
 from __future__ import annotations
 
 import ast
 import json
+import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -333,12 +338,19 @@ def _print_call(stmt: ast.stmt) -> ast.Call | None:
     return None
 
 
+_LEADING_TAG = re.compile(r"\[([^\[\]]*)\]")
+
+
 def _is_red_print(stmt: ast.stmt) -> bool:
+    """A print whose text opens with a markup tag styled `red` among its words (#1108)."""
     call = _print_call(stmt)
     if call is None or not call.args:
         return False
     text = _literal_start(call.args[0])
-    return text is not None and text.lstrip().startswith("[red]")
+    if text is None:
+        return False
+    tag = _LEADING_TAG.match(text.lstrip())
+    return tag is not None and "red" in tag.group(1).split()
 
 
 def _is_exit(stmt: ast.stmt) -> bool:
@@ -404,14 +416,15 @@ def _own_statements(func: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterator[as
 # because findings exist — the exit is the report's verdict, not a refusal of
 # the command, so the rows stay on stdout (#1090's ruling: report lines stay).
 # #1099's function-wide rule skips these; the same-block rule above still applies.
-REPORT_COMMANDS: frozenset[str] = frozenset(
+# Keyed by (file, function) (#1108): a `validate` elsewhere is swept like any other.
+REPORT_COMMANDS: frozenset[tuple[str, str]] = frozenset(
     {
         # cli.py `validate`: `DUPLICATE ID` / `DEPENDENCY CYCLE` / `BAD CONTROL FILE`
         # rows, one per issue found; `sys.exit(1)` afterwards says "issues found".
-        "validate",
+        ("cli.py", "validate"),
         # hdd_commands.py `hdd validate`: an indented `Error:` row per broken
         # hypothesis/experiment link; `sys.exit(1)` afterwards says "errors found".
-        "hdd_validate",
+        ("hdd_commands.py", "hdd_validate"),
     }
 )
 
@@ -424,7 +437,7 @@ def _sibling_refusals_in(source: str, name: str) -> list[str]:
     for node in ast.walk(ast.parse(source, filename=name)):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if node.name in REPORT_COMMANDS:
+        if (name, node.name) in REPORT_COMMANDS:
             continue
         stmts = list(_own_statements(node))
         exits = [s.lineno for s in stmts if _is_nonzero_exit(s)]
@@ -452,9 +465,13 @@ def _hand_written_refusals(path: Path) -> list[str]:
         "sys.exit(1)\n",
         'def f():\n    if x:\n        console.print("[red]nope[/red]")\n        sys.exit(1)\n',
         'try:\n    pass\nexcept E:\n    console.print(f"[red]{e}[/red]")\n    sys.exit(1)\n',
+        # #1108: any leading tag whose style words include `red`
+        'console.print("[bold red]Error: x[/bold red]")\nsys.exit(1)\n',
+        'console.print(f"  [red bold]{e}[/red bold]")\nsys.exit(1)\n',
+        'err_console.print("[bold red on white]nope[/]")\nraise SystemExit(2)\n',
     ],
     ids=["plain", "fstring-indented-raise", "err-console", "ctx-exit", "hint-between",
-         "nested-if", "except-handler"],
+         "nested-if", "except-handler", "bold-red", "red-bold", "bold-red-on-white"],
 )
 def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") != [], snippet
@@ -475,8 +492,15 @@ def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
         '_refuse(e, "[red]Unknown type: x[/red]")\n',
         # another object's print
         'table.print("[red]x[/red]")\nsys.exit(1)\n',
+        # #1108: style words are matched whole, not as substrings of `red`
+        'console.print("[redact]x[/redact]")\nsys.exit(1)\n',
+        'console.print("[bred]x[/bred]")\nsys.exit(1)\n',
+        'console.print("[bold reddish]x[/]")\nsys.exit(1)\n',
+        # a red tag only after a leading non-red tag
+        'console.print("[bold]x[/bold] [red]y[/red]")\nsys.exit(1)\n',
     ],
-    ids=["report-row", "work-between", "not-red", "red-later", "refuse", "other-print"],
+    ids=["report-row", "work-between", "not-red", "red-later", "refuse", "other-print",
+         "redact", "bred", "bold-reddish", "red-in-second-tag"],
 )
 def test_sweep_leaves_non_refusals_alone(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") == [], snippet
@@ -510,11 +534,31 @@ def test_sweep_finds_a_red_print_whose_exit_sits_in_a_sibling_block(snippet: str
 
 
 @pytest.mark.parametrize(
+    ("file", "func"),
+    [("cli.py", "validate"), ("hdd_commands.py", "hdd_validate")],
+)
+def test_sibling_sweep_skips_the_report_commands(file: str, func: str) -> None:
+    """The same shape in a report command: the rows are output, the exit a verdict."""
+    assert _sibling_refusals_in(_SIBLING_SHAPE.format(name=func), file) == []
+
+
+@pytest.mark.parametrize(
+    ("file", "func"),
+    [
+        ("epic_commands.py", "validate"),  # #1108: an `epic validate` isn't exempt
+        ("hdd_commands.py", "validate"),
+        ("cli.py", "hdd_validate"),
+        ("s.py", "validate"),
+    ],
+)
+def test_allowlist_is_keyed_by_file_and_function(file: str, func: str) -> None:
+    """#1108: a report command's NAME in another file is swept like any function."""
+    assert _sibling_refusals_in(_SIBLING_SHAPE.format(name=func), file) != []
+
+
+@pytest.mark.parametrize(
     "snippet",
     [
-        # the same shape in a report command: the rows are output, the exit a verdict
-        _SIBLING_SHAPE.format(name="validate"),
-        _SIBLING_SHAPE.format(name="hdd_validate"),
         # the exit belongs to a DIFFERENT function
         'def a():\n    console.print("[red]row[/red]")\n'
         "def b():\n    sys.exit(1)\n",
@@ -527,7 +571,7 @@ def test_sweep_finds_a_red_print_whose_exit_sits_in_a_sibling_block(snippet: str
         'def a():\n    for r in rs:\n        console.print("[red]row[/red]")\n'
         "    sys.exit(0)\n",
     ],
-    ids=["allowlisted-validate", "allowlisted-hdd-validate", "exit-in-other-function",
+    ids=["exit-in-other-function",
          "exit-in-nested-function", "exit-before", "exit-zero"],
 )
 def test_sibling_sweep_leaves_non_refusals_alone(snippet: str) -> None:
