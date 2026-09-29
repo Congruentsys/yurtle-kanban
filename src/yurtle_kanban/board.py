@@ -226,6 +226,11 @@ def render_item_detail(
         table.add_row("Can move to", escape(", ".join(next_statuses) or "none"))
     table.add_row("Priority", escape(str(item.priority or "medium")))
     table.add_row("Assignee", escape(str(item.assignee or "unassigned")))
+    if item.bounces:  # (#578)
+        at = item.metadata.get("bounced_at")
+        at = at.isoformat() if hasattr(at, "isoformat") else at
+        by = item.metadata.get("bounced_by")
+        table.add_row("Bounced", escape(f"Bounced {item.bounces}× (last by {by} at {at})"))
 
     if item.created:
         table.add_row("Created", item.created.isoformat())

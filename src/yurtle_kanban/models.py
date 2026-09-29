@@ -341,6 +341,13 @@ class WorkItem:
         return self.status == WorkItemStatus.BLOCKED
 
     @property
+    def bounces(self) -> int:
+        """How many times the item was bounced: frontmatter `bounces`, 0 when
+        absent or malformed (#578)."""
+        n = self.metadata.get("bounces")
+        return n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+
+    @property
     def priority_score(self) -> int:
         """Get numeric priority score for sorting."""
         priority_map = {
@@ -397,6 +404,7 @@ class WorkItem:
             "priority_rank": self.priority_rank,
             "value_summary": self.value_summary,
             "compute_requirement": self.compute_requirement,
+            "bounces": self.bounces,  # (#578)
             "triple_count": len(self.graph) if self.graph else 0,
         }
 

@@ -115,6 +115,7 @@ yurtle-kanban export --format json
 | `list` | List work items with optional filters |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
 | `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`) |
+| `bounce` | Give an ill-defined item back (`--reason TEXT` or `--reason-file PATH\|-`; `--agent`, `--take-over`): to backlog, unassigned, not pickable until its body is edited |
 | `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
 | `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |
 | `states` | Each board's lifecycle: status → legal next statuses (`--board`, `--type`, `--json` with gate ids); gates, WIP and workflow rules can still refuse |

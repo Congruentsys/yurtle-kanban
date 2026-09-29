@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import fnmatch
+import hashlib
 import json
 import logging
 import os
@@ -95,7 +96,7 @@ class _Claimed:
     title: str
     old_status: str
     new_status: str
-    assignee: str
+    assignee: str | None
     old_assignee: str = ""
 
 
@@ -1024,6 +1025,8 @@ class KanbanService:
             }
             # Preserve original status string for theme-aware rendering
             metadata["_original_status"] = status_str
+            if "bounce_sha" in metadata:  # the current body, for `pickable` (#578)
+                metadata["_body_sha"] = self.body_hash(content)
 
             # Parse RDF graph from frontmatter + fenced blocks. _parse_graph blanks the
             # too-large fields found above, reusing this parse (#277, #296, #311), or
@@ -4624,6 +4627,113 @@ class KanbanService:
         )
         return Change({rel: new_text}, message, data=claimed)
 
+    def bounce_item(
+        self,
+        item_id: str,
+        *,
+        actor: str,
+        reason: str,
+        take_over: bool = False,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """Bounce `item_id` (#578): give it back to the theme's backlog status,
+        unassigned, stamped with its body hash so `pickable` refuses it until the
+        body is edited. One compare-and-swap commit through `sync_and_push`, judged
+        on the fetched item (`_bounce_change`); STATUS_CHANGE fires once it has
+        landed (`won` or `local`), when the status changed."""
+        actor = check_identity(actor, "--agent")
+        self._check_text(reason=reason)
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            return self._bounce_change(read, item_id, actor, reason, take_over)
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        bounced = outcome.data
+        if outcome.kind in ("won", "local") and isinstance(bounced, _Claimed) and (
+            bounced.old_status != bounced.new_status
+        ):
+            self._hook_engine.trigger(
+                HookEvent.STATUS_CHANGE,
+                HookContext(
+                    event=HookEvent.STATUS_CHANGE,
+                    item_id=bounced.item_id,
+                    item_type=bounced.item_type,
+                    title=bounced.title,
+                    old_status=bounced.old_status,
+                    new_status=bounced.new_status,
+                    assignee=None,
+                ),
+            )
+        return outcome
+
+    def _bounce_change(
+        self, read: Read, item_id: str, actor: str, reason: str, take_over: bool
+    ) -> Change | NoOp | Refuse:
+        """`bounce`'s `mutate` (#578): refuse a finished item, and one held by
+        another unless `take_over` (recorded as `kb:takenOverFrom`); then move it to
+        canonical backlog, a sanctioned transition exempt from the transition table
+        and WIP limits (`* -> backlog` gates still apply, history `kb:bounced`),
+        clear the assignee, write the frontmatter stamp (`bounce_sha`, `bounced_by`,
+        `bounced_at`, `bounces` N+1) and append the informational comment."""
+        found = self._item_target(read, item_id, "a bounce")
+        if isinstance(found, Refuse):
+            return found
+        rel, text, item = found
+        judge = self if read.rev is None else self._judge_at(read.rev)
+        if judge.is_finished(item):
+            return Refuse(
+                f"{item.id} is {judge.status_label(item)}: a finished item can't be bounced"
+            )
+        held = item.assignee
+        holder = (held if isinstance(held, str) else str(held or "")).strip()
+        mine = bool(holder) and same_actor(holder, actor)
+        if holder and not mine and not take_over:
+            return Refuse(
+                f"{item.id} is held by {holder}; to take it over use bounce --take-over",
+                holder=holder,
+            )
+        old_status, backlog = item.status, WorkItemStatus.BACKLOG
+        proposed = replace(item, status=backlog, assignee=None, updated=datetime.now())
+        blocking = [
+            r for r in self._evaluate_gates(proposed, old_status, backlog, {})
+            if not r.passed and r.severity == "blocking"
+        ]
+        if blocking:
+            return Refuse(f"Gate check failed: {'; '.join(r.message for r in blocking)}")
+
+        sha = self.body_hash(text)
+        taken = holder if holder and not mine else None
+        new_text = judge._history_text(  # origin's name for backlog (#865)
+            text, proposed, backlog, actor=actor, taken_over_from=taken, bounced=True
+        )
+        if holder:
+            new_text = self._add_or_update_frontmatter_field(new_text, "assignee", "null")
+        count = item.metadata.get("bounces")
+        count = count if isinstance(count, int) and not isinstance(count, bool) else 0
+        for key, value in (
+            ("bounce_sha", f'"{sha}"'),
+            ("bounced_by", yaml_scalar(actor)),
+            ("bounced_at", datetime.now().astimezone().isoformat(timespec="seconds")),
+            ("bounces", str(max(count, 0) + 1)),
+        ):
+            new_text = self._add_or_update_frontmatter_field(new_text, key, value)
+        notice = f"[bounce by {actor}, body-sha:{sha[:12]}] {reason}"
+        new_text = self._with_comment(new_text, Comment(content=notice, author=actor))
+        message = f"Bounce {item.id} to {judge.status_label(proposed)}"
+        if taken is not None:
+            message += f" (taken over from {taken})"
+        bounced = _Claimed(
+            item_id=item.id, item_type=item.item_type.value, title=item.title,
+            old_status=old_status.value, new_status=backlog.value, assignee=None,
+            old_assignee=holder,
+        )
+        return Change({rel: new_text}, message, data=bounced)
+
     def _item_target(
         self, read: Read, item_id: str, action: str
     ) -> tuple[str, str, WorkItem] | Refuse:
@@ -5238,12 +5348,14 @@ class KanbanService:
         closed_by: str | None = None,
         gates_skipped: bool = False,
         taken_over_from: str | None = None,
+        bounced: bool = False,
     ) -> str:
         """`content` (an item's LF text) moved to `new_status`: the frontmatter
         status and assignee edits and the status-history node that
         `_update_item_file_with_history` writes, text to text, so `claim` makes the
         same edit to a fetched file (#574). `taken_over_from` records
-        `kb:takenOverFrom` (`""`: there was no holder)."""
+        `kb:takenOverFrom` (`""`: there was no holder); `bounced`, `kb:bounced`
+        (#578)."""
         # Determine board-native status name (e.g., 'active' for HDD), on a single
         # board too (#439)
         native_status = self._item_reverse_status_mapping(item).get(
@@ -5268,6 +5380,8 @@ class KanbanService:
             ttl_entry += '\n    kb:forcedMove "true"^^xsd:boolean ;'
         if gates_skipped:
             ttl_entry += '\n    kb:gatesSkipped "true"^^xsd:boolean ;'
+        if bounced:
+            ttl_entry += '\n    kb:bounced "true"^^xsd:boolean ;'
         if closed_by:
             # Sanitize: reject characters that could break TTL string syntax
             if re.search(r'[\n\r\\" <>]', closed_by):
@@ -5705,7 +5819,11 @@ class KanbanService:
     def _update_item_with_comment(self, item: WorkItem, comment: Comment) -> None:
         """Update item file to include new comment."""
         content, eol = self._read_item_text(item.file_path)
+        self._write_item_text(item.file_path, self._with_comment(content, comment), eol)
 
+    def _with_comment(self, content: str, comment: Comment) -> str:
+        """`content` (an item's LF text) with `comment` appended to its
+        `## Comments` section, text to text (#578)."""
         # Add comment section if not exists (a `## Comments` line in a code
         # block doesn't count, #583)
         if self._find_line_outside_fences(content, 0, self._COMMENTS_RE) < 0:
@@ -5716,9 +5834,7 @@ class KanbanService:
         # a heading-shaped line in the text is escaped, so it can't read back as
         # a second comment; the parser unescapes it (#605)
         text = "\n".join(self._escape_comment_line(ln) for ln in comment.content.split("\n"))
-        content += f"\n### {comment.author} ({timestamp})\n\n{text}\n"
-
-        self._write_item_text(item.file_path, content, eol)
+        return content + f"\n### {comment.author} ({timestamp})\n\n{text}\n"
 
     def get_status_history(self, item_id: str) -> list[dict[str, Any]]:
         """Get status history for an item.
@@ -5993,7 +6109,8 @@ class KanbanService:
 
         1. canonical status `ready` (hdd has none: never pickable);
         2. no assignee, or `actor` is it (`same_actor`);
-        3. every `depends_on` is `met`.
+        3. no unrepaired bounce: `bounce_sha` differs from the body hash (#578);
+        4. every `depends_on` is `met`.
         """
         return self._pickable(item, actor)
 
@@ -6014,6 +6131,14 @@ class KanbanService:
         holder = (held if isinstance(held, str) else str(held or "")).strip()
         if holder and not take_over and not (actor and same_actor(holder, actor)):
             return False, f"held by {holder}"
+        stamp = item.metadata.get("bounce_sha")
+        if stamp is not None and str(stamp) == item.metadata.get("_body_sha"):
+            by, at = item.metadata.get("bounced_by"), item.metadata.get("bounced_at")
+            when = at.isoformat() if isinstance(at, (date, datetime)) else at
+            return False, (
+                f"{item.id} carries an unrepaired bounce "
+                f"(body unchanged since {by} bounced it at {when})"
+            )
         deps = self._id_list(item.depends_on)
         if deps:
             index = self._dep_index() if index is None else index
@@ -6706,6 +6831,21 @@ class KanbanService:
             text, start, cls._BODY_END_LINE_RE, cls._BODY_END_RE
         )
         return start, len(text) if end < 0 else end
+
+    @classmethod
+    def body_hash(cls, text: str) -> str:
+        """The body hash a bounce stamps (#578, Expected 2): `body_span` of `text`,
+        CRLF/CR as LF, trailing whitespace stripped per line, leading and trailing
+        blank lines dropped, joined with LF (no final newline), sha256 hex. The
+        bounce's own writes (frontmatter, history, comments) leave it unchanged."""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        start, end = cls.body_span(text)
+        lines = [line.rstrip() for line in text[start:end].split("\n")]
+        while lines and not lines[0]:
+            lines.pop(0)
+        while lines and not lines[-1]:
+            lines.pop()
+        return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
     def swallowed_fence_line(self, content: str) -> int | None:
         """The file line of a body code fence that runs over what follows the body,
