@@ -196,27 +196,64 @@ def extract(source: str, where: str = "<src>") -> dict[str | tuple[str, str], li
     return found
 
 
-def unread_git_lists(source: str, where: str = "<src>") -> list[str]:
-    """#1129: every list or tuple literal whose FIRST element is "git" but which
-    `_git_argv` would not read as a git call -> its place. A command kept in a variable
-    (`cmd = ["git", ...]; run(cmd)`), concatenated (`["git", "x"] + rest`) or passed as
-    `args=[...]` is invisible to `extract`, so a new git feature used that way would
-    keep the floor check green. Other "git" strings (a dict value, a label, a
-    `shutil.which("git")`) are not argv and are not checked."""
+# "git" strings in src/ that are not argv, each with why (#1129): the backstop skips them
+NOT_ARGV = {
+    ("src/yurtle_kanban/service.py", 'when, source = git.get(item.file_path.resolve()), "git"'):
+        "aging()'s since_source label",
+}
+
+
+def _call_name(call: ast.Call) -> str | None:
+    f = call.func
+    return f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+
+
+def unread_git_lists(
+    source: str, where: str = "<src>", allow: Iterable[tuple[str, str]] = ()
+) -> list[str]:
+    """#1129: every "git" string constant that is not element 0 of a git argv list
+    `_git_argv` reads -> its place, unless (where, its stripped line) is in `allow`.
+    A command kept in a variable (`cmd = ["git", ...]; run(cmd)`), concatenated,
+    passed as `args=[...]`, as a tuple, behind an alias (`GIT = "git"`), after
+    another program (`["env", "git", ...]`) or as a wrapper's list argument is
+    invisible to `extract`, so a new git feature used that way would keep the floor
+    check green. So is a shell command line: `run("git log ...", shell=True)` and
+    `"git log".split()` are flagged too."""
     tree = ast.parse(source)
+    lines = source.splitlines()
+    allowed = set(allow)
     read: set[int] = set()
+    places: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _git_argv(node) is not None and node.args:
-            read.add(id(node.args[0]))
-    lines = sorted(
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.List, ast.Tuple))
-        and node.elts
-        and _str(node.elts[0]) == "git"
-        and id(node) not in read
-    )
-    return [f"{where}:{line}" for line in lines]
+        if not isinstance(node, ast.Call):
+            continue
+        # only a direct list argv is read: a wrapper's arguments follow "git" (#1129 F2)
+        first = node.args[0] if node.args else None
+        if (
+            _call_name(node) not in GIT_HELPERS
+            and isinstance(first, ast.List)
+            and first.elts
+            and _str(first.elts[0]) == "git"
+        ):
+            read.add(id(first.elts[0]))
+        shell = any(
+            k.arg == "shell" and isinstance(k.value, ast.Constant) and k.value.value is True
+            for k in node.keywords
+        )
+        line = first.values[0] if isinstance(first, ast.JoinedStr) and first.values else first
+        if shell and line is not None and (_str(line) or "").startswith("git "):
+            places.add(node.lineno)
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr == "split":
+            if (_str(f.value) or "").startswith("git "):
+                places.add(node.lineno)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and node.value == "git" and id(node) not in read:
+            places.add(node.lineno)
+    return [
+        f"{where}:{n}" for n in sorted(places)
+        if (where, lines[n - 1].strip()) not in allowed
+    ]
 
 
 def extract_src() -> dict[str | tuple[str, str], list[str]]:
@@ -290,7 +327,7 @@ def test_every_git_argv_literal_in_src_is_one_the_extractor_reads() -> None:
         at
         for path in sorted(SRC.rglob("*.py"))
         for at in unread_git_lists(
-            path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix()
+            path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix(), NOT_ARGV
         )
     ]
     assert not unread, (
@@ -313,11 +350,21 @@ def test_the_backstop_flags_git_argv_it_cannot_read() -> None:
         "subprocess.run(['git', 'status', '--porcelain'])\n"  # read: fine
         "self._git_run('log', '-1')\n"  # a wrapper: fine
         "subprocess.run(['git', *args])\n"  # a forwarder: read (nothing literal)
-        "when, source = x, 'git'\n"  # a label, not argv
-        "shutil.which('git')\n"  # not argv
-        "{'kind': 'git'}\n"  # not argv
+        "GIT = 'git'\n"  # 10: an alias (r1 F1)
+        "subprocess.run(['env', 'X=1', 'git', 'worktree'])\n"  # 11: after a program (r1 F1)
+        "self._git_run(['git', 'log', '--new'])\n"  # 12: a wrapper given a list (r1 F2)
+        "subprocess.run('git log --format=%H', shell=True)\n"  # 13: a shell line (r1 F3)
+        "subprocess.run(f'git log {x}', shell=True)\n"  # 14: an f-string shell line
+        "subprocess.run('git log'.split())\n"  # 15: split
+        "when, source = x, 'git'\n"  # 16: a label, allowed below
+        "print('git exited 1')\n"  # a message, not argv
+        "subprocess.run('ls', shell=True)\n"  # not git
     )
-    assert unread_git_lists(snippet) == ["<src>:2", "<src>:4", "<src>:5", "<src>:6"]
+    assert unread_git_lists(snippet) == [
+        f"<src>:{n}" for n in (2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16)
+    ]
+    allow = [("<src>", "when, source = x, 'git'")]
+    assert "<src>:16" not in unread_git_lists(snippet, allow=allow)
 
 
 def test_split_and_pretty_format_placeholders_are_read() -> None:
