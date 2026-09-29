@@ -1944,10 +1944,13 @@ class KanbanService:
     def _lookup(self, item_id: str) -> WorkItem | None:
         """The cached item for `item_id`: an exact match first, else the one whose
         ID folds to the same (`fold_id`), since `exp-9` and `EXP-9` are one ID
-        (#732, #741, #817)."""
+        (#732, #741, #817), else the one with the same `_dup_key`, since `EXP-9` is
+        `EXP-009` (#641, #1125). Two such holders are a duplicate (#795)."""
         item = self._items.get(item_id)
         if item is None and (folded := self._folded_items.get(fold_id(item_id))):
             item = self._items.get(folded.id)
+        if item is None and (keyed := self._keyed_items.get(self._dup_key(item_id))):
+            item = self._items.get(keyed.id)
         return item
 
     def _current_item(self, item_id: str) -> WorkItem | None:
@@ -7068,7 +7071,7 @@ class KanbanService:
             ]
             dropped = set(self._id_list(edits.remove_depends_on or []))
             new_deps = [d for d in new_deps if d not in dropped]
-            self._check_new_dependencies(item, new_deps, edits.allow_unknown, board)
+            new_deps = self._check_new_dependencies(item, new_deps, edits.allow_unknown, board)
         new_related = None if edits.related is None else self._id_list(edits.related)
 
         original = content
@@ -7272,26 +7275,28 @@ class KanbanService:
         new_deps: list[str],
         allow_unknown: bool,
         board: tuple[dict[str, list[str]], dict[str, list[Path]]] | None = None,
-    ) -> None:
-        """Refuse the targets this edit adds to `item.depends_on` (#576): the item
-        itself, an ID on more than one board, an ID on no board (unless
-        `allow_unknown`), or one that leads back to the item. Edges the item already
-        has are not re-checked, so an unrelated edit on an item already in a cycle,
-        or with a dangling target, still goes through. `board` is the (dependency
-        graph, duplicated IDs) to check against, e.g. a fetched commit's (#574);
-        default the scanned board's."""
+    ) -> list[str]:
+        """`new_deps`, each target this edit adds to `item.depends_on` spelled as the
+        board spells it (`EXP-9` is written `EXP-009`; #641, #1125); refuses
+        (#576) the item itself, an ID on more than one board, an ID on no board
+        (unless `allow_unknown`), or one that leads back to the item. Edges the item
+        already has are not re-checked, so an unrelated edit on an item already in a
+        cycle, or with a dangling target, still goes through. `board` is the
+        (dependency graph, duplicated IDs) to check against, e.g. a fetched commit's
+        (#574); default the scanned board's."""
         me = fold_id(item.id)
         had = set(self._id_list(item.depends_on))
         added = [d for d in new_deps if d not in had]
         if not added:
-            return
+            return new_deps
         if board is None:
             graph = self.dependency_graph()
             duplicated = {fold_id(i): files for i, files in self.duplicate_ids.items()}
         else:
             graph, duplicated = dict(board[0]), board[1]
+        named: dict[str, str] = {}
         for target in added:
-            if target == me:
+            if self._dup_key(target) == self._dup_key(me):
                 raise InputRefused(f"{me} can't depend on itself")
             if (dup := self._duplicate_key(target, duplicated)) is not None:
                 where = ", ".join(self._display_path(f) for f in duplicated[dup])
@@ -7299,18 +7304,32 @@ class KanbanService:
                     f"{target} is on more than one board ({where}): a dependency on it "
                     "is ambiguous; fix the duplicate ID first"
                 )
-            if target not in graph and not allow_unknown:
+            found = self._graph_id(target, graph)
+            if found is None and not allow_unknown:
                 raise InputRefused(
                     f"{target} is on no board: check the ID, or allow an item outside "
                     "this repo with --allow-unknown"
                 )
+            named[target] = found or target
+        new_deps = list(dict.fromkeys(named.get(d, d) for d in new_deps))
+        added = [d for d in dict.fromkeys(named.values()) if d not in had]
         graph[me] = new_deps
-        cycle = self.find_cycle(me, graph, via=added)
+        cycle = self.find_cycle(me, graph, via=added) if added else None
         if cycle:
             raise InputRefused(
                 f"{me} can't depend on {cycle[1]}: it closes a dependency "
                 f"cycle: {' → '.join(cycle)}"
             )
+        return new_deps
+
+    @classmethod
+    def _graph_id(cls, target: str, graph: dict[str, list[str]]) -> str | None:
+        """The key of `graph` that is `target`: an exact match first, else the one
+        with the same `_dup_key` (`EXP-9` finds `EXP-009`; #641, #1125), or None."""
+        if target in graph:
+            return target
+        key = cls._dup_key(target)
+        return next((k for k in graph if cls._dup_key(k) == key), None)
 
     def _display_path(self, path: Path) -> str:
         """`path` relative to the repo when it is inside it."""
