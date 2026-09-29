@@ -33,6 +33,7 @@ from rich.console import Console
 from yurtle_kanban import config as config_mod
 from yurtle_kanban._click import refuse
 from yurtle_kanban.cli import main
+from yurtle_kanban.service import ControlState, KanbanService
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 CLI = "from yurtle_kanban.cli import main; main()"
@@ -237,3 +238,37 @@ def test_default_console_on_non_tty_stderr_is_plain(
         refuse("boom", console=Console())
     captured = capsys.readouterr()
     assert captured.err == "Error: boom\n", repr(captured.err)
+
+
+# --- r1 F3: a halted board's refusal (exit 8) through refuse() -----------------------
+
+
+def _halt(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = ControlState(mode="halt", reason="freeze", by="Ops", at="2026-01-01")
+    monkeypatch.setattr(KanbanService, "control_state", lambda self, **kw: state)
+
+
+@pytest.mark.parametrize(
+    "args", [["next"], ["list", "--pickable"]], ids=["next", "list-pickable"]
+)
+def test_halted_board_refusal_prints_on_stderr(
+    board: Path, monkeypatch: pytest.MonkeyPatch, args: list[str]
+) -> None:
+    _halt(monkeypatch)
+    result = _run(args)
+    shown = _shown(result)
+    assert result.exit_code == 8, shown
+    assert "Error: board halted by Ops" in result.stderr, shown
+    assert "board halted" not in result.stdout, shown
+
+
+def test_control_halted_board_json_refusal_on_stdout(
+    board: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _halt(monkeypatch)
+    result = _run(["list", "--pickable", "--json"])
+    shown = _shown(result)
+    assert result.exit_code == 8, shown
+    payload = json.loads(result.stdout)
+    assert payload["success"] is False, shown
+    assert payload["error"].startswith("board halted by Ops"), shown

@@ -184,11 +184,8 @@ def _halt_gate(service: KanbanService) -> None:
     """For `next`, `list --pickable` and `claim --next` (#582): on a halted board
     print why and exit 8; else note a stale last fetch on stderr."""
     control = service.control_state(fresh=True)  # memoised for pick_report (#1067)
-    if control.halted:
-        if json_requested():
-            json_refusal(control.refusal(), exit_code=HALTED)
-        console.print(f"[red]Error: {safe(control.refusal())}[/red]", soft_wrap=True)
-        sys.exit(HALTED)
+    if control.halted:  # a refusal: on stderr, or one JSON object (#1080)
+        refuse(control.refusal(), console=console, exit_code=HALTED)
     if age := control.fetch_age():
         click.echo(f"note: {age}", err=True)
 
