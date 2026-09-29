@@ -41,12 +41,11 @@ import pytest
 from click.testing import CliRunner
 
 import yurtle_kanban.cli as cli_mod
-from tests.issues.test_574_claim import ITEM, ITEM_ID, A, claim, frontmatter, service
+from tests.issues.test_574_claim import ITEM, ITEM_ID, service
 from tests.issues.test_578_bounce import (
     bounce,
     local_item,
     local_repo,
-    native,
     ok,
     run_cli,
     sync_a,
@@ -56,7 +55,6 @@ from tests.issues.test_585_create_push_loop import World, git
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
-from yurtle_kanban.models import WorkItemStatus
 
 pytestmark = pytest.mark.usefixtures("claim_env")
 
@@ -123,68 +121,8 @@ def local_only(world: World, tmp_path: Path, gates: dict[str, Any]) -> None:
 # --- 1. claim: `* -> in_progress` gates come from origin's config --------------------------
 
 
-def test_claim_refused_by_a_gate_only_origin_has(world, tmp_path) -> None:
-    origin_only(world, tmp_path, gate("* -> in_progress", CLAIM_GATE_MSG))
-    base = world.remote_sha()
-
-    out = claim(world.a, A)
-
-    assert out.kind == "refused", (
-        f"origin's `* -> in_progress` gate must judge the claim: {out.kind}: {out.message}"
-    )
-    assert "Gate check failed" in out.message, out.message
-    assert CLAIM_GATE_MSG in out.message, out.message
-    assert world.remote_sha() == base
-
-
-def test_claim_wins_when_origin_removed_the_local_gate(world, tmp_path) -> None:
-    local_only(world, tmp_path, gate("* -> in_progress", CLAIM_GATE_MSG))
-    base = world.remote_sha()
-
-    out = claim(world.a, A)
-
-    assert out.kind == "won", (
-        f"origin has no gate, so A's stale local gate must not refuse: "
-        f"{out.kind}: {out.message}"
-    )
-    assert world.remote_sha() != base
-    fm = frontmatter(world.remote_show(ITEM))
-    assert fm["assignee"] == A, fm
-    assert fm["status"] in {"underway", "in_progress"}, fm
-
-
-# --- 2. bounce: `* -> backlog` gates come from origin's config -----------------------------
-
-
-def test_bounce_refused_by_a_gate_only_origin_has(world, tmp_path, monkeypatch) -> None:
-    origin_only(world, tmp_path, gate("* -> backlog", BOUNCE_GATE_MSG))
-    base = world.remote_sha()
-
-    result = bounce(world, monkeypatch)
-
-    output = " ".join(result.output.split())
-    assert result.exit_code == 1, (
-        f"origin's `* -> backlog` gate must judge the bounce: exit {result.exit_code}: "
-        f"{output}"
-    )
-    assert BOUNCE_GATE_MSG in output, output
-    assert world.remote_sha() == base
-
-
-def test_bounce_wins_when_origin_removed_the_local_gate(world, tmp_path, monkeypatch) -> None:
-    local_only(world, tmp_path, gate("* -> backlog", BOUNCE_GATE_MSG))
-    base = world.remote_sha()
-
-    result = bounce(world, monkeypatch)
-
-    ok(result)
-    assert world.remote_sha() != base
-    fm = frontmatter(world.remote_show(ITEM))
-    assert fm.get("bounces") == 1, fm
-    assert fm["status"] == native(world.a, WorkItemStatus.BACKLOG), fm
-
-
-# --- 3. the module usage line names --take-over -------------------------------------------
+# Item 1 (gates judged by origin's config) is not changed: #865's ruling keeps gate
+# checks local, pinned by test_865/test_831 ([steer] on #1041).
 
 
 def test_module_usage_line_for_bounce_names_take_over() -> None:
