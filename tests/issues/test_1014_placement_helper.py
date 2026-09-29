@@ -1,23 +1,18 @@
 """Issue #1014: one helper, ``_scanned_placement_dirs()``, for "the placement dirs
-inside ``repo_root``" — the ones ``_scan`` walks — used by ``_scan``, ``_board_loads``
-and ``_rev_roots``.
+inside ``repo_root``" (the ones ``_scan`` walks), used by ``_scan``, ``_board_loads``
+and ``_rev_roots(scanned_only=True)``.
 
-``_rev_roots`` (#986) took every placement dir, filtered only to the git top, so the
-fetched-tree readers (``_ids_at``, ``_items_at``) read a placement dir the scan skips.
-[steer] (bucket 1): the helper returns the placement dirs inside ``repo_root``, with
-no ``exists()`` check; ``_scan`` adds its own ``exists()`` on the working tree, while
-``_board_loads`` and ``_rev_roots`` read a fetched tree and skip it. For ``_rev_roots``
-this is a behaviour change: a placement dir outside ``repo_root`` but inside the git
-top is no longer read at a rev, matching the scan (#954).
+[steer], amended: the ITEM readers (``_scan``, ``_board_loads``, ``_items_at``) follow
+the scan and skip a placement dir outside ``repo_root``; the ID SPACE (``_ids_at``,
+``next-id``, explicit-id collisions) stays conservative and reads every placement
+dir, so an id committed in one the scan skips is never reissued (#856's rule). The
+helper has no ``exists()`` check: ``_scan`` adds its own on the working tree, while
+the fetched-tree readers skip it.
 
 Layout (test_963's ``outside``): ``.kanban/`` in ``proj/``, absolute ``paths.root``
 ``<top>/shared/``, scan path ``<top>/shared/active/``; the placement dirs
 (``shared/expeditions/`` ...) lie outside ``repo_root``. Control (``inside``): the
 root at ``<top>/proj/work/``, whose placement dirs the scan reads.
-
-Allocation (the steer's consequence): an id held only by a file in a placement dir
-outside ``repo_root`` is seen by no scan, so ``next-id`` no longer counts it —
-exactly as it never counted a file in any other folder the board doesn't walk.
 """
 
 from __future__ import annotations
@@ -169,7 +164,7 @@ def test_helper_is_placement_dirs_inside_repo_root_without_exists(
     assert missing <= set(svc._scanned_placement_dirs())
 
 
-# --- 3. allocation: an id only in an outside placement dir is not counted -----------
+# --- 3. allocation: an id in any placement dir is counted (the id space) -----------
 
 
 def _alloc_layout(kind: str, top: Path) -> Layout:
@@ -189,7 +184,7 @@ def _alloc_layout(kind: str, top: Path) -> Layout:
 
 
 @pytest.mark.parametrize("kind, want", [("outside", 8), ("inside", 8)])
-def test_next_id_counts_only_what_the_scan_walks(
+def test_next_id_counts_every_placement_dir(
     tmp_path: Path, kind: str, want: int
 ) -> None:
     """EXP-007 is counted inside and outside repo_root alike: the id space is
