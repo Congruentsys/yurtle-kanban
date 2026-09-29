@@ -6358,6 +6358,49 @@ class KanbanService:
         """Get all blocked items."""
         return self.get_items(status=WorkItemStatus.BLOCKED)
 
+    def blocked(
+        self, board: str | None = None, include_backlog: bool = False
+    ) -> list[tuple[WorkItem, bool, list[DepNode]]]:
+        """`blocked`'s listing (#577), as (item, status_blocked, unmet): each
+        unfinished item that is status-blocked (canonical blocked; hdd abandoned is
+        finished, so never) or dependency-blocked (ready, in_progress or review, plus
+        backlog with `include_backlog`, and a depends_on item not met). `board`
+        limits the items listed, not where dependencies are found. The CLI and MCP
+        `kanban_get_blocked` both read this (#1066)."""
+        waiting = {WorkItemStatus.READY, WorkItemStatus.IN_PROGRESS, WorkItemStatus.REVIEW}
+        if include_backlog:
+            waiting.add(WorkItemStatus.BACKLOG)
+        listed: list[tuple[WorkItem, bool, list[DepNode]]] = []
+        for item in self.get_items(board=board):
+            if self.is_finished(item):
+                continue
+            status_blocked = item.status == WorkItemStatus.BLOCKED
+            if not status_blocked and item.status not in waiting:
+                continue
+            unmet = self.unmet_dependencies(item) if item.depends_on else []
+            if status_blocked or unmet:
+                listed.append((item, status_blocked, unmet))
+        return listed
+
+    def blocked_report(
+        self, board: str | None = None, include_backlog: bool = False
+    ) -> dict[str, Any]:
+        """`blocked --json`'s payload, which MCP `kanban_get_blocked` returns too
+        (#577, #1066)."""
+        data = []
+        for item, status_blocked, unmet in self.blocked(board, include_backlog):
+            item_board = self._get_board_for_item(item)
+            data.append({
+                "id": item.id,
+                "board": item_board.name if item_board else None,
+                "status": self.status_label(item),
+                "canonical_status": item.status.value,
+                "assignee": item.assignee,
+                "status_blocked": status_blocked,
+                "unmet": [dataclasses.asdict(n) for n in unmet],
+            })
+        return {"items": data}
+
     def get_my_items(self, assignee: str) -> list[WorkItem]:
         """Get items assigned to a specific person."""
         return self.get_items(assignee=assignee)

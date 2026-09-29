@@ -226,10 +226,26 @@ class KanbanMCPServer:
             },
             {
                 "name": "kanban_get_blocked",
-                "description": "Get all blocked work items.",
+                "description": (
+                    "List blocked items, as `blocked --json` does: status-blocked "
+                    "items (never hdd abandoned) plus ready, in_progress and review "
+                    "items with unmet dependencies, each with its `unmet` tree."
+                ),
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "board": {
+                            "type": "string",
+                            "description": (
+                                "Only this board's items (dependencies are found on "
+                                "every board)"
+                            ),
+                        },
+                        "all": {
+                            "type": "boolean",
+                            "description": "Also backlog items with unmet dependencies",
+                        },
+                    },
                 },
             },
             {
@@ -612,13 +628,10 @@ class KanbanMCPServer:
         }
 
     def _get_blocked(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Get all blocked items."""
-        items = self.service.get_blocked_items()
-
-        return {
-            "blocked_items": [item.to_dict() for item in items],
-            "count": len(items),
-        }
+        """What `blocked --json` gives, from the same service function (#1066)."""
+        if error := self._check_booleans(args, "all"):
+            return error
+        return self.service.blocked_report(args.get("board"), args.get("all", False))
 
     def _suggest_next(self, args: dict[str, Any]) -> dict[str, Any]:
         """Suggest the next item to work on: the item `next` gives (#575)."""
