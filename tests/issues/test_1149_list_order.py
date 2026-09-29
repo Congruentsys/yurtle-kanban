@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -173,3 +174,13 @@ def test_roadmap_ranked_with_type_still_filters(multi: Path) -> None:
     result = _invoke("roadmap", "--ranked", "--type", "bogus")
     assert result.exit_code == 1, result.output
     assert "Unknown type: bogus" in result.stderr, result.stderr
+
+
+def test_list_canonical_type_still_filters(multi: Path) -> None:
+    """r1 F1: a canonical `--type` is filtered by the late branch; `bug` on board b
+    (a spec item and a task, both canonical task) lists nothing."""
+    result = _invoke("list", "--board", "b", "--type", "bug", "--json")
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout) == [], result.stdout
+    both = json.loads(_invoke("list", "--board", "b", "--type", "task", "--json").stdout)
+    assert sorted(i["id"] for i in both) == ["DOC-002", "DOC-003"], both
