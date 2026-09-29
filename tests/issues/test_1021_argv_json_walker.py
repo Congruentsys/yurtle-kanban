@@ -156,3 +156,47 @@ def test_unknown_option_stops_the_walk(args: list[str]) -> None:
     result = CliRunner().invoke(root, args)
     assert result.exit_code == 2 and "No such option" in result.output, result.output
     assert argv_requests_json(args, root) is True
+
+
+# --- #1036: an unknown `--name=value` stops the walk; help names from context_settings --
+
+
+@pytest.mark.parametrize(
+    "args", [["c", "--bogus=1", "-n", "--json"], ["c", "-x=1", "-n", "--json"]],
+    ids=["unknown-long-eq", "unknown-short-eq"],
+)
+def test_unknown_option_with_equals_stops_the_walk(args: list[str]) -> None:
+    result = CliRunner().invoke(root, args)
+    assert result.exit_code == 2 and "No such option" in result.output, result.output
+    assert argv_requests_json(args, root) is True
+
+
+def test_help_names_follow_context_settings() -> None:
+    from yurtle_kanban._click import _help_names
+
+    @click.command(context_settings={"help_option_names": ["-h", "--help"]})
+    def withh() -> None: ...
+
+    assert _help_names(withh) == ["-h", "--help"]
+
+
+# --- #1036 round 2 (PR #1040 review): single-dash `=` is a cluster, as click reads it ---
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["c", "-vn=3", "-n", "--json"],   # -v, -n takes "=3", then -n takes --json
+        ["c", "-vo=1", "-n", "--json"],
+        ["c", "-n=3", "--json"],          # -n takes "=3": --json is a request
+        ["c", "-v=1", "-n", "--json"],    # -v, then "=" is no option: click fails
+        ["c", "--opt=1", "-n", "--json"],   # --opt takes "1", then -n takes --json
+    ],
+)
+def test_equals_forms_match_click(args: list[str]) -> None:
+    assert argv_requests_json(args, root) is click_requests_json(args), args
+
+
+def test_json_given_a_value_is_still_a_request() -> None:
+    """`--json=1`: click refuses a value on a flag, but JSON was asked for (#1036)."""
+    assert argv_requests_json(["c", "--json=1"], root) is True
