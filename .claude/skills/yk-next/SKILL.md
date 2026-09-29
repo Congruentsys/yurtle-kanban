@@ -33,9 +33,10 @@ rule still applies. Outside yk-loop, use the plain picker.
 3. **Resume before you pick.** An open issue assigned to you that no open PR fixes yet, unless it has
    since been held or depends on an issue that's still open.
 4. **Claim.** Take the first open issue that is unassigned, has no open PR fixing it (GitHub's
-   `Fixes #N` link; branch names are never guessed at), has no hold label (`needs-decision`,
+   `Fixes #N` link; branch names are never guessed at) or naming it in its title (`(#967, part 1)`: in
+   progress there; a body mention doesn't count, #996), has no hold label (`needs-decision`,
    `question`, `wontfix`, `duplicate`, `invalid`, `blocked`, `on-hold`), and whose body's
-   `depends on #N` / `blocked by #N` / `requires #N` issues are all closed. Lists count: `blocked by #8, #9`.
+   `depends on #N` / `blocked by #N` / `requires #N` issues (or PRs, #996) are all closed. Lists count: `blocked by #8, #9`.
    Order: `bug` first, then the lower number.
 5. **Atomic-enough claim.** Assign `@me`, then re-read the issue. Another assignee means a peer got there
    first, so the script un-assigns you and moves to the next candidate.
