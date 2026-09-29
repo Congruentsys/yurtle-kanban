@@ -95,3 +95,12 @@ def test_control_no_separator_removes_nothing(repo: Repo, held: Path) -> None:
     result = _ok(["update", "EXP-5", "--rm-dep", "EXP9"])
     assert "no changes" in _flat(result.output).lower(), result.output
     assert repo.deps("EXP-5") == ["EXP-2", "EXP-009"]
+
+
+def test_rm_dep_exact_spelling_keeps_other_spelling(repo: Repo, nine: Path) -> None:
+    """Stored `[EXP-9, EXP-009]`: `--rm-dep EXP-9` drops only the entry spelled
+    exactly so; `EXP-009`, the same `_dup_key`, stays (the exact match wins; #1136 r1)."""
+    repo.write("EXP-5", ["EXP-9", "EXP-009"])
+    repo.commit("EXP-5 -> EXP-9, EXP-009")
+    _ok(["update", "EXP-5", "--rm-dep", "EXP-9"])
+    assert repo.deps("EXP-5") == ["EXP-009"]
