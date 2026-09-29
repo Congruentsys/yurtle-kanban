@@ -81,6 +81,70 @@ def _full_column_with_a_chore(world: World, config: str) -> None:
     }, "board: full column, a ready chore")
 
 
+# --- F1 ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("config", [EXEMPT_CONFIG, PER_TYPE_CONFIG], ids=["exempt", "per-type"])
+def test_f1_claim_next_passes_a_wip_refusal_to_another_type(
+    world, monkeypatch, config
+) -> None:
+    _full_column_with_a_chore(world, config)
+    seen = _count_claims(monkeypatch)
+
+    result = _claim_next(world, monkeypatch, "--agent", A)
+
+    out = flat(result.output)
+    assert result.exit_code == 0, f"exit {result.exit_code}: {out}"
+    assert "EXP-002" in out, out
+    assert seen == ["EXP-001", "EXP-002"], seen
+
+
+def test_f1_same_type_skipped_after_a_wip_refusal(world, monkeypatch) -> None:
+    """Two ready expeditions and a ready chore behind a per-type limit on
+    expeditions: the second expedition is not fetched; the chore is won."""
+    _full_column_with_a_chore(world, PER_TYPE_CONFIG)
+    push_from_a(world, {
+        NEXT_ITEMS["EXP-003"]: item_text("ready", None, "EXP-003", "Z"),
+    }, "seed EXP-003")
+    seen = _count_claims(monkeypatch)
+
+    result = _claim_next(world, monkeypatch, "--agent", A)
+
+    assert result.exit_code == 0, flat(result.output)
+    assert "EXP-003" not in seen, f"a second expedition was fetched: {seen}"
+    assert seen[-1] == "EXP-002", seen
+
+
+def test_f1_nothing_won_after_a_wip_refusal_exits_with_it(world, monkeypatch) -> None:
+    """The chore, the other type, is refused for another reason (held by B on
+    origin): nothing is won, so the WIP refusal is the answer (exit 1, not 7)."""
+    _full_column_with_a_chore(world, EXEMPT_CONFIG)
+    push_from_a(world, {
+        NEXT_ITEMS["EXP-002"]: typed("chore", "blocked", None, "EXP-002", "Y"),
+    }, "EXP-002 blocked")
+    base = world.remote_sha()
+    # A's own view still offers EXP-002: only origin's tree has it blocked
+    seen = _count_claims(monkeypatch)
+    real_pick = KanbanService.pick_report
+
+    def pick_report(self: KanbanService, actor: str, *a: Any, **kw: Any) -> Any:
+        picks, rest = real_pick(self, actor, *a, **kw)
+        chore = self.get_item("EXP-002")
+        assert chore is not None
+        return [*picks, chore], rest
+
+    monkeypatch.setattr(KanbanService, "pick_report", pick_report)
+
+    result = _claim_next(world, monkeypatch, "--agent", A)
+
+    out = flat(result.output)
+    assert result.exit_code == 1, f"exit {result.exit_code}: {out}"
+    assert "wip limit" in out.lower(), out
+    assert "nothing pickable" not in out.lower(), out
+    assert seen == ["EXP-001", "EXP-002"], seen
+    assert world.remote_sha() == base
+
+
 # --- F2 ---------------------------------------------------------------------------------
 
 
