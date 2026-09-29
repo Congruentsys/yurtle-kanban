@@ -21,7 +21,7 @@ from tests.issues.test_1043_ff_warning import (  # noqa: F401  (fixtures)
     world,
 )
 from tests.test_634_explicit_ids_on_base import service
-from yurtle_kanban.service import pull_note_text
+from yurtle_kanban.service import _git_refusal, pull_note_text
 
 ODD = "error: odd.md"
 
@@ -30,9 +30,7 @@ ODD = "error: odd.md"
 
 
 def _reason(line: str) -> str | None:
-    from yurtle_kanban.service import _git_refusal as refusal
-
-    return refusal(line + "\n")[1]
+    return _git_refusal(line + "\n")[1]
 
 
 def test_leading_label_dropped() -> None:
@@ -51,8 +49,7 @@ def test_file_named_like_a_label_mid_line_kept() -> None:
 
 
 def test_bare_label_falls_back_to_raw() -> None:
-    assert _reason("error:") == "error:"
-    assert _reason("  fatal:  ") == "fatal:"
+    assert _reason("  fatal:  ") == "fatal:"  # `error:` alone: see below
 
 
 def test_note_never_reads_empty_refusal() -> None:
@@ -67,12 +64,6 @@ def test_note_keeps_mid_text_label() -> None:
 
 
 # --- unit: _git_refusal (per-line strip of git's output) ----------------------------
-
-
-def _git_refusal(out: str) -> tuple[str | None, str | None]:
-    from yurtle_kanban.service import _git_refusal as refusal
-
-    return refusal(out)
 
 
 def test_multi_line_output_strips_each_leading_label() -> None:
