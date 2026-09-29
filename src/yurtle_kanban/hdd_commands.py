@@ -759,7 +759,7 @@ def idea_create(title: str, idea_type: str, priority: str, push: bool):
             )
             _print_created_file(result)
         else:
-            raise click.ClickException(f"Failed: {result['message']}")
+            raise click.ClickException(f"Failed: {safe(result['message'])}")
     else:
         item = service.create_item(
             item_type=WorkItemType.IDEA,
@@ -839,7 +839,7 @@ def literature_create(title: str, source_idea: str | None, priority: str, push: 
                     service, str(source_idea), "literature", str(result["id"]), result
                 )
         else:
-            raise click.ClickException(f"Failed: {result['message']}")
+            raise click.ClickException(f"Failed: {safe(result['message'])}")
     else:
         item = service.create_item(
             item_type=WorkItemType.LITERATURE,
@@ -892,7 +892,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
     # Check for duplicate
     existing = service.get_item(item_id)
     if existing:
-        raise click.ClickException(f"{item_id} already exists: {existing.title}")
+        raise click.ClickException(f"{safe(item_id)} already exists: {safe(existing.title)}")
 
     variables: dict[str, str] = {
         "id": item_id,
@@ -923,7 +923,7 @@ def paper_create(number: int, title: str, authors: str | None, priority: str, pu
             )
             _print_created_file(result)
         else:
-            raise click.ClickException(f"Failed: {result['message']}")
+            raise click.ClickException(f"Failed: {safe(result['message'])}")
     else:
         item = service.create_item(
             item_type=WorkItemType.PAPER,
@@ -1049,7 +1049,7 @@ def hypothesis_create(
     # Check for duplicate
     existing = service.get_item(hyp_id)
     if existing:
-        raise click.ClickException(f"{hyp_id} already exists: {existing.title}")
+        raise click.ClickException(f"{safe(hyp_id)} already exists: {safe(existing.title)}")
 
     variables: dict[str, str | list[str]] = {
         "id": hyp_id,
@@ -1101,7 +1101,7 @@ def hypothesis_create(
                     service, f"PAPER-{paper_num}", "hypothesis", str(result["id"]), result
                 )
         else:
-            raise click.ClickException(f"Failed: {result['message']}")
+            raise click.ClickException(f"Failed: {safe(result['message'])}")
     else:
         item = service.create_item(
             item_type=WorkItemType.HYPOTHESIS,
@@ -1171,7 +1171,7 @@ def experiment_create(
     # Check for duplicate
     existing = service.get_item(expr_id)
     if existing:
-        raise click.ClickException(f"{expr_id} already exists: {existing.title}")
+        raise click.ClickException(f"{safe(expr_id)} already exists: {safe(existing.title)}")
 
     # The paper comes from the HYPOTHESIS, when there is one that names a paper.
     #
@@ -1239,7 +1239,7 @@ def experiment_create(
                     service, str(hyp_id), "experiment", str(result["id"]), result
                 )
         else:
-            raise click.ClickException(f"Failed: {result['message']}")
+            raise click.ClickException(f"Failed: {safe(result['message'])}")
     else:
         item = service.create_item(
             item_type=WorkItemType.EXPERIMENT,
@@ -1440,7 +1440,7 @@ def measure_create(
     # Check for duplicate
     existing = service.get_item(measure_id)
     if existing:
-        raise click.ClickException(f"{measure_id} already exists: {existing.title}")
+        raise click.ClickException(f"{safe(measure_id)} already exists: {safe(existing.title)}")
 
     variables: dict[str, str] = {
         "id": measure_id,
@@ -1470,7 +1470,7 @@ def measure_create(
             )
             _print_created_file(result)
         else:
-            raise click.ClickException(f"Failed: {result['message']}")
+            raise click.ClickException(f"Failed: {safe(result['message'])}")
     else:
         item = service.create_item(
             item_type=WorkItemType.MEASURE,

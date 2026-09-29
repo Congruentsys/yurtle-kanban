@@ -272,7 +272,7 @@ def _do_show(epic_id: str):
     # the folded lookup and membership (#868): `epic-001`, a decomposed spelling
     epic_item = service.get_item(epic_id)
     if epic_item is None:
-        raise click.ClickException(f"{fold_id(epic_id)} not found")
+        raise click.ClickException(f"{safe(fold_id(epic_id))} not found")
     epic_id = epic_item.id
     folded_epic = fold_id(epic_id)
 
@@ -358,7 +358,7 @@ def _do_add(epic_id: str, item_id: str):
     # Verify epic exists: the folded lookup (#868)
     epic_item = service.get_item(epic_id)
     if epic_item is None:
-        raise click.ClickException(f"{fold_id(epic_id)} not found")
+        raise click.ClickException(f"{safe(fold_id(epic_id))} not found")
     epic_id = epic_item.id
     if (item := service.get_item(item_id)) is not None:
         try:  # refused, exit 1, before anything is written (#754)
@@ -370,7 +370,7 @@ def _do_add(epic_id: str, item_id: str):
         console.print(f"Linked [bold]{escape(item.id)}[/bold] → [bold]{escape(epic_id)}[/bold]")
     else:
         if item is None:
-            raise click.ClickException(f"Item {fold_id(item_id)} not found")
+            raise click.ClickException(f"Item {safe(fold_id(item_id))} not found")
         elif _already_linked(service, item_id, epic_id):
             console.print(f"{escape(item.id)} is already linked to {escape(epic_id)}")
         # otherwise _update_item_related printed why it didn't link
