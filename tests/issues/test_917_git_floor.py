@@ -132,6 +132,9 @@ GIT_FEATURES: dict[str | tuple[str, str], Version] = {
 # `GitService._git_run`, `GitService._git_z`, and `hdd_commands`' local `git(...)`.
 GIT_HELPERS = frozenset({"_git_run", "_git_z", "git"})
 
+# Flags whose value is a pretty-format string, given as `--format=X` or `--format X`.
+_FORMAT_FLAGS = frozenset({"--format", "--pretty"})
+
 _PLACEHOLDER = re.compile(r"%(\([^)]*\)|x[0-9a-fA-F]{2}|[ac][A-Za-z]|[A-Za-z])")
 
 
@@ -173,15 +176,47 @@ def extract(source: str, where: str = "<src>") -> dict[str | tuple[str, str], li
             continue
         at = f"{where}:{node.lineno}"
         found.setdefault(sub, []).append(at)
-        for arg in argv[1:]:
-            text = _str(arg)
+        rest = argv[1:]
+        i = 0
+        while i < len(rest):
+            text = _str(rest[i])
+            i += 1
             if text is None or not text.startswith("-"):
                 continue
             found.setdefault((sub, _normalize(text)), []).append(at)
-            if text.startswith("--format="):
-                for ph in _PLACEHOLDER.findall(text.split("=", 1)[1]):
-                    found.setdefault((sub, f"%{ph}"), []).append(at)
+            fmt: str | None = None
+            if text.split("=", 1)[0] in _FORMAT_FLAGS:
+                if "=" in text:  # --format=%H / --pretty=%H
+                    fmt = text.split("=", 1)[1]
+                elif i < len(rest):  # --format %H: the value is the next argument
+                    fmt = _str(rest[i])
+                    i += 1  # consumed: a value is never a flag, even if it starts "-"
+            for ph in _PLACEHOLDER.findall(fmt or ""):
+                found.setdefault((sub, f"%{ph}"), []).append(at)
     return found
+
+
+def unread_git_lists(source: str, where: str = "<src>") -> list[str]:
+    """#1129: every list or tuple literal whose FIRST element is "git" but which
+    `_git_argv` would not read as a git call -> its place. A command kept in a variable
+    (`cmd = ["git", ...]; run(cmd)`), concatenated (`["git", "x"] + rest`) or passed as
+    `args=[...]` is invisible to `extract`, so a new git feature used that way would
+    keep the floor check green. Other "git" strings (a dict value, a label, a
+    `shutil.which("git")`) are not argv and are not checked."""
+    tree = ast.parse(source)
+    read: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _git_argv(node) is not None and node.args:
+            read.add(id(node.args[0]))
+    lines = sorted(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.List, ast.Tuple))
+        and node.elts
+        and _str(node.elts[0]) == "git"
+        and id(node) not in read
+    )
+    return [f"{where}:{line}" for line in lines]
 
 
 def extract_src() -> dict[str | tuple[str, str], list[str]]:
@@ -246,3 +281,54 @@ def test_the_extractor_sees_known_uses_and_flags_an_unknown_one() -> None:
         "hook", ("hook", "--ignore-missing"),
     }, got
     assert set(unknown(got)) == {"frobnicate", ("frobnicate", "--zap")}
+
+
+def test_every_git_argv_literal_in_src_is_one_the_extractor_reads() -> None:
+    """#1129: the backstop. Every `["git", ...]` in src/ must be an argv `extract` reads;
+    any other shape fails here rather than silently escaping the floor check."""
+    unread = [
+        at
+        for path in sorted(SRC.rglob("*.py"))
+        for at in unread_git_lists(
+            path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix()
+        )
+    ]
+    assert not unread, (
+        "src/ builds git argv the #917 floor check can't read (a list in a variable, a "
+        "concatenation, `args=`...), so a new git feature there would go unnoticed. "
+        "Pass the literal `[\"git\", ...]` straight to the call (or use a GIT_HELPERS "
+        "wrapper), or teach `_git_argv` in tests/issues/test_917_git_floor.py the new "
+        "shape:\n" + "\n".join(f"  {at}" for at in unread)
+    )
+
+
+def test_the_backstop_flags_git_argv_it_cannot_read() -> None:
+    snippet = (
+        "import subprocess\n"
+        "cmd = ['git', 'worktree', 'add', '--orphan']\n"  # 2: in a variable
+        "subprocess.run(cmd)\n"
+        "subprocess.run(['git', 'x'] + rest)\n"  # 4: concatenated
+        "subprocess.run(args=['git', 'status'])\n"  # 5: a keyword
+        "subprocess.run(('git', 'status'))\n"  # 6: a tuple, which _git_argv skips
+        "subprocess.run(['git', 'status', '--porcelain'])\n"  # read: fine
+        "self._git_run('log', '-1')\n"  # a wrapper: fine
+        "subprocess.run(['git', *args])\n"  # a forwarder: read (nothing literal)
+        "when, source = x, 'git'\n"  # a label, not argv
+        "shutil.which('git')\n"  # not argv
+        "{'kind': 'git'}\n"  # not argv
+    )
+    assert unread_git_lists(snippet) == ["<src>:2", "<src>:4", "<src>:5", "<src>:6"]
+
+
+def test_split_and_pretty_format_placeholders_are_read() -> None:
+    snippet = (
+        "subprocess.run(['git', 'log', '--format', '%aI'])\n"
+        "subprocess.run(['git', 'show', '--pretty=%H%x01'])\n"
+        "self._git_run('log', '--pretty', '-%s-', '-1')\n"
+    )
+    got = extract(snippet)
+    assert set(got) == {
+        "log", ("log", "--format"), ("log", "%aI"),
+        "show", ("show", "--pretty"), ("show", "%H"), ("show", "%x01"),
+        ("log", "--pretty"), ("log", "%s"), ("log", "-<n>"),
+    }, got
