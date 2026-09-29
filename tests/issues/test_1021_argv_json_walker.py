@@ -40,6 +40,7 @@ def root() -> None:
 @root.command("c")
 @click.option("-o", "--opt", is_flag=False, flag_value="x")  # optional value
 @click.option("-v", "verbose", is_flag=True)
+@click.option("--flag", is_flag=True)  # a long flag: `--flag=1` is a usage error (#1042)
 @click.option("-n", "top")  # always takes a value
 @click.option("--json", "as_json", is_flag=True)
 @click.argument("rest", nargs=-1)
@@ -55,7 +56,9 @@ def click_requests_json(args: list[str]) -> bool:
     result = CliRunner().invoke(root, args)
     if result.exit_code == 0:
         return bool(_seen["as_json"])
-    assert result.exit_code == 2 and "No such option" in result.output, result.output
+    # click fails on an unknown option, or on a flag given a value (#1042)
+    failed = "No such option" in result.output or "does not take a value" in result.output
+    assert result.exit_code == 2 and failed, result.output
     return "--json" in args
 
 
@@ -200,3 +203,14 @@ def test_equals_forms_match_click(args: list[str]) -> None:
 def test_json_given_a_value_is_still_a_request() -> None:
     """`--json=1`: click refuses a value on a flag, but JSON was asked for (#1036)."""
     assert argv_requests_json(["c", "--json=1"], root) is True
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["c", "--flag=1", "-n", "--json"], ["c", "--help=1", "-n", "--json"]],
+    ids=["flag-given-a-value", "help-given-a-value"],
+)
+def test_flag_given_a_value_matches_click(args: list[str]) -> None:
+    """Click fails on a flag (or `--help`) given a value, before `-n` can take
+    `--json`: the `--json` was asked for (#1036, #1042)."""
+    assert argv_requests_json(args, root) is click_requests_json(args), args
