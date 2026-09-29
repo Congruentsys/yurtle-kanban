@@ -341,8 +341,12 @@ def _print_call(stmt: ast.stmt) -> ast.Call | None:
 _LEADING_TAG = re.compile(r"\[([^\[\]]*)\]")
 
 
+_RED = re.compile(r"(?:bright_|dark_)?red|red\d+")
+
+
 def _is_red_print(stmt: ast.stmt) -> bool:
-    """A print whose text opens with a markup tag styled `red` among its words (#1108)."""
+    """A print whose text opens with a markup tag with a red among its style words
+    (#1108): `red`, and Rich's `bright_red`, `dark_red`, `red1`… (#1114)."""
     call = _print_call(stmt)
     if call is None or not call.args:
         return False
@@ -350,7 +354,7 @@ def _is_red_print(stmt: ast.stmt) -> bool:
     if text is None:
         return False
     tag = _LEADING_TAG.match(text.lstrip())
-    return tag is not None and "red" in tag.group(1).split()
+    return tag is not None and any(_RED.fullmatch(w) for w in tag.group(1).split())
 
 
 def _is_exit(stmt: ast.stmt) -> bool:
@@ -469,9 +473,15 @@ def _hand_written_refusals(path: Path) -> list[str]:
         'console.print("[bold red]Error: x[/bold red]")\nsys.exit(1)\n',
         'console.print(f"  [red bold]{e}[/red bold]")\nsys.exit(1)\n',
         'err_console.print("[bold red on white]nope[/]")\nraise SystemExit(2)\n',
+        # #1114: Rich's other reds
+        'console.print("[bright_red]Error: x[/]")\nsys.exit(1)\n',
+        'console.print("[bold dark_red]x[/]")\nsys.exit(1)\n',
+        'console.print("[red1]x[/red1]")\nsys.exit(1)\n',
+        'console.print("[red3 on black]x[/]")\nsys.exit(1)\n',
     ],
     ids=["plain", "fstring-indented-raise", "err-console", "ctx-exit", "hint-between",
-         "nested-if", "except-handler", "bold-red", "red-bold", "bold-red-on-white"],
+         "nested-if", "except-handler", "bold-red", "red-bold", "bold-red-on-white",
+         "bright-red", "dark-red", "red1", "red3-on-black"],
 )
 def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") != [], snippet
@@ -496,11 +506,13 @@ def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
         'console.print("[redact]x[/redact]")\nsys.exit(1)\n',
         'console.print("[bred]x[/bred]")\nsys.exit(1)\n',
         'console.print("[bold reddish]x[/]")\nsys.exit(1)\n',
+        'console.print("[bright_redx]x[/]")\nsys.exit(1)\n',
+        'console.print("[red1a]x[/]")\nsys.exit(1)\n',
         # a red tag only after a leading non-red tag
         'console.print("[bold]x[/bold] [red]y[/red]")\nsys.exit(1)\n',
     ],
     ids=["report-row", "work-between", "not-red", "red-later", "refuse", "other-print",
-         "redact", "bred", "bold-reddish", "red-in-second-tag"],
+         "redact", "bred", "bold-reddish", "bright-redx", "red1a", "red-in-second-tag"],
 )
 def test_sweep_leaves_non_refusals_alone(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") == [], snippet
