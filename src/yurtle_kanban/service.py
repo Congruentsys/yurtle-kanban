@@ -7073,11 +7073,11 @@ class KanbanService:
             new_deps = self._id_list(
                 item.depends_on if edits.depends_on is None else edits.depends_on
             )
-            new_deps += [
-                d for d in self._id_list(edits.add_depends_on or []) if d not in new_deps
-            ]
-            dropped = set(self._id_list(edits.remove_depends_on or []))
-            new_deps = [d for d in new_deps if d not in dropped]
+            for d in self._id_list(edits.add_depends_on or []):
+                # `EXP-9` is held as `EXP-009` (#641, #1136)
+                if not any(self._dup_key(h) == self._dup_key(d) for h in new_deps):
+                    new_deps.append(d)
+            new_deps = self._dropped_deps(new_deps, edits.remove_depends_on or [])
             new_deps = self._check_new_dependencies(item, new_deps, edits.allow_unknown, board)
         new_related = None if edits.related is None else self._id_list(edits.related)
 
@@ -7328,6 +7328,20 @@ class KanbanService:
                 f"cycle: {' → '.join(cycle)}"
             )
         return new_deps
+
+    @classmethod
+    def _dropped_deps(cls, deps: list[str], targets: list[str]) -> list[str]:
+        """`deps` without each `--rm-dep` target: the entry spelled exactly as the
+        target, else each with the target's `_dup_key` (`EXP-9` drops `EXP-009`;
+        #641, #1136). `deps` holds each add in any spelling but once (`_edited_text`),
+        so a drop here is a drop of the canonical id the add would be written as."""
+        for target in cls._id_list(targets):
+            if target in deps:
+                deps = [d for d in deps if d != target]
+            else:
+                key = cls._dup_key(target)
+                deps = [d for d in deps if cls._dup_key(d) != key]
+        return deps
 
     @classmethod
     def _graph_id(cls, target: str, graph: dict[str, list[str]]) -> str | None:
