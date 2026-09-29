@@ -1953,7 +1953,9 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
 
 
 def _is_canonical_type(name: str) -> bool:
-    """A canonical `--type` is judged without loading the board (#1149)."""
+    """A canonical `--type` is judged without loading the board (#1149). Keep in
+    step with `KanbanService.type_filter`, which accepts every canonical name the
+    same way: if it ever refuses one, `list`'s refusal order changes."""
     try:
         WorkItemType.from_string(name)
     except InputRefused:
