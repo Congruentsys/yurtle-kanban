@@ -161,9 +161,10 @@ def refuse(e: object, plain: str | None = None, console: Any = None) -> NoReturn
     """A refusal, exit 1, shared by every command (#877, #962). With `--json`: one
     JSON object on stdout, `{"success": false, "error": <e>}`. Without: `plain` (a
     Rich markup line) when given, else `e` as one red `Error:` line (#580), on
-    stderr (#1080), as click's own errors and the `Group` handler's are; rendered
-    as the caller's module `console` renders when given (tests swap it for a
-    terminal)."""
+    stderr (#1080), as click's own errors and the `Group` handler's are. Colour
+    and terminal-ness are stderr's own; only what the caller's module `console`
+    set explicitly (tests swap one forced to a terminal) is carried over, never
+    stdout's detected state (`2>err.log` in a terminal gets no escapes)."""
     if json_requested():
         json_refusal(e)
     from rich.console import Console
@@ -173,9 +174,8 @@ def refuse(e: object, plain: str | None = None, console: Any = None) -> NoReturn
     else:
         err = Console(
             stderr=True,
-            force_terminal=console.is_terminal,
-            color_system=console.color_system,
-            width=console.width,
+            force_terminal=console._force_terminal,
+            width=console._width,
         )
     err.print(plain if plain is not None else f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
     sys.exit(1)

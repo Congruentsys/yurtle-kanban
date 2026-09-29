@@ -19,15 +19,22 @@ refusals already on stderr (``blocked``, ``next-id``), and the same commands wit
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result
+from rich.console import Console
 
 from yurtle_kanban import config as config_mod
+from yurtle_kanban._click import refuse
 from yurtle_kanban.cli import main
+
+SRC = Path(__file__).resolve().parents[2] / "src"
+CLI = "from yurtle_kanban.cli import main; main()"
 
 CONFIG = """\
 kanban:
@@ -169,3 +176,48 @@ def test_control_json_refusal_is_one_object_on_stdout(board: Path, name: str) ->
     assert payload["success"] is False, shown
     assert payload.get("error"), shown
     assert "Error:" not in result.stderr, shown
+
+
+# --- r1 F1/F2: the stderr console follows stderr, not stdout's resolved state ---------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a pty")
+def test_stderr_file_gets_no_ansi_when_stdout_is_a_terminal(board: Path) -> None:
+    """`list --board nosuch 2>err.log` in a terminal: stdout a TTY, stderr a file.
+    The log holds the plain `Error:` line, no colour codes (as click's own is)."""
+    import pty
+
+    master, slave = pty.openpty()
+    env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONDONTWRITEBYTECODE": "1"}
+    env["TERM"] = "xterm-256color"
+    for key in ("NO_COLOR", "FORCE_COLOR", "TTY_COMPATIBLE", "TTY_INTERACTIVE", "COLUMNS"):
+        env.pop(key, None)
+    err_log = board / "err.log"
+    try:
+        with err_log.open("wb") as err:
+            proc = subprocess.run(
+                [sys.executable, "-c", CLI, "list", "--board", "nosuch"],
+                cwd=board,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=slave,
+                stderr=err,
+                timeout=120,
+            )
+    finally:
+        os.close(slave)
+        os.close(master)
+    logged = err_log.read_bytes()
+    assert proc.returncode == 1, logged
+    assert logged == b"Error: Unknown board: nosuch\n", logged
+
+
+def test_default_console_on_non_tty_stderr_is_plain(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The auto-detecting module console (nothing set explicitly): stderr is
+    rendered as stderr is — a captured, non-TTY stream gets no escapes."""
+    with pytest.raises(SystemExit):
+        refuse("boom", console=Console())
+    captured = capsys.readouterr()
+    assert captured.err == "Error: boom\n", repr(captured.err)
