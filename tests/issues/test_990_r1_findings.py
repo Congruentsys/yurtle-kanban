@@ -203,3 +203,24 @@ def test_f2_reworded_wip_message_still_stops(world, monkeypatch) -> None:
     assert result.exit_code == 1, f"exit {result.exit_code}: {out}"
     assert "Column full" in out, out
     assert seen == ["EXP-001"], seen
+
+
+# --- F3 ---------------------------------------------------------------------------------
+
+
+def test_f3_held_ready_item_with_unfinished_dependency_has_no_hint(world) -> None:
+    push_from_a(world, {
+        NEXT_ITEMS["EXP-002"]: item_text("backlog", None, "EXP-002", "Y"),
+    }, "seed EXP-002 unfinished")
+    seed(world, "ready", B)
+    path = world.a / NEXT_ITEMS["EXP-001"]
+    text = path.read_text().replace("status: ready\n", "status: ready\ndepends_on: [EXP-002]\n")
+    push_from_a(world, {NEXT_ITEMS["EXP-001"]: text}, "EXP-001 depends on EXP-002")
+
+    out = claim(world.a, A)
+
+    assert out.kind == "refused", out.message
+    assert "held by agent-b" in out.message.lower(), out.message
+    assert "--take-over" not in out.message, out.message
+    # and the take-over the hint would have suggested does refuse
+    assert claim(world.a, A, take_over=True).kind == "refused"
