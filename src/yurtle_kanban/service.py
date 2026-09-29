@@ -2746,7 +2746,7 @@ class KanbanService:
             return Outcome(
                 "lost", f"Lost to {result.holder}: {result.message}", attempts=attempts
             )
-        return Outcome("refused", result.message, attempts=attempts)
+        return Outcome("refused", result.message, attempts=attempts, wip=result.wip)
 
     def _won(self, branch: str, sha: str, change: Change, attempts: int) -> Outcome:
         """The outcome of a push that landed; nothing here may turn it into a
@@ -4555,7 +4555,7 @@ class KanbanService:
             except _TreeUnreadableError as e:  # never count an unreadable tree (#814)
                 return Refuse(str(e))
             if refusal:
-                return Refuse(refusal)
+                return Refuse(refusal, wip=True)  # the marker `claim --next` reads (#990)
             blocking = [
                 r for r in self._evaluate_gates(proposed, old_status, in_progress, {})
                 if not r.passed and r.severity == "blocking"

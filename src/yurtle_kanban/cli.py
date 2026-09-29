@@ -923,7 +923,7 @@ def _claim_next(service: KanbanService, actor: str) -> NoReturn:
     for item in picks:
         outcome = service.claim_item(item.id, actor=actor)
         if outcome.kind not in ("refused", "lost") or (
-            outcome.kind == "refused" and outcome.message.startswith("WIP limit reached")
+            outcome.kind == "refused" and outcome.wip
         ):
             _print_outcome(outcome)
         last = outcome.message
