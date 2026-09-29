@@ -665,7 +665,8 @@ def _without_git_prefix(why: str) -> str:
     """git's reason with its own leading `error: ` / `fatal: ` label dropped, for a
     note that already says what refused (#1057): "Not possible to fast-forward,
     aborting.". Only the label git put first: the same text mid-line, e.g. a file
-    named `error: odd.md`, stays; a bare label leaves the raw text (#1062)."""
+    named `error: odd.md`, stays; a bare label leaves the raw text (#1062). For raw
+    git text only: a `_git_refusal` reason is already label-free (#1124)."""
     return _GIT_LABEL.sub("", why).strip() or why.strip()
 
 
@@ -697,10 +698,11 @@ def pull_note_text(branch: str, dirty: str | None = None, why: str | None = None
     branch, detached HEAD, diverged main), and to pull: the one wording the CLI
     line and the service message share (#625, #637). `dirty` names a file the
     pull would overwrite, whose uncommitted edit must be dealt with first (#674).
-    `why` is git's reason the fast-forward was refused (#1048)."""
+    `why` is git's reason the fast-forward was refused (#1048), label-free as
+    `_git_refusal` gives it: shown as-is, never stripped again (#1124)."""
     note = f"Pushed to origin/{branch}; not in this checkout yet: pull {branch} to see it"
     if why:
-        note += f" (fast-forward refused: {_without_git_prefix(why)})"
+        note += f" (fast-forward refused: {why})"  # already label-free (#1124)
     if dirty is None:
         return note
     return f"{note}; commit or stash your edit to {dirty} before pulling"
@@ -2997,7 +2999,8 @@ class KanbanService:
                 f"feature branches from origin/{branch}"
             )
             if self._ff_why:  # why, when git refused the fast-forward (#1048)
-                message += f" (fast-forward refused: {_without_git_prefix(self._ff_why)})"
+                # already label-free: stripped once, per line (#1062, #1124)
+                message += f" (fast-forward refused: {self._ff_why})"
         return Outcome("won", message, sha=sha, attempts=attempts, data=change.data)
 
     def _board_outside_repo(self) -> bool:
