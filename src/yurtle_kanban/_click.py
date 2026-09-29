@@ -139,7 +139,7 @@ class Group(click.Group):
         try:
             return super().invoke(ctx)
         except InputRefused as e:
-            raise click.ClickException(str(e)) from None
+            raise click.ClickException(escape_nonprintable(str(e))) from None
         except click.UsageError as e:
             # a bad option, value or subcommand under --json: click's message as
             # the JSON refusal, still exit 2 (#929); the argv the root recorded

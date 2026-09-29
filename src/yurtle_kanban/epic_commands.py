@@ -364,7 +364,7 @@ def _do_add(epic_id: str, item_id: str):
         try:  # refused, exit 1, before anything is written (#754)
             service.refuse_duplicate(item, "a link")
         except ValueError as e:
-            raise click.ClickException(str(e)) from None
+            raise click.ClickException(escape_nonprintable(str(e))) from None
 
     if _update_item_related(service, item_id, epic_id):
         console.print(f"Linked [bold]{escape(item.id)}[/bold] → [bold]{escape(epic_id)}[/bold]")

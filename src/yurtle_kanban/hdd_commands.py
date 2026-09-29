@@ -37,7 +37,7 @@ def _render(engine: TemplateEngine, theme: str, item_type: str, variables: dict)
     try:
         return engine.render(theme, item_type, variables)
     except InvalidTurtleName as e:  # only this: another ValueError is a real bug (#183)
-        raise click.ClickException(str(e)) from e
+        raise click.ClickException(escape_nonprintable(str(e))) from e
 
 
 def _push_ids(
@@ -143,7 +143,7 @@ def _refuse_duplicate_parent(service, parent_id: str | None) -> None:
         try:
             service.refuse_duplicate(parent, "a parent link")
         except ValueError as e:
-            raise click.ClickException(str(e)) from None
+            raise click.ClickException(escape_nonprintable(str(e))) from None
 
 
 def _commit_or_exit(service, path, message: str) -> bool:
