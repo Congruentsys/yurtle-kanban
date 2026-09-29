@@ -483,9 +483,11 @@ class KanbanMCPServer:
         if "status" in args:
             status = WorkItemStatus.from_string(args["status"])
 
-        items = self.service.get_items(status=status, assignee=args.get("assignee"))
+        # loaded once, unfiltered: `item_type`'s valid list reads every item (#1141)
+        loaded = self.service.get_items()
+        items = self.service.filter_items(loaded, status=status, assignee=args.get("assignee"))
         if "item_type" in args:  # canonical or declared, like `list --type` (#1131)
-            type_match = self.service.type_filter(args["item_type"])
+            type_match = self.service.type_filter(args["item_type"], loaded)
             items = [i for i in items if type_match(i)]
 
         return {

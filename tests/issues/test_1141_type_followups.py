@@ -204,5 +204,5 @@ def test_mcp_list_type_declared_one_get_items(
     got = server._list_items({"item_type": "spec"})
     assert {i["id"] for i in got["items"]} == {"DOC-001"}, got
     assert calls["get_items"] == 1, calls
-    got = server._list_items({"item_type": "spec", "status": "draft"})
+    got = server._list_items({"item_type": "spec", "status": "in_progress"})
     assert got["items"] == [], got
