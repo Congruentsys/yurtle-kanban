@@ -4612,7 +4612,11 @@ class KanbanService:
         """(the `resolution`/`superseded_by` changes, the resolution a reopening
         clears) of moving `item` to `proposed`'s status (#581). Refuses a resolution
         on a status that is not finished, `completed` on one that is not canonical
-        done, and a missing, stray or bad `superseded_by`."""
+        done, and a missing, stray or bad `superseded_by`. Without `resolution`, a
+        reopening clears the resolution and `superseded_by`; a finished move off
+        canonical done drops a `completed` it can't keep (#1053), returning it as
+        the cleared resolution (`kb:clearedResolution`, #1061); any other
+        resolution stays."""
         if superseded_by is not None and resolution not in REDIRECTS:
             raise InputRefused(
                 "--superseded-by goes with --resolution superseded or duplicate"
@@ -6446,11 +6450,11 @@ class KanbanService:
     ) -> list[DepNode]:
         nodes = []
         for dep_id in self._id_list(item.depends_on):
-            state, dep, _ = self._dep_state(dep_id, index, graph)
+            state, dep, extra = self._dep_state(dep_id, index, graph)
             if state == "met":
                 continue
-            node = DepNode(
-                id=dep.id if dep else dep_id,
+            node = DepNode(  # an unknown one: the ID on no board, as `pickable` (#1061)
+                id=dep.id if dep else (extra or [dep_id])[-1],
                 status=self.status_label(dep) if dep else None,
                 assignee=dep.assignee if dep else None,
                 state=state,
@@ -6509,16 +6513,16 @@ class KanbanService:
             index = self._dep_index() if index is None else index
             graph = self._dep_graph(index) if graph is None else graph
             for dep_id in deps:
-                state, dep, cycle = self._dep_state(dep_id, index, graph)
+                state, dep, extra = self._dep_state(dep_id, index, graph)
                 if state == "met":
                     continue
                 detail = {
                     "unfinished": "unfinished",
                     "unknown": "unknown ID",
                     "dead": f"dead: {self._dead_why(dep)}" if dep else "dead",
-                    "cycle": f"cycle: {' → '.join(cycle or [])}",
+                    "cycle": f"cycle: {' → '.join(extra or [])}",
                 }[state]
-                name = dep.id if dep else (cycle or [dep_id])[-1]
+                name = dep.id if dep else (extra or [dep_id])[-1]
                 return False, f"waiting on {name} ({detail})"
         return True, "pickable"
 
