@@ -48,4 +48,5 @@ def test_warning_names_the_files_own_nfd_spelling(
     _no_traceback(result)
     assert words in result.output, result.output
     assert NFD_ITEM in result.output, result.output
+    assert NFC_ITEM not in result.output, result.output  # not both spellings (#1007)
     assert path.read_bytes() == before, "the item file was written"
