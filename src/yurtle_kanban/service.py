@@ -6821,8 +6821,8 @@ class KanbanService:
         its `status:` line, from ONE `git log` (#579). Empty when git can't say.
         `-G^status:` matches any added or removed line starting `status:`, so a
         commit that only touched such a line in the body (a fenced sample, say) also
-        counts; a known limit of this fallback, which is used only when the item has
-        no status history of its own (#1055)."""
+        counts; a known limit of this fallback, which is used only when the item's
+        own history doesn't end in its current status (none, or stale) (#1055)."""
         root = self.repo_root.resolve()
         dirs = sorted({
             os.path.relpath(parent, root) for item in items
