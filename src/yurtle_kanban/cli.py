@@ -612,6 +612,7 @@ def list_items(
         except ValueError as e:
             _refuse(e)
     service = get_service()
+    _refuse_unknown_board(service, board_name)
 
     # Parse filters: a status name is resolved through each item's own theme
     # (#579, #587); refused only when no board in scope knows it
@@ -1941,7 +1942,7 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
     Only depends_on is followed: for hdd `implements` edges, see
     `hdd critical-path --dev-blockers`.
     """
-    service = get_service()
+    service = get_service()  # an unknown --board: refused by service.blocked (#1068)
     if as_json:  # one service function with MCP `kanban_get_blocked` (#1066)
         click.echo(json.dumps(service.blocked_report(board_name, show_all), indent=2))
         return
@@ -1957,6 +1958,15 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
         _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1)
 
 
+def _refuse_unknown_board(service: Any, board_name: str | None) -> None:
+    """`list`'s refusal of a `--board` no config knows (#1068): the service's
+    `refuse_unknown_board`, as a CLI refusal."""
+    try:
+        service.refuse_unknown_board(board_name)
+    except InputRefused as e:
+        _refuse(e, f"[red]{safe(e)}[/red]")
+
+
 def _status_with(status: str | None, assignee: Any) -> str:
     return f"{status}, {assignee}" if assignee else str(status)
 
@@ -1964,27 +1974,43 @@ def _status_with(status: str | None, assignee: Any) -> str:
 def _echo_dep_tree(nodes: list[DepNode], path: list[str], shown: set[str], depth: int) -> None:
     """`blocked`'s tree of `unmet_dependencies` (#577): a node already shown under
     this root is `(see above)`; one on `path` (the IDs from the root down) closes
-    a `↻ cycle` line."""
+    a `↻ cycle` line. A `cycle` node with no `↻` line below it (a supersession
+    cycle, #581) is marked `— cycle` (#1068)."""
+    for line in _dep_tree_lines(nodes, path, shown, depth)[0]:
+        click.echo(line)
+
+
+def _dep_tree_lines(
+    nodes: list[DepNode], path: list[str], shown: set[str], depth: int
+) -> tuple[list[str], bool]:
+    """`_echo_dep_tree`'s lines, and whether one of them is a `↻ cycle` line."""
     pad = "  " * depth
+    lines: list[str] = []
+    arrow = False
     for node in nodes:
         key = fold_id(node.id)
         on_path = [fold_id(p) for p in path]
         if key in on_path:
             ids = [*path[on_path.index(key):], node.id]
-            click.echo(f"{pad}↻ cycle: {' → '.join(ids)}")
+            lines.append(f"{pad}↻ cycle: {' → '.join(ids)}")
+            arrow = True
             continue
         if key in shown:
-            click.echo(f"{pad}{node.id} (see above)")
+            lines.append(f"{pad}{node.id} (see above)")
             continue
         shown.add(key)
         if node.state == "unknown":
-            click.echo(f"{pad}{node.id} — unknown ID")
+            lines.append(f"{pad}{node.id} — unknown ID")
             continue
         line = f"{pad}{node.id} ({_status_with(node.status, node.assignee)})"
         if node.state == "dead":
             line += " — dead: needs a human to re-point or drop the dependency"
-        click.echo(line)
-        _echo_dep_tree(node.children, [*path, node.id], shown, depth + 1)
+        below, below_arrow = _dep_tree_lines(node.children, [*path, node.id], shown, depth + 1)
+        if node.state == "cycle" and not below_arrow:
+            line += " — cycle"
+        lines += [line, *below]
+        arrow = arrow or below_arrow
+    return lines, arrow
 
 
 @main.command()
