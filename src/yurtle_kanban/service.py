@@ -778,8 +778,8 @@ class KanbanService:
         """The placement dirs a scan walks: only those inside the repo root; an
         absolute root elsewhere is scanned (or not) exactly as its configured work
         paths say (#113, #963, #1014). No `exists()` check: the fetched-tree readers
-        (`_board_loads`, `_rev_roots`) share it, and a folder may exist only at the
-        rev; `_scan` checks the working tree itself."""
+        (`_board_loads`, and `_rev_roots` under `scanned_only=True`) share it, and a
+        folder may exist only at the rev; `_scan` checks the working tree itself."""
         return {d for d in self._placement_dirs() if d.is_relative_to(self.repo_root)}
 
     def _placement_dirs(self) -> set[Path]:
@@ -2923,8 +2923,8 @@ class KanbanService:
         return decomposed[width:] if fold_id(decomposed[:width]) == want else None
 
     def _holder_at(self, rev: str, item_id: str) -> str | None:
-        """The file under the roots a scan walks (`_rev_roots`: the work paths and
-        placement dirs) at commit `rev` that holds `item_id`, or None (#634). Ids
+        """The file under the id space's roots (`_rev_roots()`: the work paths and
+        every placement dir, #1014) at commit `rev` that holds `item_id`, or None (#634). Ids
         are the same when the text before their number, separator included, and
         the number are: `EXP-3` is `EXP-003` (#641), but `EXP3` is not
         (#661). The file whose frontmatter `id:` is the ID wins; a filename counts
@@ -3078,8 +3078,9 @@ class KanbanService:
         })
 
     def _ids_at(self, rev: str) -> tuple[list[str], list[tuple[str, str]]]:
-        """The `.md` files under the work paths and placement dirs at commit `rev`
-        (the roots a scan walks, as `_items_at` reads them, #954), and each `id:` in
+        """The `.md` files under the work paths and every placement dir at commit
+        `rev` (the id space: a placement dir the scan skips too, so an id committed
+        there is never reissued, #954, #1014), and each `id:` in
         the leading frontmatter block of one as (path, id) (#590, #634); an `id:`
         line in the body or a code block is not an id (#641)."""
         rels = self._rev_roots()
@@ -3200,8 +3201,8 @@ class KanbanService:
 
     def _next_id_number_at(self, rev: str, prefix: str) -> int:
         """Next id number for `prefix` as commit `rev` sees it: item filenames and
-        frontmatter ids under the roots a scan walks (`_rev_roots`: the work paths
-        and placement dirs), plus the allocation records committed there (#585,
+        frontmatter ids in the id space (`_rev_roots()`: the work paths and every
+        placement dir, #1014), plus the allocation records committed there (#585,
         #590)."""
         import json
 
