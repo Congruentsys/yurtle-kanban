@@ -165,7 +165,8 @@ def test_candidate_open_pr_reason_not_truncated(yk, monkeypatch, capsys):
 
 def test_verdict_approve_at_head_ready_to_merge(yk):
     head = "c" * 40
-    assert yk.my_pr_state(pr(1, head=head, comments=[verdict(head[:12], "approve")])) \
+    # the full sha, as safe_merge.sh requires; a prefix no longer counts (#991)
+    assert yk.my_pr_state(pr(1, head=head, comments=[verdict(head, "approve")])) \
         == "ready-to-merge"
 
 

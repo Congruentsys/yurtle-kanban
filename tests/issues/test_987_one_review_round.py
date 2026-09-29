@@ -172,7 +172,9 @@ def test_crlf_bodies_merge(tmp_path: Path) -> None:
 
 def test_picker_changes_at_head_is_not_fixed_by_a_comment(yk) -> None:
     comments = [picker_verdict(HEAD, "changes"), f"fixes-at-sha: {HEAD}\nfor-review-at: {HEAD}"]
-    assert yk.my_pr_state(pr(1, head=HEAD, comments=comments)) == "changes-requested"
+    # the self-referencing fixes comment is the latest decisive one: the head is
+    # unreviewed, as safe_merge.sh judges it (#991) — never fixed by a comment alone
+    assert yk.my_pr_state(pr(1, head=HEAD, comments=comments)) == "needs-review"
 
 
 def test_picker_and_gate_agree_on_a_short_verdict_sha(yk) -> None:

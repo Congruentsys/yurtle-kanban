@@ -43,7 +43,10 @@ rule still applies. Outside yk-loop, use the plain picker.
 **A verdict** is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
 `verdict: approve|changes`. It counts only at the PR's current head, so pushing a new commit resets it,
 except for the driver's fixes comment (`fixes-at-sha: <head>` / `for-review-at: <reviewed sha>`), which
-carries one round's review to its fixed tip (#987).
+carries one round's review to its fixed tip (#987). The picker reads these exactly as `safe_merge.sh` does (#991): the full
+lowercase sha, the latest decisive member comment deciding, so a late verdict of an old sha unreviews
+the head. One check stays the gate's alone: that a fixes comment's reviewed sha is an ancestor of the
+head (it needs git); a fixes comment naming an unrelated sha reads `ready-to-merge` and `safe_merge.sh` refuses it.
 A PR with no CI checks reported yet reads as `wait-ci`, never as mergeable.
 
 **One loop per GitHub account.** Identity is the `gh` login. Two sessions on the same account would both
