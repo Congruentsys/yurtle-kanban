@@ -37,7 +37,8 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".kanban" / "config.yaml").write_text(CONFIG)
     (tmp_path / "work").mkdir()
     (tmp_path / "work" / "FEAT-001.md").write_text(
-        "---\nid: FEAT-001\ntype: feature\nstatus: ready\npriority: high\n"
+        "---\nid: FEAT-001\ntype: feature\nstatus: ready\n"
+        'priority: "hi\\e[5m\\nX"\n'
         'created: 2026-09-29\ntitle: "T\\e[2J\\nFORGED [x](y)"\nassignee: "bob\\e[31m"\n'
         "---\n\n# FEAT-001\n"
     )
@@ -55,6 +56,7 @@ def test_md_export_escapes_title_and_assignee(repo: Path) -> None:
     entry = next(ln for ln in out.splitlines() if "FEAT-001" in ln)
     assert "T\\x1b[2J\\nFORGED [x](y)" in entry, repr(out)
     assert "@bob\\x1b[31m" in entry, repr(out)
+    assert "[hi\\x1b[5m\\nX]" in entry, repr(out)  # r1 F1: priority too
 
 
 def test_json_stays_raw(repo: Path) -> None:
