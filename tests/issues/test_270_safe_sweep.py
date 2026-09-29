@@ -82,8 +82,11 @@ def _clean() -> None:
     config_mod._theme_cache.clear()
 
 
-def _run(repo: Path, args: list[str], monkeypatch: pytest.MonkeyPatch) -> str:
-    """Run with every module console forced to a terminal; return what Rich wrote."""
+def _run(
+    repo: Path, args: list[str], monkeypatch: pytest.MonkeyPatch, err: bool = False
+) -> str:
+    """Run with every module console forced to a terminal; return what Rich wrote
+    (with `err`, and the refusal it wrote on stderr)."""
     buf = io.StringIO()
     tty = Console(file=buf, force_terminal=True, width=200)
     for mod in (cli, hdd_commands, epic_commands):
@@ -94,7 +97,8 @@ def _run(repo: Path, args: list[str], monkeypatch: pytest.MonkeyPatch) -> str:
         result.output,
         result.exception,
     )
-    return buf.getvalue()
+    # refusals print on stderr (#1080), rendered as the swapped console renders
+    return buf.getvalue() + (result.stderr if err else "")
 
 
 def _plain(out: str) -> str:
@@ -212,7 +216,8 @@ def test_metrics_error_is_escaped(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         return {"error": f"bad history: {EVIL}"}
 
     monkeypatch.setattr(KanbanService, "get_flow_metrics", metrics)
-    _assert_escaped(_run(repo, ["metrics", "FEAT-001"], monkeypatch), "bad history")
+    # refusals print on stderr (#1080)
+    _assert_escaped(_run(repo, ["metrics", "FEAT-001"], monkeypatch, err=True), "bad history")
 
 
 def test_create_push_git_message_is_escaped(
@@ -257,7 +262,8 @@ def test_next_id_git_message_is_escaped(
 def test_argv_value_in_error_is_escaped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], needle: str
 ) -> None:
-    _assert_escaped(_run(_repo(tmp_path), args, monkeypatch), needle)
+    # refusals print on stderr (#1080)
+    _assert_escaped(_run(_repo(tmp_path), args, monkeypatch, err=True), needle)
 
 
 # --- controls -------------------------------------------------------------------------
@@ -270,14 +276,17 @@ def test_printable_values_are_unchanged(
     _doubled(monkeypatch)
     out = _plain(_run(repo, ["validate"], monkeypatch))
     assert "DUPLICATE ID: FEAT-001\n" in out, repr(out)
-    out = _plain(_run(repo, ["list", "--status", "bogus"], monkeypatch))
+    # refusals print on stderr (#1080)
+    out = _plain(_run(repo, ["list", "--status", "bogus"], monkeypatch, err=True))
     assert "Unknown status: bogus\n" in out, repr(out)
 
 
 def test_markup_in_argv_is_still_escaped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    out = _plain(_run(_repo(tmp_path), ["list", "--type", "[bold]x[/bold]"], monkeypatch))
+    # refusals print on stderr (#1080)
+    args = ["list", "--type", "[bold]x[/bold]"]
+    out = _plain(_run(_repo(tmp_path), args, monkeypatch, err=True))
     assert "Unknown type: [bold]x[/bold]\n" in out, repr(out)
 
 

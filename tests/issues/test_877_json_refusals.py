@@ -337,7 +337,8 @@ def test_control_next_id_json_success_keys(board: Path) -> None:
 def test_control_non_json_refused_value_prints_error(board: Path) -> None:
     result = _run(["list", "--assignee", ""])
     assert result.exit_code == 1, result.output
-    assert "Error: --assignee is empty" in result.stdout, result.output
+    # refusals print on stderr (#1080)
+    assert "Error: --assignee is empty" in result.stderr, result.output
 
 
 def test_control_non_json_input_refused_prints_error(
