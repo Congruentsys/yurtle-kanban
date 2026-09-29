@@ -144,8 +144,10 @@ def render_board(board: Board, console: Console | None = None) -> None:
 def _safe_lines(text: str) -> str:
     """Multi-line repo text (a description, a comment) for Rich markup: each line
     through `safe()`, so ESC and other controls show as `\\x1b` but the text keeps
-    its real line breaks (#1093)."""
-    return "\n".join(safe(ln) for ln in text.split("\n"))
+    its real line breaks (#1093). Tabs and CRLF line ends stay whitespace: they
+    can't move the cursor or forge a line."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    return "\n".join("\t".join(safe(part) for part in ln.split("\t")) for ln in lines)
 
 
 def render_card(item: WorkItem) -> Panel:
