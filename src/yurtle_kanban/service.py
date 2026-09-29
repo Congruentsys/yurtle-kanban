@@ -25,7 +25,7 @@ import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
@@ -225,6 +225,46 @@ _TURTLE_FRONTMATTER = re.compile(
 # Turtle literal escaping lives in models (one escaper for every literal, #141)
 _turtle_string = turtle_string
 _turtle_unescape = turtle_unescape
+
+
+def _now() -> datetime:
+    """The one clock for aging, timezone-aware (#579). Tests patch this module
+    attribute, so callers look it up at call time."""
+    return datetime.now().astimezone()
+
+
+_EARLIEST = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def parse_stamp(value: str | date) -> datetime:
+    """A status-history stamp (ISO text, a datetime or a date) as an aware datetime
+    (#579): the one stamp parser. A naive stamp is taken as the READER's local time,
+    so a naive stamp written on a host in another zone is off by the difference; a
+    date is local midnight. Raises ValueError (InputRefused out of range) on text
+    that isn't ISO."""
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.strip())
+    elif not isinstance(value, datetime):
+        value = datetime.combine(value, datetime.min.time())
+    if value.tzinfo is not None:
+        return value
+    try:
+        return value.astimezone()
+    except (OverflowError, OSError) as e:  # a year the local zone can't place
+        raise InputRefused(f"stamp out of range: {value}") from e
+
+
+DURATION_GRAMMAR = r"^\d+(m|h|d|w)$"
+_DURATION_UNITS = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
+def parse_duration(text: str) -> timedelta:
+    """`--older-than`/`--stale-after` DURATION (#579): `^\\d+(m|h|d|w)$`, else
+    InputRefused naming the grammar."""
+    match = re.fullmatch(DURATION_GRAMMAR[1:-1], text)
+    if not match:
+        raise InputRefused(f"DURATION must match {DURATION_GRAMMAR} (e.g. 24h, 2d), not {text!r}")
+    return timedelta(**{_DURATION_UNITS[match.group(1)]: int(text[:-1])})
 
 
 def git_toplevel(cwd: Path) -> Path | None:
@@ -5324,6 +5364,7 @@ class KanbanService:
         r"```yurtle\n@prefix kb: <https://yurtle\.dev/kanban/> \.\n"
         r"@prefix xsd: <http://www\.w3\.org/2001/XMLSchema#> \.\n\n<> kb:statusChange"
     )
+    _HISTORY_BLOCK_RE = re.compile(_HISTORY_OPEN_RE.pattern + r"(.*?)\.\n```", re.DOTALL)
 
     def _update_item_file_with_history(
         self,
@@ -5403,7 +5444,7 @@ class KanbanService:
             )
 
         # Create TTL status change entry (use canonical name for RDF consistency)
-        timestamp = datetime.now().isoformat(timespec="seconds")
+        timestamp = _now().isoformat(timespec="seconds")  # with its offset (#579)
         ttl_entry = f'''    kb:status kb:{new_status.value} ;
     kb:at "{timestamp}"^^xsd:dateTime ;
     kb:by "{_turtle_string(actor)}" ;'''
@@ -5423,11 +5464,9 @@ class KanbanService:
         if taken_over_from is not None:
             ttl_entry += f'\n    kb:takenOverFrom "{_turtle_string(taken_over_from)}" ;'
 
-        # Check if yurtle block with status changes exists
-        # Match block with prefix declarations and statusChange predicates
-        match = re.search(
-            self._HISTORY_OPEN_RE.pattern + r"(.*?)\.\n```", content, re.DOTALL
-        )
+        # Only the canonical block is updated: a block pasted into a comment can
+        # never capture a move (#579)
+        match = self._history_match(content)
 
         if match:
             # Append to existing block - add new blank node
@@ -5455,6 +5494,26 @@ class KanbanService:
 ```"""
             content = content.rstrip() + "\n\n" + new_block + "\n"
         return content
+
+    _YURTLE_FENCE_RE = re.compile(r"```yurtle$")
+
+    @classmethod
+    def _history_match(cls, content: str) -> re.Match[str] | None:
+        """The canonical status-history block in `content` (LF text), group 1 its
+        nodes, read and written by `move` (#579 [steer]): the writer's block shape
+        where the body ends (`body_span`), outside fenced code and before
+        `## Comments`, so a block pasted into a comment can't override it. With
+        none there, the first such block after `## Comments` is legacy history
+        (the layout written when a comment came before the first move); on an item
+        with no real history, a pasted block can't be told apart from it."""
+        end = cls.body_span(content)[1]
+        match = cls._HISTORY_BLOCK_RE.match(content, end)
+        if match or end >= len(content):
+            return match
+        legacy = cls._find_line_outside_fences(
+            content, end, cls._YURTLE_FENCE_RE, cls._HISTORY_OPEN_RE
+        )
+        return None if legacy < 0 else cls._HISTORY_BLOCK_RE.match(content, legacy)
 
     # Frontmatter is closed by the first line that STARTS with `---` (the same
     # lines the parser accepts, e.g. `--- # end`). Splitting on the substring
@@ -5885,50 +5944,41 @@ class KanbanService:
         ```
         """
         item = self.get_item(item_id)
-        if not item:
-            return []
+        return self._item_history(item) if item else []
 
+    def _item_history(self, item: WorkItem) -> list[dict[str, Any]]:
+        """`item`'s status history from its canonical block only (`_history_match`),
+        each `kb:at` an aware datetime (`parse_stamp`, #579)."""
         content = item.file_path.read_text()
-
-        # Parse yurtle block with TTL format
-        import re
-
-        # Find yurtle blocks
-        yurtle_blocks = re.findall(r"```yurtle\n(.*?)```", content, re.DOTALL)
-        if not yurtle_blocks:
+        match = self._history_match(content)
+        if match is None:
             return []
+        block = match.group(1)
 
         history = []
-
-        for block in yurtle_blocks:
-            # Find all blank nodes with statusChange data
-            # Pattern matches: kb:status kb:XXX ; kb:at "..." ; kb:by "..." ;
-            # Optional: kb:forcedMove "true"^^xsd:boolean ;
-            entry_pattern = (
-                r'kb:status kb:(\w+)\s*;\s*'
-                r'kb:at "([^"]+)"(?:\^\^xsd:dateTime)?'
-                r'\s*;\s*kb:by "((?:[^"\\]|\\.)*)"'
-            )
-            for entry_match in re.finditer(entry_pattern, block):
-                try:
-                    entry: dict[str, Any] = {
-                        "status": entry_match.group(1),
-                        "at": datetime.fromisoformat(entry_match.group(2)),
-                        "by": _turtle_unescape(entry_match.group(3)),
-                        "forced": False,
-                    }
-                    # Check for forcedMove triple in the surrounding blank node
-                    # Look ahead from the match end for kb:forcedMove within the same node
-                    rest = block[entry_match.end():]
-                    # The forced triple appears before the next ']' (end of blank node)
-                    node_end = rest.find("]")
-                    if node_end != -1:
-                        node_rest = rest[:node_end]
-                        if 'kb:forcedMove "true"' in node_rest:
-                            entry["forced"] = True
-                    history.append(entry)
-                except ValueError:
-                    pass
+        # Pattern matches: kb:status kb:XXX ; kb:at "..." ; kb:by "..." ;
+        # Optional: kb:forcedMove "true"^^xsd:boolean ;
+        entry_pattern = (
+            r'kb:status kb:(\w+)\s*;\s*'
+            r'kb:at "([^"]+)"(?:\^\^xsd:dateTime)?'
+            r'\s*;\s*kb:by "((?:[^"\\]|\\.)*)"'
+        )
+        for entry_match in re.finditer(entry_pattern, block):
+            try:
+                entry: dict[str, Any] = {
+                    "status": entry_match.group(1),
+                    "at": parse_stamp(entry_match.group(2)),
+                    "by": _turtle_unescape(entry_match.group(3)),
+                    "forced": False,
+                }
+            except ValueError:
+                continue
+            # the forced triple appears before the next ']' (end of blank node)
+            rest = block[entry_match.end():]
+            node_end = rest.find("]")
+            if node_end != -1 and 'kb:forcedMove "true"' in rest[:node_end]:
+                entry["forced"] = True
+            history.append(entry)
 
         return history
 
@@ -5967,7 +6017,7 @@ class KanbanService:
             if i + 1 < len(history):
                 end_time = history[i + 1]["at"]
             else:
-                end_time = datetime.now()
+                end_time = _now()  # aware, as `parse_stamp` makes every stamp (#579)
 
             hours = (end_time - start_time).total_seconds() / 3600
             metrics["time_in_status"][status] = metrics["time_in_status"].get(status, 0) + hours
@@ -6216,19 +6266,14 @@ class KanbanService:
 
     @staticmethod
     def _as_datetime(value: Any) -> datetime | None:
-        """A frontmatter date or datetime (or ISO text) as a naive UTC datetime."""
-        if isinstance(value, str):
-            try:
-                value = datetime.fromisoformat(value.strip())
-            except ValueError:
-                return None
-        if isinstance(value, datetime):
-            if value.tzinfo is not None:
-                value = value.astimezone(timezone.utc).replace(tzinfo=None)
-            return value
-        if isinstance(value, date):
-            return datetime.combine(value, datetime.min.time())
-        return None
+        """A frontmatter date or datetime (or ISO text) as an aware datetime
+        (`parse_stamp`, #579), else None."""
+        if not isinstance(value, (str, date)):
+            return None
+        try:
+            return parse_stamp(value)
+        except ValueError:
+            return None
 
     def _entered_order(self, item: WorkItem) -> tuple[bool, datetime, int, str]:
         """Oldest first by when `item` entered its current status (#575 [steer] 3):
@@ -6236,14 +6281,98 @@ class KanbanService:
         then the numeric ID. `WorkItem.updated` is only the parse time."""
         names = self.legal_status_names(item)
         entered = [
-            at for entry in self.get_status_history(item.id)
+            entry["at"] for entry in self._item_history(item)
             if names.get(_fold_status_name(str(entry["status"]))) == item.status
-            and (at := self._as_datetime(entry["at"])) is not None
         ]
         when = max(entered) if entered else (
             self._as_datetime(item.metadata.get("updated")) or self._as_datetime(item.created)
         )
-        return (when is None, when or datetime.min, item.numeric_id, item.id)
+        return (when is None, when or _EARLIEST, item.numeric_id, item.id)
+
+    # --- aging on `list` (#579) --------------------------------------------------
+
+    def aging(
+        self, items: list[WorkItem], stale_after: timedelta = timedelta(hours=24)
+    ) -> list[dict[str, Any]]:
+        """For each of `items`, in order, when it entered its current status and how
+        long ago (#579): `since` (ISO with offset, or None), `since_source`
+        (`history`, `git`, `created` or `unknown`: the first that applies),
+        `age_seconds` (None when unknown; a future `since` is clamped to 0 with
+        `clock_skew`), `stale` (canonical in progress for `stale_after` or longer,
+        or of unknown age) and `board`. The holder is the item's `assignee`: when
+        it took over is not known."""
+        now = _now()
+        found = [self._history_since(item) for item in items]
+        need = [item for item, when in zip(items, found) if when is None]
+        git = self._git_status_dates(need) if need else {}
+        rows: list[dict[str, Any]] = []
+        for item, when in zip(items, found):
+            source = "history"
+            if when is None:
+                when, source = git.get(item.file_path.resolve()), "git"
+            if when is None and item.created is not None:
+                with suppress(ValueError):
+                    when, source = parse_stamp(item.created), "created"
+            if when is None:
+                source = "unknown"
+            seconds = None if when is None else int((now - when).total_seconds())
+            skew = seconds is not None and seconds < 0
+            if skew:
+                seconds = 0
+            board = self._get_board_for_item(item)
+            rows.append({
+                "since": when.isoformat(timespec="seconds") if when else None,
+                "since_source": source,
+                "age_seconds": seconds,
+                "stale": item.status == WorkItemStatus.IN_PROGRESS
+                and (seconds is None or seconds >= stale_after.total_seconds()),
+                "clock_skew": skew,
+                "board": board.name if board else None,
+            })
+        return rows
+
+    def _history_since(self, item: WorkItem) -> datetime | None:
+        """The last node of `item`'s canonical history, when it names the item's
+        current status (#579)."""
+        history = self._item_history(item)
+        if not history:
+            return None
+        last = history[-1]
+        names = self.legal_status_names(item)
+        return last["at"] if names.get(_fold_status_name(str(last["status"]))) == item.status \
+            else None
+
+    def _git_status_dates(self, items: list[WorkItem]) -> dict[Path, datetime]:
+        """Each of `items`' files → the author date of the last commit that changed
+        its `status:` line, from ONE `git log` (#579). Empty when git can't say."""
+        root = self.repo_root.resolve()
+        dirs = sorted({
+            os.path.relpath(parent, root) for item in items
+            if (parent := item.file_path.resolve().parent).is_relative_to(root)
+        })
+        if not dirs:
+            return {}
+        try:
+            done = self._git_z(
+                "log", "-z", "--format=%x01%aI", "--name-only", "-G^status:",
+                "--relative", "--", *dirs,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        if done.returncode != 0:
+            return {}
+        dates: dict[Path, datetime] = {}
+        for commit in done.stdout.split("\x01")[1:]:
+            stamp, *names = commit.split("\0")
+            try:
+                when = parse_stamp(stamp)
+            except ValueError:
+                continue
+            for name in names:
+                name = name.lstrip("\n")
+                if name:
+                    dates.setdefault((root / name).resolve(), when)  # newest first
+        return dates
 
     def next_item(self, actor: str | None) -> tuple[WorkItem, str, str] | None:
         """(item, kind, reason) for `next` (#575 §6), or None: `actor`'s own
