@@ -2044,6 +2044,30 @@ class KanbanService:
 
         return sorted(items, key=lambda i: (-i.priority_score, -i.numeric_id))
 
+    def type_filter(self, name: str, board: str | None = None) -> Callable[[WorkItem], bool]:
+        """`--type`'s item filter (#1131): a canonical type matches `item_type`, as
+        before; any other name matches `declared_type` case-insensitively. Refused
+        (InputRefused) when no item on the board (`board`, else every board)
+        declares it; the valid list names the canonical types and those declared."""
+        try:
+            canonical = WorkItemType.from_string(name)
+        except InputRefused:
+            pass
+        else:
+            return lambda i: i.item_type == canonical
+        folded = name.lower()
+        valid = self.valid_types(board)
+        if folded not in valid:
+            raise InputRefused(f"Unknown type: {name}; valid types: {', '.join(valid)}")
+        return lambda i: i.declared_type.lower() == folded
+
+    def valid_types(self, board: str | None = None) -> list[str]:
+        """The names `type_filter` accepts (#1131): the canonical types, then the
+        other types declared by an item on `board` (else every board), lowercased."""
+        known = [t.value for t in WorkItemType]
+        declared = {i.declared_type.lower() for i in self.get_items(board=board)}
+        return known + sorted(declared - set(known))
+
     def _get_type_directory(self, item_type: WorkItemType, board_name: str | None = None) -> Path:
         """Get the directory for placing a file of this item type.
 

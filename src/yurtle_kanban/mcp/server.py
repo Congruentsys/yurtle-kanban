@@ -90,8 +90,11 @@ class KanbanMCPServer:
                         },
                         "item_type": {
                             "type": "string",
-                            "description": "Filter by type: feature, bug, epic, issue, task, idea",
-                            "enum": ["feature", "bug", "epic", "issue", "task", "idea"],
+                            "description": (
+                                "Filter by type: a canonical type (feature, bug, epic,"
+                                " issue, task, idea, ...) or a type an item declares"
+                                " (e.g. spec), case-insensitive"
+                            ),
                         },
                         "assignee": {
                             "type": "string",
@@ -480,15 +483,10 @@ class KanbanMCPServer:
         if "status" in args:
             status = WorkItemStatus.from_string(args["status"])
 
-        item_type = None
-        if "item_type" in args:
-            item_type = WorkItemType.from_string(args["item_type"])
-
-        items = self.service.get_items(
-            status=status,
-            item_type=item_type,
-            assignee=args.get("assignee"),
-        )
+        items = self.service.get_items(status=status, assignee=args.get("assignee"))
+        if "item_type" in args:  # canonical or declared, like `list --type` (#1131)
+            type_match = self.service.type_filter(args["item_type"])
+            items = [i for i in items if type_match(i)]
 
         return {
             "items": [item.to_dict() for item in items],
