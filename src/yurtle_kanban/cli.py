@@ -2009,7 +2009,8 @@ def validate(fix: bool, as_json: bool):
     - No dependency cycles, across every board
     - Every depends_on target is on a board
     - Required fields present (id, title, status, type)
-    - A bounce stamp is well formed (bounce_sha a sha256 hex digest, bounces a count)
+    - A bounce stamp is well formed (bounce_sha a sha256 hex digest, bounces a count,
+      bounced_at an ISO-8601 time with an offset, bounced_by non-empty)
     """
     service = get_service()
     items = service.get_items()

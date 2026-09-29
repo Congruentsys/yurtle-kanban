@@ -10,6 +10,9 @@ Found in the PR #1025 (#578) review.
 2. ``cli.py``'s module usage line for ``bounce`` leaves out ``[--take-over]``.
 3. ``validate`` doesn't check ``bounced_at``/``bounced_by``.
 
+Item 1 was ruled out ([steer] on #1041: gates stay local, #865), so readings a-c
+below describe the retired gate tests; their scaffolding was removed (#1051).
+
 Readings the test partner chose (the driver may challenge them):
 
 a. Every origin scenario uses the #585 ``World`` and the #831/#865 pattern: B pushes a
@@ -51,72 +54,9 @@ from tests.issues.test_578_bounce import (
     sync_a,
     with_stamp,
 )
-from tests.issues.test_585_create_push_loop import World, git
-from yurtle_kanban import config as config_mod
 from yurtle_kanban.cli import main
-from yurtle_kanban.config import KanbanConfig, PathConfig
 
 pytestmark = pytest.mark.usefixtures("claim_env")
-
-CONFIG = ".kanban/config.yaml"
-CLAIM_GATE_MSG = "the 1041 in-progress gate refuses"
-BOUNCE_GATE_MSG = "the 1041 backlog gate refuses"
-
-
-# --- harness ---------------------------------------------------------------------
-
-
-def config_text(tmp_path: Path, gates: dict[str, list[dict[str, Any]]] | None) -> str:
-    """World's single-board nautical config, with `gates` (v1 top level)."""
-    config = KanbanConfig(
-        theme="nautical",
-        paths=PathConfig(
-            root="kanban-work/",
-            scan_paths=["kanban-work/expeditions/", "kanban-work/signals/"],
-        ),
-        gates=gates or {},
-    )
-    path = tmp_path / "cfg-1041" / "config.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    config.save(path)
-    return path.read_text()
-
-
-def gate(transition: str, message: str) -> dict[str, list[dict[str, Any]]]:
-    return {transition: [{
-        "id": "gate_1041", "check": "context.approved_1041", "message": message,
-    }]}
-
-
-def b_pushes(world: World, files: dict[str, str]) -> None:
-    """B, on a fresh origin/main, writes `files`, commits and pushes. A never pulls."""
-    git(world.b, "fetch", "origin")
-    git(world.b, "reset", "--hard", f"origin/{world.default}")
-    for rel, text in files.items():
-        path = world.b / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    git(world.b, "add", "-A")
-    git(world.b, "commit", "-m", "rival: 1041")
-    git(world.b, "push", "origin", f"HEAD:refs/heads/{world.default}")
-    config_mod._theme_cache.clear()
-
-
-def origin_only(world: World, tmp_path: Path, gates: dict[str, Any]) -> None:
-    """Origin's config has `gates`; A's local config has none and A doesn't pull."""
-    b_pushes(world, {CONFIG: config_text(tmp_path, gates)})
-    assert "gate_1041" not in (world.a / CONFIG).read_text(), "A must not have the gate"
-    assert "gate_1041" in world.remote_show(CONFIG)
-
-
-def local_only(world: World, tmp_path: Path, gates: dict[str, Any]) -> None:
-    """A's stale working-tree config has `gates`; origin removed them (B pushed a
-    config without them, and A never pulled)."""
-    b_pushes(world, {CONFIG: config_text(tmp_path, None) + "# gates removed on origin\n"})
-    (world.a / CONFIG).write_text(config_text(tmp_path, gates))
-    config_mod._theme_cache.clear()
-    assert "gate_1041" not in world.remote_show(CONFIG)
-
 
 # --- 1. claim: `* -> in_progress` gates come from origin's config --------------------------
 
@@ -145,8 +85,8 @@ def validate_issues(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> list[di
 
 @pytest.mark.parametrize(
     "at",
-    ["yesterday afternoon", '"2026-09-27T10:00:00"'],
-    ids=["free-text", "no-offset"],
+    ["yesterday afternoon", '"2026-09-27T10:00:00"', "2026-09-27T10:00:00"],
+    ids=["free-text", "no-offset", "no-offset-unquoted"],  # unquoted: a YAML datetime (#1051)
 )
 def test_validate_reports_a_malformed_bounced_at(tmp_path, monkeypatch, at) -> None:
     repo = local_repo(tmp_path, monkeypatch, {
@@ -189,3 +129,10 @@ def test_a_real_bounce_stamp_validates_clean(world, monkeypatch) -> None:
     ]
     assert not stamp_issues, f"bounce's own stamp was reported: {issues}"
     assert service(world.a).get_item(ITEM_ID) is not None
+
+
+def test_validate_help_names_the_bounce_stamp_keys() -> None:
+    """`validate --help` names every stamp key it checks (#1051)."""
+    text = " ".join(CliRunner().invoke(main, ["validate", "--help"]).output.split())
+    for key in ("bounce_sha", "bounces", "bounced_at", "bounced_by"):
+        assert key in text, (key, text)
