@@ -2576,11 +2576,17 @@ class KanbanService:
             if merged.returncode != 0:
                 if warn:
                     out = said(merged.stderr) or said(merged.stdout)
-                    # git's own failure, not its `hint:` advice (#995)
-                    why = [
-                        line.strip() for line in out.splitlines()
-                        if line.lstrip().lower().startswith(("error:", "fatal:"))
-                    ]
+                    # git's own failure, not its `hint:` advice (#995), with the
+                    # indented lines that continue a kept line, e.g. file names (#1043)
+                    why: list[str] = []
+                    keep = False
+                    for line in out.splitlines():
+                        if line.lstrip().lower().startswith(("error:", "fatal:")):
+                            keep = True
+                        elif not (keep and line[:1] in ("\t", " ")):
+                            keep = False
+                        if keep:
+                            why.append(line.strip())
                     logger.warning(
                         f"Pushed {sha[:12]}, but the local checkout was not updated"
                         + (f": {' '.join(' '.join(why).split())}" if why else "")
@@ -2773,7 +2779,7 @@ class KanbanService:
         """The outcome of a push that landed; nothing here may turn it into a
         failure (#603)."""
         message = f"{change.message}: pushed to origin/{branch}"
-        if not self._fast_forward_to(branch, sha):
+        if not self._fast_forward_to(branch, sha, warn=False):
             message += (
                 f". Your checkout does not show this yet: pull {branch}, and start "
                 f"feature branches from origin/{branch}"
