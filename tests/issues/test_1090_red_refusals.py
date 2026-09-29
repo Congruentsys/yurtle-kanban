@@ -341,12 +341,16 @@ def _print_call(stmt: ast.stmt) -> ast.Call | None:
 _LEADING_TAG = re.compile(r"\[([^\[\]]*)\]")
 
 
-_RED = re.compile(r"(?:bright_|dark_)?red|red\d+")
+# any Rich colour name ending in `red` (`bright_red`, `orange_red1`), matched on the
+# lowercased word; numeric colours (`#ff0000`, `rgb()`, `color(N)`) aren't swept:
+# src markup uses named colours only ([steer] on #1117)
+_RED = re.compile(r"(?:[a-z]+_)*red\d*")
 
 
 def _is_red_print(stmt: ast.stmt) -> bool:
     """A print whose text opens with a markup tag with a red among its style words
-    (#1108): `red`, and Rich's `bright_red`, `dark_red`, `red1`… (#1114)."""
+    (#1108): `red`, and Rich's `bright_red`, `dark_red`, `red1`… (#1114), in any
+    case, and any other `…_red` name (#1117)."""
     call = _print_call(stmt)
     if call is None or not call.args:
         return False
@@ -354,7 +358,7 @@ def _is_red_print(stmt: ast.stmt) -> bool:
     if text is None:
         return False
     tag = _LEADING_TAG.match(text.lstrip())
-    return tag is not None and any(_RED.fullmatch(w) for w in tag.group(1).split())
+    return tag is not None and any(_RED.fullmatch(w.lower()) for w in tag.group(1).split())
 
 
 def _is_exit(stmt: ast.stmt) -> bool:
@@ -478,10 +482,16 @@ def _hand_written_refusals(path: Path) -> list[str]:
         'console.print("[bold dark_red]x[/]")\nsys.exit(1)\n',
         'console.print("[red1]x[/red1]")\nsys.exit(1)\n',
         'console.print("[red3 on black]x[/]")\nsys.exit(1)\n',
+        # #1117: any case, and Rich's other `…_red` names
+        'console.print("[RED]Error[/]")\nsys.exit(1)\n',
+        'console.print("[Bright_Red]x[/]")\nsys.exit(1)\n',
+        'console.print("[orange_red1]x[/]")\nsys.exit(1)\n',
+        'console.print("[bold indian_red]x[/]")\nsys.exit(1)\n',
     ],
     ids=["plain", "fstring-indented-raise", "err-console", "ctx-exit", "hint-between",
          "nested-if", "except-handler", "bold-red", "red-bold", "bold-red-on-white",
-         "bright-red", "dark-red", "red1", "red3-on-black"],
+         "bright-red", "dark-red", "red1", "red3-on-black",
+         "upper-red", "mixed-case-bright-red", "orange-red1", "indian-red"],
 )
 def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") != [], snippet
@@ -508,11 +518,16 @@ def test_sweep_finds_a_hand_written_refusal(snippet: str) -> None:
         'console.print("[bold reddish]x[/]")\nsys.exit(1)\n',
         'console.print("[bright_redx]x[/]")\nsys.exit(1)\n',
         'console.print("[red1a]x[/]")\nsys.exit(1)\n',
+        # #1117: numeric colours are out of the sweep's scope, by ruling
+        'console.print("[#ff0000]x[/]")\nsys.exit(1)\n',
+        'console.print("[color(9)]x[/]")\nsys.exit(1)\n',
+        'console.print("[rgb(255,0,0)]x[/]")\nsys.exit(1)\n',
         # a red tag only after a leading non-red tag
         'console.print("[bold]x[/bold] [red]y[/red]")\nsys.exit(1)\n',
     ],
     ids=["report-row", "work-between", "not-red", "red-later", "refuse", "other-print",
-         "redact", "bred", "bold-reddish", "bright-redx", "red1a", "red-in-second-tag"],
+         "redact", "bred", "bold-reddish", "bright-redx", "red1a", "hex-red", "color-9", "rgb-red",
+         "red-in-second-tag"],
 )
 def test_sweep_leaves_non_refusals_alone(snippet: str) -> None:
     assert _refusals_in(snippet, "s.py") == [], snippet
