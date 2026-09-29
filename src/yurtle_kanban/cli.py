@@ -9,7 +9,7 @@ Usage:
     yurtle-kanban create TYPE TITLE [--priority PRIORITY] [--assign NAME]
                          [--body TEXT | --body-file PATH|-] [--push]
     yurtle-kanban move ID STATUS [--assign NAME] [--agent ACTOR]
-    yurtle-kanban bounce ID (--reason TEXT | --reason-file PATH|-) [--agent ACTOR]
+    yurtle-kanban bounce ID (--reason TEXT | --reason-file PATH|-) [--agent ACTOR] [--take-over]
     yurtle-kanban comment ID (--body TEXT | --body-file PATH|-) [--agent ACTOR]
     yurtle-kanban show ID
     yurtle-kanban board
@@ -27,6 +27,7 @@ import re
 import shutil
 import sys
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -1922,6 +1923,27 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             sys.exit(1)
 
 
+_STAMP_EXPECTED = {  # what `validate` says each bounce-stamp key should hold (#578, #1041)
+    "bounce_sha": "a sha256 hex digest",
+    "bounces": "a count",
+    "bounced_at": "an ISO-8601 time with a UTC offset",
+    "bounced_by": "an actor name",
+}
+
+
+def _aware_stamp(value: object) -> bool:
+    """A `bounced_at` as a bounce writes it: an ISO-8601 time with an offset (YAML may
+    have read it into a datetime already)."""
+    if isinstance(value, datetime):
+        return value.tzinfo is not None
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.fromisoformat(value).tzinfo is not None
+    except ValueError:
+        return False
+
+
 @main.command()
 @click.option("--fix", is_flag=True, help="Attempt to fix issues (rename files)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
@@ -2004,16 +2026,20 @@ def validate(fix: bool, as_json: bool):
         for key, bad in (
             ("bounce_sha", lambda v: not (isinstance(v, str) and HEX64.fullmatch(v))),
             ("bounces", lambda v: isinstance(v, bool) or not isinstance(v, int) or v < 0),
+            # when and by whom, as a bounce writes them (#1041)
+            ("bounced_at", lambda v: not _aware_stamp(v)),
+            ("bounced_by", lambda v: not (isinstance(v, str) and v.strip())),
         ):
-            if key in item.metadata and bad(value := item.metadata[key]):
+            # a bounced item's when/who must be there: a bare `bounced_by:` reads as absent
+            must = key in ("bounced_at", "bounced_by") and "bounce_sha" in item.metadata
+            if (key in item.metadata or must) and bad(value := item.metadata.get(key)):
                 issues.append(
                     {
                         "type": "malformed_bounce_stamp",
                         "id": item.id,
                         "key": key,
                         "message": f"{item.id}: malformed {key}: {value!r} "
-                        f"({'a sha256 hex digest' if key == 'bounce_sha' else 'a count'} "
-                        "expected)",
+                        f"({_STAMP_EXPECTED[key]} expected)",
                     }
                 )
 
