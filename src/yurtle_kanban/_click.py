@@ -160,15 +160,24 @@ def safe(value: object) -> str:
 def refuse(e: object, plain: str | None = None, console: Any = None) -> NoReturn:
     """A refusal, exit 1, shared by every command (#877, #962). With `--json`: one
     JSON object on stdout, `{"success": false, "error": <e>}`. Without: `plain` (a
-    Rich markup line) when given, else `e` as one red `Error:` line (#580), on the
-    caller's module `console` when given (tests swap it for a terminal)."""
+    Rich markup line) when given, else `e` as one red `Error:` line (#580), on
+    stderr (#1080), as click's own errors and the `Group` handler's are; rendered
+    as the caller's module `console` renders when given (tests swap it for a
+    terminal)."""
     if json_requested():
         json_refusal(e)
-    if console is None:
-        from rich.console import Console
+    from rich.console import Console
 
-        console = Console()
-    console.print(plain if plain is not None else f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
+    if console is None:
+        err = Console(stderr=True)
+    else:
+        err = Console(
+            stderr=True,
+            force_terminal=console.is_terminal,
+            color_system=console.color_system,
+            width=console.width,
+        )
+    err.print(plain if plain is not None else f"[red]Error: {safe(e)}[/red]", soft_wrap=True)
     sys.exit(1)
 
 
