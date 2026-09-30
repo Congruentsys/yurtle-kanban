@@ -1,2 +1,0 @@
-<!-- section: Added -->
-- `update ID ... --push`: the field-level edits of `update` applied to the item as origin's default branch has it and pushed as one compare-and-swap commit, dependencies checked against the fetched board; a rival's edit to another line survives, a rival's edit of the same field is overwritten (last writer wins), and the exit codes are `claim`'s; `--push --no-commit` is refused (#574).
