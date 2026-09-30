@@ -3691,13 +3691,21 @@ class KanbanService:
         local create or `next-id --no-sync` never re-issues an id already on origin
         (#641). No network is used; if git fails reading the base, the local scan
         stands, with a warning."""
-        num = self._scanned_next_id_number(prefix)
+        return max(
+            self._scanned_next_id_number(prefix), self._origin_next_id_number(prefix, base)
+        )
+
+    def _origin_next_id_number(self, prefix: str, base: str | None = None) -> int:
+        """`_get_next_id_number`'s floor from `base` (by default the fetched
+        origin/<default>), alone, so a caller can tell origin's refusal from the
+        checkout's (#1169): 0 with no such ref, or, with a warning, when git fails
+        reading it. A corrupt allocations file there raises `InputRefused`."""
         try:
             ref = base or self._fetched_default()
-            return num if ref is None else max(num, self._next_id_number_at(ref, prefix))
+            return 0 if ref is None else self._next_id_number_at(ref, prefix)
         except (subprocess.TimeoutExpired, OSError) as e:
             logger.warning(f"Could not read the fetched default branch for {prefix}: {e}")
-            return num
+            return 0
 
     def _scanned_next_id_number(self, prefix: str) -> int:
         """Next id number for `prefix` as this checkout sees it.
@@ -4549,10 +4557,11 @@ class KanbanService:
                 logger.warning(f"Git fetch failed: {e}")
         self._items.clear()
         self.scan()
-        self._scanned_next_id_number(prefix)  # a corrupt local file: raises (#847)
+        # the checkout's file, read once: corrupt, it raises (#847, #1169)
+        next_num = self._scanned_next_id_number(prefix)
         try:
-            next_num = self._get_next_id_number(prefix, fetched)
-        except InputRefused as e:  # so a corrupt origin: the dict, as by CAS (#1162)
+            next_num = max(next_num, self._origin_next_id_number(prefix, fetched))
+        except InputRefused as e:  # origin's: the dict, as by CAS (#1162)
             return {"success": False, "id": None, "prefix": prefix, "number": None,
                     "message": str(e)}
         item_id = self._format_id(prefix, next_num)
