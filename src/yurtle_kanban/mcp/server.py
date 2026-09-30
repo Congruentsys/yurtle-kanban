@@ -364,11 +364,15 @@ class KanbanMCPServer:
                     " concurrently. This fetches from remote,"
                     " finds the highest existing ID, and"
                     " commits an allocation lock. A refusal"
-                    ' comes back as {"error": ...} when the'
-                    " input or this checkout's allocations"
-                    ' file is at fault, or as {"success": false,'
-                    ' "id": null, "message": ...} when origin\'s'
-                    " is corrupt or the push fails: check both."
+                    ' comes back as {"error": ...} for bad'
+                    " input (a malformed prefix) or, when"
+                    " allocating locally (no remote, or"
+                    " sync_remote false), a corrupt allocations"
+                    " file in this checkout; every other refusal"
+                    ' is {"success": false, "id": null,'
+                    ' "message": ...}: a corrupt allocations'
+                    " file when syncing or on origin, no actor,"
+                    " a refused commit or push. Check both."
                 ),
                 "inputSchema": {
                     "type": "object",
