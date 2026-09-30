@@ -83,6 +83,7 @@ from .service import (
     KanbanService,
     age_text,
     git_toplevel,
+    kanban_dir_refusal,
     parse_duration,
 )
 from .sync import HALTED, NOTHING_PICKABLE, Outcome
@@ -136,6 +137,18 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def _config_path(repo_root: Path) -> Path | None:
+    """The board config `get_service` loads: `.yurtle-kanban/config.yaml`
+    (preferred), else `.kanban/config.yaml` (legacy), else None."""
+    for path in (
+        repo_root / ".yurtle-kanban" / "config.yaml",
+        repo_root / ".kanban" / "config.yaml",
+    ):
+        if path.exists():
+            return path
+    return None
+
+
 def get_service() -> KanbanService:
     """Get the kanban service for the current directory."""
     repo_root = Path.cwd()
@@ -143,17 +156,7 @@ def get_service() -> KanbanService:
     # Check for config in priority order:
     # 1. .yurtle-kanban/config.yaml (preferred)
     # 2. .kanban/config.yaml (legacy/fallback)
-    config_paths = [
-        repo_root / ".yurtle-kanban" / "config.yaml",
-        repo_root / ".kanban" / "config.yaml",
-    ]
-
-    config_path = None
-    for path in config_paths:
-        if path.exists():
-            config_path = path
-            break
-
+    config_path = _config_path(repo_root)
     if config_path:
         try:
             config = KanbanConfig.load(config_path)
@@ -342,6 +345,8 @@ def init(theme: str, path: str | None):
 
     # Create .kanban directory structure
     kanban_dir = repo_root / ".kanban"
+    if (refusal := kanban_dir_refusal(repo_root)) is not None:  # (#1179)
+        raise InputRefused(refusal)
     kanban_dir.mkdir(exist_ok=True)
     (kanban_dir / "workflows").mkdir(exist_ok=True)
     (kanban_dir / "templates").mkdir(exist_ok=True)
@@ -1467,6 +1472,14 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     service = get_service()
     config = service.config
     repo_root = service.repo_root
+    # saved to the file it was loaded from; with none, a new .kanban/config.yaml,
+    # refused up front if .kanban is a file (#1179)
+    config_path = _config_path(repo_root)
+    if config_path is None:
+        if (refusal := kanban_dir_refusal(repo_root)) is not None:
+            raise InputRefused(refusal)
+        config_path = repo_root / ".kanban" / "config.yaml"
+    shown = config_path.relative_to(repo_root).as_posix()
 
     # Validate preset exists
     if not _load_builtin_theme(preset, repo_root):
@@ -1514,7 +1527,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
                 message,
                 f"[red]{safe(message)}[/red]\n"
                 "[dim]Move them under a common folder (and set paths.root to it), "
-                "then run board-add again. .kanban/config.yaml was not changed.[/dim]",
+                f"then run board-add again. {safe(shown)} was not changed.[/dim]",
             )
 
     # Check if board already exists
@@ -1536,8 +1549,6 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     if make_default:
         config.default_board = name
 
-    # Save config
-    config_path = repo_root / ".kanban" / "config.yaml"
     config.save(config_path)
 
     # Create the path directory if it doesn't exist
