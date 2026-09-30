@@ -620,9 +620,15 @@ def list_items(
         if _fold_status_name(status) not in known:
             _refuse(f"Unknown status: {status}", f"[red]Unknown status: {safe(status)}[/red]")
 
-    # the board is loaded once: `--type`'s valid list reads it too (#1141)
-    loaded = service.get_items(board=board_name)
-    type_match = _type_filter(service, item_type, loaded) if item_type else None
+    # the board is loaded once: `--type`'s valid list reads it too (#1141). A
+    # declared (non-canonical) `--type` needs it to be judged, and refuses before
+    # `--priority`/`--resolution` as before #1141; otherwise those are validated
+    # before the board is loaded (#1149)
+    loaded: list[WorkItem] | None = None
+    type_match = None
+    if item_type and not _is_canonical_type(item_type):
+        loaded = service.get_items(board=board_name)
+        type_match = _type_filter(service, item_type, loaded)
 
     priority_filter = None
     if priority:
@@ -641,6 +647,10 @@ def list_items(
         unknown = f"Unknown resolution: {resolution}; valid: {', '.join(RESOLUTIONS)}"
         _refuse(unknown, f"[red]{escape(unknown)}[/red]")
 
+    if loaded is None:
+        loaded = service.get_items(board=board_name)
+    if item_type and type_match is None:
+        type_match = _type_filter(service, item_type, loaded)
     items = service.filter_items(loaded, assignee=assignee, priority=priority_filter)
     if type_match is not None:
         items = [i for i in items if type_match(i)]
@@ -1585,8 +1595,9 @@ def roadmap(
         yurtle-kanban roadmap --export md
     """
     service = get_service()
-    # every item, done ones included: `--type`'s valid list reads them (#1141)
-    loaded = service.get_items()
+    # every item, done ones included: `--type`'s valid list reads them (#1141);
+    # `--ranked` without `--type` needs none of them (#1149)
+    loaded = service.get_items() if item_type or not ranked else []
 
     if ranked:
         # Use ranked ordering: priority_rank first, then priority_score
@@ -1939,6 +1950,17 @@ def blocked(board_name: str | None, show_all: bool, as_json: bool):
         root = f"{item.id} ({_status_with(service.status_label(item), item.assignee)})"
         click.echo(f"{root}  waiting on:" if unmet else root)
         _echo_dep_tree(unmet, [item.id], {fold_id(item.id)}, 1)
+
+
+def _is_canonical_type(name: str) -> bool:
+    """A canonical `--type` is judged without loading the board (#1149). Keep in
+    step with `KanbanService.type_filter`, which accepts every canonical name the
+    same way: if it ever refuses one, `list`'s refusal order changes."""
+    try:
+        WorkItemType.from_string(name)
+    except InputRefused:
+        return False
+    return True
 
 
 def _type_filter(
