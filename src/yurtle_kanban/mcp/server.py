@@ -363,7 +363,12 @@ class KanbanMCPServer:
                     " duplicate IDs when multiple agents work"
                     " concurrently. This fetches from remote,"
                     " finds the highest existing ID, and"
-                    " commits an allocation lock."
+                    " commits an allocation lock. A refusal"
+                    ' comes back as {"error": ...} when the'
+                    " input or this checkout's allocations"
+                    ' file is at fault, or as {"success": false,'
+                    ' "id": null, "message": ...} when origin\'s'
+                    " is corrupt or the push fails: check both."
                 ),
                 "inputSchema": {
                     "type": "object",
