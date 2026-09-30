@@ -1,2 +1,0 @@
-<!-- section: Added -->
-- `claim ID [--agent A] [--take-over]`: the race-free claim, one compare-and-swap commit on origin's default branch that moves the item to in progress held by you; a held item is refused ("held by X"), a lost race says "lost to X" (exit 3), the actor must be explicit (`--agent` or `YURTLE_AGENT`, never git `user.name`), and `--take-over` records `kb:takenOverFrom` while gates, WIP and legality still apply (#574).
