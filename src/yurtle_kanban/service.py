@@ -254,12 +254,16 @@ class _CasRefusedError(Exception):
     the failure the caller reports."""
 
 
-def _parse_allocations(text: str | None, where: str) -> list[dict[str, Any]]:
+def _parse_allocations(
+    text: str | None, where: str, *, rewriting: bool = False
+) -> list[dict[str, Any]]:
     """The valid records of an `_ID_ALLOCATIONS.json` read from `where`.
 
     `text` None (no file) starts a fresh list. A file that exists but is not a JSON
-    list is refused, never replaced; non-object records inside a valid list are
-    skipped so they cannot hide valid allocations (#818, #846).
+    list is refused, never replaced, by readers and writers alike; non-object
+    records inside a valid list are skipped so they cannot hide valid allocations
+    (#818, #846, #1095). `rewriting`: the caller writes the records back, so the
+    skipped ones are dropped from the file, and a warning says so (#1095).
     """
     if text is None:
         return []
@@ -272,7 +276,14 @@ def _parse_allocations(text: str | None, where: str) -> list[dict[str, Any]]:
             f"{where} is not a valid JSON list of allocations: fix it or remove it "
             "(a missing file starts a fresh list); nothing was changed"
         )
-    return [record for record in records if isinstance(record, dict)]
+    kept = [record for record in records if isinstance(record, dict)]
+    dropped = len(records) - len(kept)
+    if rewriting and dropped:
+        logger.warning(
+            f"{where}: dropping {dropped} non-object record"
+            f"{'' if dropped == 1 else 's'} as it is rewritten"
+        )
+    return kept
 
 
 def _twin_key(name: str) -> str:
@@ -3127,12 +3138,17 @@ class KanbanService:
         """The next id in `prefix`'s space: past the scanned board and past what
         commit `base` holds (#590, #634), at the board paths `base`'s own config
         names (`_judge_at`, #865). Raises `_CasRefusedError` when that config
-        doesn't load."""
+        doesn't load, or an allocation file read is refused (#1095)."""
         try:
             judge = self._judge_at(base)
         except _TreeUnreadableError as e:
             raise _CasRefusedError(f"{e}; nothing was created") from None
-        num = max(self._scanned_next_id_number(prefix), judge._next_id_number_at(base, prefix))
+        try:
+            num = max(
+                self._scanned_next_id_number(prefix), judge._next_id_number_at(base, prefix)
+            )
+        except InputRefused as e:
+            raise _CasRefusedError(str(e)) from None  # nothing is pushed (#818)
         return self._format_id(prefix, num)
 
     @staticmethod
@@ -3417,6 +3433,7 @@ class KanbanService:
             allocations = _parse_allocations(
                 shown.stdout if shown.returncode == 0 else None,
                 f"{lock_rel.as_posix()} on the default branch",
+                rewriting=True,
             )
         except InputRefused as e:
             raise _CasRefusedError(str(e)) from None  # nothing is pushed (#818)
@@ -3424,11 +3441,14 @@ class KanbanService:
 
     @staticmethod
     def _local_allocations(lock_file: Path) -> list[dict[str, Any]]:
-        """The checkout's own allocation records: none when `lock_file` is missing,
-        and a file that exists but isn't a JSON list is refused (#818). Records that
-        aren't objects are skipped, so the file's next rewrite drops them (#846)."""
+        """The checkout's own allocation records, to be rewritten: none when
+        `lock_file` is missing, and a file that exists but isn't a JSON list is
+        refused (#818). Records that aren't objects are skipped, so this rewrite
+        drops them, with a warning (#846, #1095)."""
         return _parse_allocations(
-            lock_file.read_text() if lock_file.exists() else None, str(lock_file)
+            lock_file.read_text() if lock_file.exists() else None,
+            str(lock_file),
+            rewriting=True,
         )
 
     def _git_run(
@@ -3491,14 +3511,9 @@ class KanbanService:
         lock_rel = self._repo_relative(self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top)
         if lock_rel is not None:
             shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}")
-            if shown.returncode == 0:
-                try:
-                    records = _parse_allocations(
-                        shown.stdout, f"{lock_rel.as_posix()} at {rev}"
-                    )
-                    max_num = max(max_num, self._max_allocated(records, prefix))
-                except Exception:
-                    pass
+            if shown.returncode == 0:  # a corrupt file is refused, as writers do (#1095)
+                records = _parse_allocations(shown.stdout, f"{lock_rel.as_posix()} at {rev}")
+                max_num = max(max_num, self._max_allocated(records, prefix))
         return max_num + 1
 
     def _new_item(
@@ -3666,12 +3681,9 @@ class KanbanService:
 
         # Source 1: Check _ID_ALLOCATIONS.json for previously allocated IDs
         lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
-        if lock_file.exists():
-            try:
-                records = _parse_allocations(lock_file.read_text(), str(lock_file))
-                max_num = self._max_allocated(records, prefix)
-            except Exception:
-                pass
+        if lock_file.exists():  # a corrupt file is refused, as writers do (#1095)
+            records = _parse_allocations(lock_file.read_text(), str(lock_file))
+            max_num = self._max_allocated(records, prefix)
 
         # Source 2: IDs from parsed items, in prefix's own id space (#765)
         for existing_id in self._items.keys():
