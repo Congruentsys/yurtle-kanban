@@ -303,11 +303,12 @@ def _allocations_text(raw: bytes, where: str) -> str:
 
 def _local_allocations_text(lock_file: Path) -> str | None:
     """The checkout's `_ID_ALLOCATIONS.json`, or None when it is missing; one that
-    can't be read or isn't UTF-8 is refused (#1161)."""
-    if not lock_file.exists():
-        return None
+    can't be read or isn't UTF-8 is refused (#1161). Read at once, with no
+    existence check first: a file gone by the read is missing, not unreadable (#1167)."""
     try:
         raw = lock_file.read_bytes()
+    except FileNotFoundError:
+        return None
     except OSError as e:
         raise InputRefused(
             f"{lock_file} could not be read ({e.strerror or e}): fix it or remove it "
