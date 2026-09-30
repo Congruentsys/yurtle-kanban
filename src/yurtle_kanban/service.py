@@ -313,11 +313,13 @@ def kanban_dir_refusal(repo_root: Path) -> str | None:
     that directory must be (#1174, #1179). None when it is a directory or absent."""
     kanban = repo_root / ".kanban"
     if kanban.exists() and not kanban.is_dir():
-        return (
-            f"{kanban} is a file, where a directory must be: move or remove it; "
-            "nothing was changed"
-        )
+        return _a_file_refusal(kanban)
     return None
+
+
+def _a_file_refusal(where: Path) -> str:
+    """The one wording for a file where yurtle-kanban needs a directory (#1183)."""
+    return f"{where} is a file, where a directory must be: move or remove it; nothing was changed"
 
 
 def _local_allocations_text(lock_file: Path) -> str | None:
@@ -329,10 +331,7 @@ def _local_allocations_text(lock_file: Path) -> str | None:
     except FileNotFoundError:
         return None
     except NotADirectoryError:  # the thing to fix is the directory, not the file (#1174)
-        raise InputRefused(
-            f"{lock_file.parent} is a file, where the allocations directory must be: "
-            "move or remove it; nothing was changed"
-        ) from None
+        raise InputRefused(_a_file_refusal(lock_file.parent)) from None  # (#1183)
     except OSError as e:
         raise InputRefused(
             f"{lock_file} could not be read ({e.strerror or e}): fix it or remove it "
