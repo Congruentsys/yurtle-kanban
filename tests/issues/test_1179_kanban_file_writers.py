@@ -20,6 +20,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from tests.issues._snapshot import paths_outside_git
 from tests.issues.test_585_create_push_loop import World, git, output_of
 from tests.issues.test_603_push_failure_messages import invoke
 from yurtle_kanban import config as config_mod
@@ -88,12 +89,12 @@ def _boards(config_file: Path) -> list[str]:
 
 def test_init_refuses_when_kanban_is_a_file(tmp_path, monkeypatch) -> None:
     (tmp_path / ".kanban").write_text(KANBAN_FILE_TEXT)
-    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    before = sorted(p.relative_to(tmp_path) for p in paths_outside_git(tmp_path))
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(main, ["init"])
     _refused_naming_kanban(result)
     assert (tmp_path / ".kanban").read_text() == KANBAN_FILE_TEXT
-    after = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    after = sorted(p.relative_to(tmp_path) for p in paths_outside_git(tmp_path))
     assert after == before, f"init created {set(after) - set(before)}"
 
 
