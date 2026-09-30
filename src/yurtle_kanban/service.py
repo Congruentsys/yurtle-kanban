@@ -7330,16 +7330,23 @@ class KanbanService:
         me = fold_id(item.id)
         held = self._id_list(item.depends_on)
         had = {self._dup_key(d) for d in held}  # a stored `EXP-05` is `EXP-5` (#1146)
-        # one edge per `_dup_key`: an entry naming an edge already listed (as stored,
-        # or earlier) in another spelling is that edge, not a second one (#641, #1146)
+        # one edge per `_dup_key`: an entry naming an edge the item stores, in another
+        # spelling, is that edge in its stored spelling; one naming an edge listed
+        # earlier is dropped (#641, #1146)
+        stored = {self._dup_key(d): d for d in held}
         keys = {self._dup_key(d) for d in new_deps if d in held}
         kept: list[str] = []
         for d in new_deps:
             if d not in held:
-                if (key := self._dup_key(d)) in keys:
+                key = self._dup_key(d)
+                if key in stored:
+                    d = stored[key]
+                elif key in keys:
                     continue
-                keys.add(key)
-            kept.append(d)
+                else:
+                    keys.add(key)
+            if d not in kept:
+                kept.append(d)
         new_deps = kept
         added = [d for d in new_deps if self._dup_key(d) not in had]
         if not added:
