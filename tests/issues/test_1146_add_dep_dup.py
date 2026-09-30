@@ -81,6 +81,19 @@ def test_depends_on_naming_stored_id_twice_is_no_change(repo: Repo) -> None:
     assert path.read_bytes() == before, path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("given", ["EXP-005", "EXP-5"])
+def test_depends_on_another_spelling_of_the_stored_edge_is_no_change(
+    repo: Repo, given: str
+) -> None:
+    """r1 F1: `--depends-on EXP-005` on a stored `EXP-05` names that same edge: it
+    keeps the stored spelling (no change), never writes a third one."""
+    path = _stored(repo, "EXP-05")
+    before = path.read_bytes()
+    result = _ok(["update", "EXP-006", "--depends-on", given])
+    assert "no changes" in _flat(result.output).lower(), result.output
+    assert path.read_bytes() == before, path.read_text(encoding="utf-8")
+
+
 def test_service_edit_of_stored_spelling_is_no_change(repo: Repo) -> None:
     """The service's own answer: no changes, nothing to write."""
     path = _stored(repo, "EXP-05")
