@@ -2222,8 +2222,13 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             console.print(f"[green]Allocated: {escape(str(result['id']))}[/green]")
             console.print(f"  Prefix: {escape(str(result['prefix']))}")
             console.print(f"  Number: {result['number']}")
-            if not no_sync:
-                console.print("[dim]  (committed and pushed to remote)[/dim]")
+            where = {  # where the allocation went (#1159)
+                "pushed": "committed and pushed to remote",
+                "committed": "committed locally, not pushed",
+                "none": "not recorded: --no-commit",
+            }.get(result.get("recorded", ""))
+            if where:
+                console.print(f"[dim]  ({where})[/dim]")
             if result.get("note"):  # the checkout wasn't fast-forwarded (#995)
                 console.print(f"[yellow]  {safe(result['note'])}[/yellow]", soft_wrap=True)
         else:
