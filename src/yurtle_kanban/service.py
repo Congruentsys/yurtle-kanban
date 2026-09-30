@@ -254,10 +254,13 @@ class _CasRefusedError(Exception):
     the failure the caller reports."""
 
 
-def _parse_allocations(text: str | None, where: str) -> list[Any]:
-    """The records of an `_ID_ALLOCATIONS.json` read from `where`: `text` None (no
-    file) starts a fresh list; a file that exists but is not a JSON list is refused,
-    never replaced — rewriting it would drop every earlier allocation (#818)."""
+def _parse_allocations(text: str | None, where: str) -> list[dict[str, Any]]:
+    """The valid records of an `_ID_ALLOCATIONS.json` read from `where`.
+
+    `text` None (no file) starts a fresh list. A file that exists but is not a JSON
+    list is refused, never replaced; non-object records inside a valid list are
+    skipped so they cannot hide valid allocations (#818, #846).
+    """
     if text is None:
         return []
     try:
@@ -269,7 +272,7 @@ def _parse_allocations(text: str | None, where: str) -> list[Any]:
             f"{where} is not a valid JSON list of allocations: fix it or remove it "
             "(a missing file starts a fresh list); nothing was changed"
         )
-    return records
+    return [record for record in records if isinstance(record, dict)]
 
 
 def _twin_key(name: str) -> str:
@@ -3420,7 +3423,7 @@ class KanbanService:
         return {lock_rel: self._with_allocation(allocations, current_id, actor)}
 
     @staticmethod
-    def _local_allocations(lock_file: Path) -> list[Any]:
+    def _local_allocations(lock_file: Path) -> list[dict[str, Any]]:
         """The checkout's own allocation records: none when `lock_file` is missing,
         and a file that exists but isn't a JSON list is refused (#818)."""
         return _parse_allocations(
@@ -3477,8 +3480,6 @@ class KanbanService:
         frontmatter ids in the id space (`_rev_roots()`: the work paths and every
         placement dir, #1014), plus the allocation records committed there (#585,
         #590)."""
-        import json
-
         top = self._git_toplevel()
         names, ids = self._ids_at(rev)
         max_num = 0
@@ -3491,7 +3492,10 @@ class KanbanService:
             shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}")
             if shown.returncode == 0:
                 try:
-                    max_num = max(max_num, self._max_allocated(json.loads(shown.stdout), prefix))
+                    records = _parse_allocations(
+                        shown.stdout, f"{lock_rel.as_posix()} at {rev}"
+                    )
+                    max_num = max(max_num, self._max_allocated(records, prefix))
                 except Exception:
                     pass
         return max_num + 1
@@ -3654,8 +3658,6 @@ class KanbanService:
 
         Returns max across all sources + 1.
         """
-        import json
-
         if not self._items:
             self.scan()
 
@@ -3665,8 +3667,9 @@ class KanbanService:
         lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
         if lock_file.exists():
             try:
-                max_num = self._max_allocated(json.loads(lock_file.read_text()), prefix)
-            except (json.JSONDecodeError, Exception):
+                records = _parse_allocations(lock_file.read_text(), str(lock_file))
+                max_num = self._max_allocated(records, prefix)
+            except Exception:
                 pass
 
         # Source 2: IDs from parsed items, in prefix's own id space (#765)
