@@ -316,6 +316,11 @@ def _local_allocations_text(lock_file: Path) -> str | None:
         raw = lock_file.read_bytes()
     except FileNotFoundError:
         return None
+    except NotADirectoryError:  # the thing to fix is the directory, not the file (#1174)
+        raise InputRefused(
+            f"{lock_file.parent} is a file, where the allocations directory must be: "
+            "move or remove it; nothing was changed"
+        ) from None
     except OSError as e:
         raise InputRefused(
             f"{lock_file} could not be read ({e.strerror or e}): fix it or remove it "
