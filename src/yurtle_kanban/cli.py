@@ -83,6 +83,7 @@ from .service import (
     KanbanService,
     age_text,
     git_toplevel,
+    kanban_dir_refusal,
     parse_duration,
 )
 from .sync import HALTED, NOTHING_PICKABLE, Outcome
@@ -136,6 +137,18 @@ console = Console()
 err_console = Console(stderr=True)
 
 
+def _config_path(repo_root: Path) -> Path | None:
+    """The board config `get_service` loads: `.yurtle-kanban/config.yaml`
+    (preferred), else `.kanban/config.yaml` (legacy), else None."""
+    for path in (
+        repo_root / ".yurtle-kanban" / "config.yaml",
+        repo_root / ".kanban" / "config.yaml",
+    ):
+        if path.exists():
+            return path
+    return None
+
+
 def get_service() -> KanbanService:
     """Get the kanban service for the current directory."""
     repo_root = Path.cwd()
@@ -143,17 +156,7 @@ def get_service() -> KanbanService:
     # Check for config in priority order:
     # 1. .yurtle-kanban/config.yaml (preferred)
     # 2. .kanban/config.yaml (legacy/fallback)
-    config_paths = [
-        repo_root / ".yurtle-kanban" / "config.yaml",
-        repo_root / ".kanban" / "config.yaml",
-    ]
-
-    config_path = None
-    for path in config_paths:
-        if path.exists():
-            config_path = path
-            break
-
+    config_path = _config_path(repo_root)
     if config_path:
         try:
             config = KanbanConfig.load(config_path)
@@ -342,6 +345,8 @@ def init(theme: str, path: str | None):
 
     # Create .kanban directory structure
     kanban_dir = repo_root / ".kanban"
+    if (refusal := kanban_dir_refusal(repo_root)) is not None:  # (#1179)
+        raise InputRefused(refusal)
     kanban_dir.mkdir(exist_ok=True)
     (kanban_dir / "workflows").mkdir(exist_ok=True)
     (kanban_dir / "templates").mkdir(exist_ok=True)
@@ -1536,8 +1541,8 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     if make_default:
         config.default_board = name
 
-    # Save config
-    config_path = repo_root / ".kanban" / "config.yaml"
+    # Save config: to the file it was loaded from (#1179)
+    config_path = _config_path(repo_root) or repo_root / ".kanban" / "config.yaml"
     config.save(config_path)
 
     # Create the path directory if it doesn't exist

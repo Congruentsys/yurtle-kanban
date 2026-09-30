@@ -308,6 +308,18 @@ def _allocations_text(raw: bytes, where: str) -> str:
         ) from None
 
 
+def kanban_dir_refusal(repo_root: Path) -> str | None:
+    """Why nothing can be written under `repo_root`'s `.kanban/`: it is a file where
+    that directory must be (#1174, #1179). None when it is a directory or absent."""
+    kanban = repo_root / ".kanban"
+    if kanban.exists() and not kanban.is_dir():
+        return (
+            f"{kanban} is a file, where a directory must be: move or remove it; "
+            "nothing was changed"
+        )
+    return None
+
+
 def _local_allocations_text(lock_file: Path) -> str | None:
     """The checkout's `_ID_ALLOCATIONS.json`, or None when it is missing; one that
     can't be read or isn't UTF-8 is refused (#1161). Read at once, with no
@@ -6906,6 +6918,8 @@ class KanbanService:
         `sync_and_push`, one commit of that file alone onto origin's default
         branch. Halting a halted board refreshes it; resuming one that is not
         halted is a no-op."""
+        if (refusal := kanban_dir_refusal(self.repo_root)) is not None:
+            raise InputRefused(refusal)  # before any write or commit (#1179)
         rel = self._control_rel()
         at = _now().isoformat(timespec="seconds")
 
