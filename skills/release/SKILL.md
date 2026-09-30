@@ -141,9 +141,17 @@ tag and **no PyPI publish**, silently: nothing fails, the workflow simply never
 runs. Create the release explicitly:
 
 ```bash
-gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <(sed -n '/^## \[X.Y.Z\]/,/^## \[/p' CHANGELOG.md | sed '$d')
+python scripts/release_notes.py X.Y.Z > /tmp/notes-vX.Y.Z.md   # exit 1 = fix before going on
+gh release create vX.Y.Z --verify-tag --title "vX.Y.Z" --notes-file /tmp/notes-vX.Y.Z.md
 gh run list --workflow=publish.yml --limit 1     # confirm it FIRED
 ```
+
+⚠ **Never pass the whole CHANGELOG section by hand.** GitHub refuses a release body
+over 125,000 characters, and a refused `gh release create` creates no release, so
+`publish.yml` never runs — the silent PyPI skip again (v3.0.0's section was 137,199).
+`scripts/release_notes.py` prints the section when it fits, else condensed notes (entry
+counts, every `**Breaking` entry, Removed and Deprecated, and a link to the full
+section), and refuses with exit 1 if even those don't fit (#1191).
 
 Verify it actually published before calling the release done — the workflow
 running is not the same as the artifact landing:
