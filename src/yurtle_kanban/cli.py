@@ -1472,6 +1472,14 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     service = get_service()
     config = service.config
     repo_root = service.repo_root
+    # saved to the file it was loaded from; with none, a new .kanban/config.yaml,
+    # refused up front if .kanban is a file (#1179)
+    config_path = _config_path(repo_root)
+    if config_path is None:
+        if (refusal := kanban_dir_refusal(repo_root)) is not None:
+            raise InputRefused(refusal)
+        config_path = repo_root / ".kanban" / "config.yaml"
+    shown = config_path.relative_to(repo_root).as_posix()
 
     # Validate preset exists
     if not _load_builtin_theme(preset, repo_root):
@@ -1519,7 +1527,7 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
                 message,
                 f"[red]{safe(message)}[/red]\n"
                 "[dim]Move them under a common folder (and set paths.root to it), "
-                "then run board-add again. .kanban/config.yaml was not changed.[/dim]",
+                f"then run board-add again. {safe(shown)} was not changed.[/dim]",
             )
 
     # Check if board already exists
@@ -1541,8 +1549,6 @@ def board_add(name: str, preset: str, path: str, wip_limit: tuple[str, ...], mak
     if make_default:
         config.default_board = name
 
-    # Save config: to the file it was loaded from (#1179)
-    config_path = _config_path(repo_root) or repo_root / ".kanban" / "config.yaml"
     config.save(config_path)
 
     # Create the path directory if it doesn't exist

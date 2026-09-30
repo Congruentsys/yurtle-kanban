@@ -124,6 +124,33 @@ def test_board_add_control_kanban_config_still_saves_there(world, monkeypatch) -
     assert not (world.a / ".yurtle-kanban").exists()
 
 
+def test_board_add_refuses_with_no_config_and_a_kanban_file(tmp_path, monkeypatch) -> None:
+    """No config at all: the new one would be .kanban/config.yaml, and .kanban is a file."""
+    git(tmp_path, "init", "-q")
+    (tmp_path / ".kanban").write_text(KANBAN_FILE_TEXT)
+    before = sorted(p.relative_to(tmp_path) for p in paths_outside_git(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(main, BOARD)
+    _refused_naming_kanban(result)
+    after = sorted(p.relative_to(tmp_path) for p in paths_outside_git(tmp_path))
+    assert after == before, f"board-add created {set(after) - set(before)}"
+
+
+def test_board_add_uncovered_refusal_names_the_loaded_config(world, monkeypatch) -> None:
+    """#122's refusal says which config was not changed: the one it loaded."""
+    _config_in_yurtle_kanban(world, kanban_file=False)
+    config_file = world.a / ".yurtle-kanban" / "config.yaml"
+    data = yaml.safe_load(config_file.read_text())
+    data["kanban"]["paths"]["scan_paths"] = ["kanban-work/expeditions/", "elsewhere/"]
+    config_file.write_text(yaml.safe_dump(data))
+    before = config_file.read_text()
+    result = invoke(world, monkeypatch, BOARD)
+    out = output_of(result)
+    assert result.exit_code != 0, out
+    assert ".yurtle-kanban/config.yaml was not changed" in out, out
+    assert config_file.read_text() == before
+
+
 # --- 3. control halt ---------------------------------------------------------------
 
 
