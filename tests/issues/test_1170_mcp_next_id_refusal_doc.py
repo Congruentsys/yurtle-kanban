@@ -72,27 +72,37 @@ def _nothing(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     pass
 
 
-CASES: dict[str, tuple[Callable[[World, pytest.MonkeyPatch], None], dict[str, Any], str]] = {
-    "malformed-prefix": (_nothing, {"prefix": "E X"}, "error"),
-    "corrupt-local-no-remote": (_corrupt_local_no_remote, {}, "error"),
-    "corrupt-local-sync-false": (_corrupt_local, {"sync_remote": False}, "error"),
-    "corrupt-local-syncing": (_corrupt_local, {}, "dict"),
-    "corrupt-origin-syncing": (_corrupt_origin, {}, "dict"),
-    "corrupt-fetched-origin-sync-false": (_corrupt_fetched_origin, {"sync_remote": False}, "dict"),
-    "no-actor": (no_actor, {}, "dict"),
-    "refused-local-commit": (_refused_local_commit, {}, "dict"),
+LOCAL_CORRUPT = "_ID_ALLOCATIONS.json is not a valid JSON list"  # the checkout's own
+ORIGIN_CORRUPT = "_ID_ALLOCATIONS.json at "  # read at a rev: origin's (#1181)
+
+# (setup, args, shape, a message substring pinning WHICH refusal it is, #1181)
+Case = tuple[Callable[[World, pytest.MonkeyPatch], None], dict[str, Any], str, str]
+CASES: dict[str, Case] = {
+    "malformed-prefix": (_nothing, {"prefix": "E X"}, "error", "is not an ID prefix"),
+    "corrupt-local-no-remote": (_corrupt_local_no_remote, {}, "error", LOCAL_CORRUPT),
+    "corrupt-local-sync-false": (_corrupt_local, {"sync_remote": False}, "error", LOCAL_CORRUPT),
+    "corrupt-local-syncing": (_corrupt_local, {}, "dict", LOCAL_CORRUPT),
+    "corrupt-origin-syncing": (_corrupt_origin, {}, "dict", ORIGIN_CORRUPT),
+    "corrupt-fetched-origin-sync-false": (
+        _corrupt_fetched_origin, {"sync_remote": False}, "dict", ORIGIN_CORRUPT + "refs/remotes/"
+    ),
+    "no-actor": (no_actor, {}, "dict", "No actor"),
+    "refused-local-commit": (_refused_local_commit, {}, "dict", "pre-commit says no"),
 }
 
 
 @pytest.mark.parametrize("case", list(CASES))
 def test_next_id_refusal_shape_is_as_described(world, monkeypatch, case) -> None:
-    setup, args, shape = CASES[case]
+    setup, args, shape, why = CASES[case]
     setup(world, monkeypatch)
     monkeypatch.chdir(world.a)
     server = mcp_server.KanbanMCPServer(repo_root=world.a)
     out = server.handle_tool_call("kanban_next_id", {"prefix": "EXP", **args})
     if shape == "error":
         assert set(out) == {"error"}, out
+        said = out["error"]
     else:
         assert out.get("success") is False and out.get("id") is None, out
         assert "error" not in out, out
+        said = out["message"]
+    assert why in said, f"{case} reached another refusal: {said!r}"
