@@ -67,5 +67,12 @@ def test_split_fragments_each_keep_their_section(tmp_path):
 
 def test_every_real_fragment_assembles():
     mod = _assembler()
-    # read_fragments refuses a second section line (outside a fence) itself (#660)
-    assert mod.read_fragments(ROOT / "changelog.d"), "changelog.d/ has fragments"
+    # read_fragments refuses a second section line (outside a fence) itself (#660);
+    # none at all is fine: a release commit has just assembled them away (#1188)
+    mod.read_fragments(ROOT / "changelog.d")
+
+
+def test_no_fragments_is_not_a_failure(tmp_path):
+    """Right after a release changelog.d/ holds only its README (#1188)."""
+    (tmp_path / "README.md").write_text("# fragments\n")
+    assert _assembler().read_fragments(tmp_path) == []
