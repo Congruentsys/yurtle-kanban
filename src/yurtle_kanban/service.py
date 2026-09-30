@@ -4408,7 +4408,9 @@ class KanbanService:
         """Allocate the next available ID for a prefix with git synchronization.
 
         This method prevents duplicate IDs when multiple agents create work items
-        concurrently. With a remote (and sync_remote and commit_allocation), the
+        concurrently. The result's `recorded` says where the allocation went:
+        `pushed`, `committed` (locally) or `none` (#1159). With a remote (and
+        sync_remote and commit_allocation), the
         allocation record is committed onto the fetched default branch and pushed
         as a compare-and-swap; a lost race retries with a new id (#590). Otherwise
         the record is committed locally.
@@ -4460,6 +4462,7 @@ class KanbanService:
                     "prefix": prefix,
                     "number": num,
                     "message": f"Allocated {made['id']} on origin/{branch}",
+                    "recorded": "pushed",  # where the allocation went (#1159)
                 }
                 # on the branch, yet not fast-forwarded (a diverged main): say so
                 # here, once, without git's advice (#995); never a failure (#603)
@@ -4512,6 +4515,7 @@ class KanbanService:
             "prefix": prefix,
             "number": next_num,
             "message": f"Allocated {item_id}",
+            "recorded": "committed" if commit_allocation else "none",  # (#1159)
         }
 
     def move_item(
