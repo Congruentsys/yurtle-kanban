@@ -4493,10 +4493,13 @@ class KanbanService:
             success, 'recorded' ('pushed', 'committed' or 'none'; #1159), plus
             'note' when the checkout wasn't fast-forwarded (#995)
 
-        Refusals, by which file is corrupt (#847, #1162): the checkout's own
-        allocations file (or a malformed prefix) raises `InputRefused`; origin's,
-        whether the compare-and-swap base or the fetched origin/<default> the local
-        path reads, comes back as the dict with `success` False and `number` None.
+        Refusals (#847, #1162, #1170): a malformed prefix raises `InputRefused`, and
+        so does a corrupt allocations file in this checkout when allocating locally
+        (no remote, `sync_remote` or `commit_allocation` False). Every other refusal
+        comes back as the dict with `success` False and `number` None: a corrupt
+        allocations file on the compare-and-swap path (this checkout's or origin's),
+        a corrupt fetched origin/<default> on the local path, no actor, a refused
+        commit or push.
         """
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
