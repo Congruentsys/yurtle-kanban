@@ -4421,7 +4421,9 @@ class KanbanService:
             commit_allocation: Whether to commit the allocation lock file
 
         Returns:
-            dict with 'id', 'prefix', 'number', and 'success' keys
+            dict with 'success', 'id', 'prefix', 'number', 'message' and, on
+            success, 'recorded' ('pushed', 'committed' or 'none'; #1159), plus
+            'note' when the checkout wasn't fast-forwarded (#995)
         """
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
