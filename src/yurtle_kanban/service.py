@@ -289,6 +289,33 @@ def _parse_allocations(
     return kept
 
 
+def _allocations_text(raw: bytes, where: str) -> str:
+    """An `_ID_ALLOCATIONS.json` read from `where`, decoded: one that isn't UTF-8 is
+    refused as a corrupt one is, never read past (#1161)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise InputRefused(
+            f"{where} is not valid UTF-8: fix it or remove it "
+            "(a missing file starts a fresh list); nothing was changed"
+        ) from None
+
+
+def _local_allocations_text(lock_file: Path) -> str | None:
+    """The checkout's `_ID_ALLOCATIONS.json`, or None when it is missing; one that
+    can't be read or isn't UTF-8 is refused (#1161)."""
+    if not lock_file.exists():
+        return None
+    try:
+        raw = lock_file.read_bytes()
+    except OSError as e:
+        raise InputRefused(
+            f"{lock_file} could not be read ({e.strerror or e}): fix it or remove it "
+            "(a missing file starts a fresh list); nothing was changed"
+        ) from None
+    return _allocations_text(raw, str(lock_file))
+
+
 def _twin_key(name: str) -> str:
     """A path as a case- and normalization-insensitive filesystem (APFS) compares
     it (#869): NFC, case folded, NFC again. `Café` NFC and NFD are one name, and
@@ -3433,11 +3460,12 @@ class KanbanService:
         )
         if lock_rel is None:
             raise _CasRefusedError(f"{self.repo_root} is outside the git repository")
-        shown = self._git_run("show", f"{base}:{lock_rel.as_posix()}")
+        shown = self._git_run("show", f"{base}:{lock_rel.as_posix()}", text=False)
+        where = f"{lock_rel.as_posix()} on the default branch"
         try:
             allocations = _parse_allocations(
-                shown.stdout if shown.returncode == 0 else None,
-                f"{lock_rel.as_posix()} on the default branch",
+                _allocations_text(shown.stdout, where) if shown.returncode == 0 else None,
+                where,
                 rewriting=True,
                 warned=self._drops_warned,  # one warning across retries (#1158)
             )
@@ -3452,7 +3480,7 @@ class KanbanService:
         refused (#818). Records that aren't objects are skipped, so this rewrite
         drops them, with a warning (#846, #1095)."""
         return _parse_allocations(
-            lock_file.read_text() if lock_file.exists() else None,
+            _local_allocations_text(lock_file),  # unreadable: refused (#1161)
             str(lock_file),
             rewriting=True,
         )
@@ -3516,9 +3544,10 @@ class KanbanService:
             max_num = max(max_num, self._number_in_space(found, prefix))  # (#752, #765)
         lock_rel = self._repo_relative(self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top)
         if lock_rel is not None:
-            shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}")
+            shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}", text=False)
             if shown.returncode == 0:  # a corrupt file is refused, as writers do (#1095)
-                records = _parse_allocations(shown.stdout, f"{lock_rel.as_posix()} at {rev}")
+                where = f"{lock_rel.as_posix()} at {rev}"
+                records = _parse_allocations(_allocations_text(shown.stdout, where), where)
                 max_num = max(max_num, self._max_allocated(records, prefix))
         return max_num + 1
 
@@ -3687,8 +3716,9 @@ class KanbanService:
 
         # Source 1: Check _ID_ALLOCATIONS.json for previously allocated IDs
         lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
-        if lock_file.exists():  # a corrupt file is refused, as writers do (#1095)
-            records = _parse_allocations(lock_file.read_text(), str(lock_file))
+        text = _local_allocations_text(lock_file)  # unreadable: refused (#1161)
+        if text is not None:  # a corrupt file is refused, as writers do (#1095)
+            records = _parse_allocations(text, str(lock_file))
             max_num = self._max_allocated(records, prefix)
 
         # Source 2: IDs from parsed items, in prefix's own id space (#765)
