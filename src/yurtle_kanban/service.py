@@ -7325,10 +7325,23 @@ class KanbanService:
         already has are not re-checked, so an unrelated edit on an item already in a
         cycle, or with a dangling target, still goes through. `board` is the
         (dependency graph, duplicated IDs) to check against, e.g. a fetched commit's
-        (#574); default the scanned board's."""
+        (#574); default the scanned board's. An edge the item already stores in
+        another spelling (`EXP-05` for `EXP-5`) is that edge, not a new one (#1146)."""
         me = fold_id(item.id)
-        had = set(self._id_list(item.depends_on))
-        added = [d for d in new_deps if d not in had]
+        held = self._id_list(item.depends_on)
+        had = {self._dup_key(d) for d in held}  # a stored `EXP-05` is `EXP-5` (#1146)
+        # one edge per `_dup_key`: an entry naming an edge already listed (as stored,
+        # or earlier) in another spelling is that edge, not a second one (#641, #1146)
+        keys = {self._dup_key(d) for d in new_deps if d in held}
+        kept: list[str] = []
+        for d in new_deps:
+            if d not in held:
+                if (key := self._dup_key(d)) in keys:
+                    continue
+                keys.add(key)
+            kept.append(d)
+        new_deps = kept
+        added = [d for d in new_deps if self._dup_key(d) not in had]
         if not added:
             return new_deps
         if board is None:
@@ -7354,7 +7367,7 @@ class KanbanService:
                 )
             named[target] = found or target
         new_deps = list(dict.fromkeys(named.get(d, d) for d in new_deps))
-        added = [d for d in dict.fromkeys(named.values()) if d not in had]
+        added = [d for d in dict.fromkeys(named.values()) if self._dup_key(d) not in had]
         graph[me] = new_deps
         cycle = self.find_cycle(me, graph, via=added) if added else None
         if cycle:
