@@ -71,3 +71,14 @@ def test_no_sync_says_committed_locally(world: World, monkeypatch) -> None:
     result = next_id(world, monkeypatch, "FEAT", "--no-sync")
     assert result.exit_code == 0, result.output
     _only(result.output, COMMITTED)
+    data = json.loads(next_id(world, monkeypatch, "FEAT", "--no-sync", "--json").stdout)
+    assert data["recorded"] == "committed", data
+
+
+def test_mcp_next_id_carries_recorded(world: World, monkeypatch) -> None:
+    """r1 F2: MCP's next-id returns the service result, `recorded` included."""
+    from yurtle_kanban.mcp.server import KanbanMCPServer
+
+    monkeypatch.chdir(world.a)
+    data = KanbanMCPServer(repo_root=world.a)._next_id({"prefix": "FEAT", "sync_remote": False})
+    assert data.get("recorded") == "committed", data
