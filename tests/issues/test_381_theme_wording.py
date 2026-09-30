@@ -46,6 +46,7 @@ OLD_WORDING = "missing file"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FRAGMENT = REPO_ROOT / "changelog.d" / "365.md"
+CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 SECTIONS = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
 SECTION_LINE = re.compile(r"<!-- section: (\w+) -->")
 
@@ -142,17 +143,30 @@ class TestUnfollowableSymlink:
 # ---------------------------------------------------------------------------
 
 
+def _entry() -> str:
+    """The #365 changelog entry: its fragment, or, once a release has assembled the
+    fragments away, its bullet in CHANGELOG.md (#1188)."""
+    if FRAGMENT.exists():
+        return FRAGMENT.read_text()
+    bullets = re.split(r"\n(?=- )", CHANGELOG.read_text())
+    found = [b for b in bullets if "(#365, #381)" in b]
+    assert found, "the #365 entry is in neither changelog.d/365.md nor CHANGELOG.md"
+    return found[0]
+
+
 class TestChangelogFragment:
     def test_no_one_warning_claim(self) -> None:
-        text = FRAGMENT.read_text()
+        text = _entry()
         assert "with one warning" not in " ".join(text.split()), text
 
     def test_still_mentions_is_empty_and_issue(self) -> None:
-        text = FRAGMENT.read_text()
+        text = _entry()
         assert "is empty" in text, text
         assert "#365" in text, text
 
     def test_matches_readme_format(self) -> None:
+        if not FRAGMENT.exists():
+            pytest.skip("released: the fragment format is test_673's (#1188)")
         lines = FRAGMENT.read_text().splitlines()
         assert lines, "empty fragment"
         m = SECTION_LINE.fullmatch(lines[0].strip())
