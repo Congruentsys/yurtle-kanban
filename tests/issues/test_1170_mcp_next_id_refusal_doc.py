@@ -16,7 +16,7 @@ from tests.issues.test_818_allocations_refuse_corrupt import (
     drop_remote,
     seed_local,
 )
-from tests.issues.test_847_allocation_refusals import no_actor
+from tests.issues.test_847_allocation_refusals import failing_pre_commit, no_actor
 from yurtle_kanban import config as config_mod
 from yurtle_kanban.mcp import server as mcp_server
 
@@ -63,6 +63,11 @@ def _corrupt_fetched_origin(world: World, monkeypatch: pytest.MonkeyPatch) -> No
     git(world.a, "fetch", "origin")
 
 
+def _refused_local_commit(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    drop_remote(world)
+    failing_pre_commit(world)  # the pre-commit hook says no (#1177)
+
+
 def _nothing(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     pass
 
@@ -75,6 +80,7 @@ CASES: dict[str, tuple[Callable[[World, pytest.MonkeyPatch], None], dict[str, An
     "corrupt-origin-syncing": (_corrupt_origin, {}, "dict"),
     "corrupt-fetched-origin-sync-false": (_corrupt_fetched_origin, {"sync_remote": False}, "dict"),
     "no-actor": (no_actor, {}, "dict"),
+    "refused-local-commit": (_refused_local_commit, {}, "dict"),
 }
 
 
