@@ -255,7 +255,7 @@ class _CasRefusedError(Exception):
 
 
 def _parse_allocations(
-    text: str | None, where: str, *, rewriting: bool = False
+    text: str | None, where: str, *, rewriting: bool = False, warned: set[str] | None = None
 ) -> list[dict[str, Any]]:
     """The valid records of an `_ID_ALLOCATIONS.json` read from `where`.
 
@@ -263,7 +263,8 @@ def _parse_allocations(
     list is refused, never replaced, by readers and writers alike; non-object
     records inside a valid list are skipped so they cannot hide valid allocations
     (#818, #846, #1095). `rewriting`: the caller writes the records back, so the
-    skipped ones are dropped from the file, and a warning says so (#1095).
+    skipped ones are dropped from the file, and a warning says so (#1095): once
+    per `where` in `warned`, when given, so a retried rewrite warns once (#1158).
     """
     if text is None:
         return []
@@ -278,7 +279,9 @@ def _parse_allocations(
         )
     kept = [record for record in records if isinstance(record, dict)]
     dropped = len(records) - len(kept)
-    if rewriting and dropped:
+    if rewriting and dropped and (warned is None or where not in warned):
+        if warned is not None:
+            warned.add(where)
         logger.warning(
             f"{where}: dropping {dropped} non-object record"
             f"{'' if dropped == 1 else 's'} as it is rewritten"
@@ -752,6 +755,7 @@ class KanbanService:
         self._board_theme_cache: dict[str, dict | None] = {}
         self._scanning = False
         self._ff_why: str | None = None  # the last refused fast-forward's reason (#1048)
+        self._drops_warned: set[str] = set()  # allocation drops warned this CAS (#1158)
         # `control_state` memoised until the next scan, fetch or halt/resume (#1067)
         self._control_cache: ControlState | None = None
         if getattr(config, "repo_root", None) is None:
@@ -2643,6 +2647,7 @@ class KanbanService:
         is fast-forwarded and `landed(branch, local)` makes the result."""
         failed = self._push_failed
         branch = "main"
+        self._drops_warned.clear()  # each command warns afresh (#1158)
         try:
             branch, known = self._resolve_default()
             return self._race_to_branch(branch, build, landed, max_retries, what, known=known)
@@ -3434,6 +3439,7 @@ class KanbanService:
                 shown.stdout if shown.returncode == 0 else None,
                 f"{lock_rel.as_posix()} on the default branch",
                 rewriting=True,
+                warned=self._drops_warned,  # one warning across retries (#1158)
             )
         except InputRefused as e:
             raise _CasRefusedError(str(e)) from None  # nothing is pushed (#818)
