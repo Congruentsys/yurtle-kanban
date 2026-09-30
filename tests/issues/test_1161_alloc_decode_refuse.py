@@ -185,3 +185,26 @@ def test_control_valid_utf8_non_ascii_record_works(world, monkeypatch) -> None:
     result = invoke(world, monkeypatch, ["next-id", "EXP", "--no-sync", "--json"])
     assert result.exit_code == 0, output_of(result)
     assert json.loads(result.output)["id"] == "EXP-005"
+
+
+# --- the two rewriters, pinned directly (a CLI run fails at a reader first) ---------------
+
+
+@pytest.mark.parametrize("data", list(NON_UTF8.values()), ids=list(NON_UTF8))
+def test_local_allocations_refuses_non_utf8(world, data: bytes) -> None:
+    from yurtle_kanban.models import InputRefused
+    from yurtle_kanban.service import KanbanService
+
+    seed_local_bytes(world, data)
+    with pytest.raises(InputRefused, match="not valid UTF-8"):
+        KanbanService._local_allocations(world.a / ALLOC)
+
+
+@pytest.mark.parametrize("data", list(NON_UTF8.values()), ids=list(NON_UTF8))
+def test_allocation_blob_refuses_non_utf8(world, data: bytes) -> None:
+    from tests.test_634_explicit_ids_on_base import service
+    from yurtle_kanban.service import _CasRefusedError
+
+    seed_local_bytes(world, data)
+    with pytest.raises(_CasRefusedError, match="not valid UTF-8"):
+        service(world)._allocation_blob("HEAD", "EXP-009", "agent-A")
