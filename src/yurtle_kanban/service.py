@@ -3425,7 +3425,8 @@ class KanbanService:
     @staticmethod
     def _local_allocations(lock_file: Path) -> list[dict[str, Any]]:
         """The checkout's own allocation records: none when `lock_file` is missing,
-        and a file that exists but isn't a JSON list is refused (#818)."""
+        and a file that exists but isn't a JSON list is refused (#818). Records that
+        aren't objects are skipped, so the file's next rewrite drops them (#846)."""
         return _parse_allocations(
             lock_file.read_text() if lock_file.exists() else None, str(lock_file)
         )
