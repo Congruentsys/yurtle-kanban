@@ -4442,6 +4442,11 @@ class KanbanService:
             dict with 'success', 'id', 'prefix', 'number', 'message' and, on
             success, 'recorded' ('pushed', 'committed' or 'none'; #1159), plus
             'note' when the checkout wasn't fast-forwarded (#995)
+
+        Refusals, by which file is corrupt (#847, #1162): the checkout's own
+        allocations file (or a malformed prefix) raises `InputRefused`; origin's,
+        whether the compare-and-swap base or the fetched origin/<default> the local
+        path reads, comes back as the dict with `success` False and `number` None.
         """
 
         self._check_text(prefix=prefix)  # before any write or commit (#219)
@@ -4514,7 +4519,12 @@ class KanbanService:
                 logger.warning(f"Git fetch failed: {e}")
         self._items.clear()
         self.scan()
-        next_num = self._get_next_id_number(prefix, fetched)
+        self._scanned_next_id_number(prefix)  # a corrupt local file: raises (#847)
+        try:
+            next_num = self._get_next_id_number(prefix, fetched)
+        except InputRefused as e:  # so a corrupt origin: the dict, as by CAS (#1162)
+            return {"success": False, "id": None, "prefix": prefix, "number": None,
+                    "message": str(e)}
         item_id = self._format_id(prefix, next_num)
 
         if commit_allocation:
