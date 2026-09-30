@@ -22,7 +22,7 @@ import re
 import subprocess
 import time
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
@@ -6566,7 +6566,7 @@ class KanbanService:
 
     def _dep_graph(self, index: dict[str, WorkItem]) -> dict[str, list[str]]:
         """`dependency_graph` over `index`'s items."""
-        return {key: self._id_list(item.depends_on) for key, item in index.items()}
+        return self._joined({key: self._id_list(item.depends_on) for key, item in index.items()})
 
     def _dep_state(
         self, dep_id: str, index: dict[str, WorkItem], graph: dict[str, list[str]]
@@ -6577,6 +6577,7 @@ class KanbanService:
         kind is `supersession` or `depends_on` when the state is `cycle`, decided
         here and nowhere else (#1083); None otherwise."""
         key = fold_id(dep_id.strip())
+        key = self._graph_id(key, index) or key  # `EXP-05` is `EXP-5` (#641, #1139)
         dep = index.get(key)
         if dep is None:
             return "unknown", None, [dep_id], None
@@ -6634,8 +6635,9 @@ class KanbanService:
                 state=state,
                 cycle_kind=cycle_kind,
             )
-            if dep is not None and state in ("unfinished", "cycle") and dep_id not in path:
-                node.children = self._unmet(dep, index, graph, path | {dep_id})
+            key = self._graph_id(dep_id, index) or dep_id  # one node per spelling (#1139)
+            if dep is not None and state in ("unfinished", "cycle") and key not in path:
+                node.children = self._unmet(dep, index, graph, path | {key})
             nodes.append(node)
         return nodes
 
@@ -7238,6 +7240,7 @@ class KanbanService:
             for c in configs for i in self._items_at(rev, c)
         }
         graph.update((fold_id(i.id), self._id_list(i.depends_on)) for i in outside)
+        graph = self._joined(graph)  # (#1139)
         top = self._git_toplevel()
         files: dict[str, list[Path]] = {}
         found_at = [(top / path, found) for path, found in self._ids_at(rev)[1]]
@@ -7376,7 +7379,7 @@ class KanbanService:
         return deps
 
     @classmethod
-    def _graph_id(cls, target: str, graph: dict[str, list[str]]) -> str | None:
+    def _graph_id(cls, target: str, graph: Mapping[str, object]) -> str | None:
         """The key of `graph` that is `target`: an exact match first, else the one
         with the same `_dup_key` (`EXP-9` finds `EXP-009`; #641, #1125), or None."""
         if target in graph:
@@ -7393,13 +7396,29 @@ class KanbanService:
     def dependency_graph(self) -> dict[str, list[str]]:
         """Each item's `depends_on` targets, keyed by item ID, over every board (#576).
 
-        IDs are folded (`fold_id`). A target on no board is kept in its item's list and has
+        IDs are folded (`fold_id`); an edge names its target's node, however the file
+        spells it (`_joined`, #1139). A target on no board is kept in its item's list and has
         no key of its own. Reused by `find_cycle`, `validate`, #575 and #577.
         """
         if not self._items:
             self.scan()
-        return {
+        return self._joined({
             fold_id(item.id): self._id_list(item.depends_on) for item in self._items.values()
+        })
+
+    @classmethod
+    def _joined(cls, graph: dict[str, list[str]]) -> dict[str, list[str]]:
+        """`graph` with each edge naming its target's node, as `_graph_id` finds it:
+        an exact match first, else the node with the same `_dup_key` (a stored `EXP-05`
+        is `EXP-5`'s edge; #641, #1139). A target on no board is kept as written."""
+        nodes: dict[tuple[str, int] | str, str] = {}
+        for node in graph:
+            nodes.setdefault(cls._dup_key(node), node)
+        return {
+            node: list(dict.fromkeys(
+                t if t in graph else nodes.get(cls._dup_key(t), t) for t in deps
+            ))
+            for node, deps in graph.items()
         }
 
     def find_cycle(
