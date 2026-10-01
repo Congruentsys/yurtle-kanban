@@ -64,7 +64,12 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
   verdict. New `yk_next.py --prefetch <P> .yk-review/pr-<P>` writes the diff, the view JSON and
   the REST file list (with renames) into an ignored dir in the checkout, refusing a non-empty
   one; the reviewer's only grant is `Read(./**)`. The picker and the external-pr skill print
-  prefetch → reviewer → `--post-verdict` → cleanup.
+  prefetch → reviewer → `--post-verdict` → cleanup. It also denies Bash and writes outright
+  (`--disallowedTools`), and refuses a PR whose head moves during the prefetch.
+- **The external reviewer's verdict check is tighter** (#1220). Dotted or called password values
+  need a digit-free identifier, SendGrid/Stripe/`Bearer` tokens are refused, and an env-var
+  reference exempts only itself (`${VAR:-default}` or a value glued onto `${{…}}` is refused);
+  a refusal names the line, never the value, and ends with a `RE-RUN NOTE:` for the re-run.
 
 ## [3.1.0] - 2026-10-01
 
