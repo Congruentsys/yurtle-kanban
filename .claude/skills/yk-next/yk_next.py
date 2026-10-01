@@ -191,7 +191,7 @@ PASSWORD_CODE = re.compile(r"[A-Za-z_]+(?:\.[A-Za-z_]+)*[(\[][^\d]*"
 PASSWORD_PROSE = re.compile(
     # a whole reference only: `${VAR}` (a trailing `}` may be stripped) or a GitHub
     # `${{ … }}` expression, never `${VAR:-default}` or a value glued on (r1)
-    r"\$[A-Z_][A-Z0-9_]*|\$\{[A-Z_][A-Z0-9_]*\}?|\$\{\{.*"
+    r"\$[A-Z_][A-Z0-9_]*|\$\{[A-Z_][A-Z0-9_]*\}?|\$\{\{[\w.]*"
     r"|(?i:pbkdf2(?:_sha(?:1|256|512))?|argon2(?:id|i|d)?|bcrypt(?:_sha256)?|scrypt"
     r"|sha(?:1|224|256|384|512)|md5)")
 # a test's key (`test_password`, `test_reset_password`) is code, so its value may be an
