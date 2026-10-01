@@ -635,7 +635,9 @@ def test_merge_pick_prints_the_safe_merge_command(yk, monkeypatch, capsys) -> No
 
 def test_review_pick_prints_the_diff_command(yk, monkeypatch, capsys) -> None:
     out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300)], SPARE)
-    assert "gh pr diff 1300" in out, out
+    # #1212: the prefetch writes the diff the driver reads (and the reviewer reads)
+    assert "--prefetch 1300 .yk-review/pr-1300" in out, out
+    assert ".yk-review/pr-1300/pr-1300.diff" in out, out
     assert HEAD in out, out
 
 
@@ -830,7 +832,8 @@ def test_b1_gate_refuses_label_by_a_non_captain(tmp_path: Path) -> None:
 # tests run only in fork CI; everything in the PR is untrusted data.
 
 # r3 R3-1a: no `gh pr comment` either; the driving session posts the checked verdict
-READ_ONLY_TOOLS = '"Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)"'
+# #1212: no gh at all; the driver prefetches the PR into .yk-review/pr-<P>/ (in the checkout)
+READ_ONLY_TOOLS = '"Read(./**)"'
 
 
 def test_b3_review_pick_prints_a_read_only_reviewer(yk, monkeypatch, capsys) -> None:
@@ -894,8 +897,9 @@ def test_r2_1_skill_reviewer_command_matches_the_picker(yk) -> None:
 def test_r2_1_reviewer_reads_files_and_renames_without_gh_api() -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
     sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
-    assert "gh pr view <P> --json files" in sec, sec
-    assert "rename" in sec.lower() and "diff header" in sec.lower(), sec
+    # #1212: from the prefetched REST file list, which carries each rename's old name
+    assert ".yk-review/pr-<P>/pr-<P>-files.json" in sec, sec
+    assert "rename" in sec.lower() and "previous_filename" in sec, sec
 
 
 # --------------------------------------------------------------------------- r2 R2-2
@@ -1247,7 +1251,7 @@ GOOD_VERDICT = f"reviewed-at-sha: {HEAD}\nverdict: approve\nclass: routine\n\nfi
 
 def test_r3_1a_reviewer_cannot_comment(yk) -> None:
     assert "gh pr comment" not in yk.REVIEW_TOOLS, yk.REVIEW_TOOLS
-    assert yk.REVIEW_TOOLS == "Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)"
+    assert yk.REVIEW_TOOLS == "Read(./**)"  # #1212: no gh grant at all
 
 
 def test_r3_1a_skill_commands_equal_the_pickers(yk) -> None:
