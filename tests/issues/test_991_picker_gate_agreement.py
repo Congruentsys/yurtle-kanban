@@ -1,7 +1,10 @@
 # ruff: noqa: F811  (the borrowed `yk` fixture)
 """Issue #991, r1 F2: the same comment lists fed to BOTH the picker (`my_pr_state`)
 and the gate (`safe_merge.sh`, via test_pairit_safe_merge's Sandbox, CI green): the
-picker says `ready-to-merge` exactly when the gate merges."""
+picker says `ready-to-merge` exactly when the gate merges.
+
+Ruled edit (#1228): the fixed-tip cases carry an approve round at R, the only round a
+fixes comment still carries; `changes` + fixes is covered by test_1228_blocking_rereview."""
 
 from __future__ import annotations
 
@@ -32,9 +35,10 @@ CASES = {
     "approve-then-bad-fixes": lambda h, r: [_v(h, "approve"), _fx(h, "garbage")],
     "approve-then-fixes-other-head": lambda h, r: [_v(h, "approve"), _fx(OTHER, r)],
     "approve-then-lgtm": lambda h, r: [_v(h, "approve"), f"reviewed-at-sha: {h}\nverdict: lgtm"],
-    "fixed": lambda h, r: [_v(r, "changes"), _fx(h, r)],
-    "fixed-then-unreviewed-fixes": lambda h, r: [_v(r, "changes"), _fx(h, r), _fx(h, OTHER)],
-    "fixed-then-stale": lambda h, r: [_v(r, "changes"), _fx(h, r), _v(OTHER, "changes")],
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
+    "fixed": lambda h, r: [_v(r, "approve"), _fx(h, r)],
+    "fixed-then-unreviewed-fixes": lambda h, r: [_v(r, "approve"), _fx(h, r), _fx(h, OTHER)],
+    "fixed-then-stale": lambda h, r: [_v(r, "approve"), _fx(h, r), _v(OTHER, "changes")],
     "fixes-without-verdict": lambda h, r: [_fx(h, r)],
     "fixes-self": lambda h, r: [_v(h, "changes"), _fx(h, h)],
     "prefix-approve": lambda h, r: [_v(h[:12], "approve")],

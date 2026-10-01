@@ -7,6 +7,9 @@ then re-picks it until its third-pick stop):
   names another sha: a late verdict of an old sha leaves the head unreviewed;
 - shas match exactly: full 40-hex, as GitHub gives them (no prefix, no case fold);
 - only the repo's own people count (OWNER / MEMBER / COLLABORATOR).
+
+Ruled edit (#1228): the fixed-tip cases carry an approve round at R; after `changes`
+a fixes comment no longer makes the head ready.
 """
 
 from __future__ import annotations
@@ -25,7 +28,8 @@ def fx(head: str, reviewed: str) -> str:
 
 
 def test_a_late_stale_verdict_after_fixes_unreviews_the_head(yk) -> None:
-    p = pr(1, head=HEAD, comments=[v(R, "changes"), fx(HEAD, R), v(R2, "changes")])
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
+    p = pr(1, head=HEAD, comments=[v(R, "approve"), fx(HEAD, R), v(R2, "changes")])
     assert yk.my_pr_state(p) == "needs-review"
 
 
@@ -44,7 +48,8 @@ def test_an_uppercase_sha_is_not_the_head(yk) -> None:
 
 
 def test_an_uppercase_fixes_comment_does_not_count(yk) -> None:
-    p = pr(1, head=HEAD, comments=[v(R, "changes"), fx(HEAD.upper(), R.upper())])
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
+    p = pr(1, head=HEAD, comments=[v(R, "approve"), fx(HEAD.upper(), R.upper())])
     assert yk.my_pr_state(p) == "needs-review"  # r1 F4: one deterministic state
 
 
@@ -61,5 +66,6 @@ def test_control_member_approve_at_head_is_ready(yk) -> None:
 
 
 def test_control_fixed_tip_is_ready(yk) -> None:
-    assert yk.my_pr_state(pr(1, head=HEAD, comments=[v(R, "changes"), fx(HEAD, R)])) \
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
+    assert yk.my_pr_state(pr(1, head=HEAD, comments=[v(R, "approve"), fx(HEAD, R)])) \
         == "ready-to-merge"
