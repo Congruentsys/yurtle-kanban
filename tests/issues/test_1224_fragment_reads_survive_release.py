@@ -6,8 +6,11 @@ and again test_1207 in v3.2.0). A test that reads a real fragment unconditionall
 red the moment the release lands. This static guard walks ``tests/**/*.py`` by AST:
 any function that builds a path to a real numbered fragment (directly, or through a
 module constant such as ``FRAGMENT = ROOT / "changelog.d" / "1207.md"``) must also
-handle the fragment being gone — an ``.exists()`` / ``.is_file()`` check, a
-``pytest.skip`` / ``pytest.importorskip`` / ``skipif``, or a fallback to CHANGELOG.md.
+handle the fragment being gone — an ``.exists()`` / ``.is_file()`` check on the fragment
+itself, an alias of it or its ``.parent`` (#1226), a ``pytest.skip`` /
+``pytest.importorskip`` / ``skipif``, or a fallback to CHANGELOG.md. A fragment whose
+number is only known at run time (``f"changelog.d/{n}.md"``, ``ROOT / "changelog.d" / n``)
+is a read too (#1226).
 """
 from __future__ import annotations
 
@@ -37,15 +40,53 @@ def _is_dir(s: str) -> bool:
     return s == "changelog.d" or s.endswith("/changelog.d")
 
 
+TEMP_ROOTS = {"tmp_path", "tmp_path_factory", "tmpdir"}
+PATH_CALLS = {"Path", "PurePath", "PosixPath"}
+NON_LITERAL = (ast.Name, ast.Subscript, ast.Call, ast.Attribute, ast.JoinedStr)
+FSTRING_FRAGMENT = re.compile(r"(?:.*/)?changelog\.d/([^/]*)\.md")
+
+
+def _ends_in_dir(node: ast.AST, dir_names: frozenset[str]) -> bool:
+    """`node` is a path whose last segment is `changelog.d`."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _is_dir(node.value)
+    if isinstance(node, ast.Name):
+        return node.id in dir_names
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _ends_in_dir(node.right, dir_names)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+            and node.func.id in PATH_CALLS and node.args:
+        return _ends_in_dir(node.args[-1], dir_names)
+    return False
+
+
+def _is_non_literal_fragment(node: ast.AST, dir_names: frozenset[str]) -> bool:
+    """`<changelog.d path> / <name|subscript|call|f-string>`, or an f-string
+    `...changelog.d/{n}.md` — a fragment whose number is only known at run time.
+    Temp-rooted paths and README.md are not real fragments."""
+    if isinstance(node, ast.JoinedStr):
+        text = "".join(v.value if isinstance(v, ast.Constant) else "{}"
+                       for v in node.values)
+        m = FSTRING_FRAGMENT.fullmatch(text)
+        return bool(m) and "{}" in m.group(1) and not _names(node) & TEMP_ROOTS
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) \
+            and isinstance(node.right, NON_LITERAL):
+        return _ends_in_dir(node.left, dir_names) and not _names(node.left) & TEMP_ROOTS
+    return False
+
+
 def _is_fragment_expr(node: ast.AST, dir_names: frozenset[str] = frozenset()) -> bool:
     """A path to a real numbered fragment: a `\\d+.md` literal beside a `changelog.d`
-    literal (or a module constant holding one) in the same expression, or one literal
-    naming `changelog.d/<N>.md`."""
+    literal (or a module constant holding one) in the same expression, one literal
+    naming `changelog.d/<N>.md`, or a non-literal last segment under a `changelog.d`
+    path (#1226)."""
     strings = _strings(node)
     if any(INLINE_FRAGMENT.fullmatch(s) for s in strings):
         return True
     has_dir = any(_is_dir(s) for s in strings) or bool(_names(node) & dir_names)
-    return has_dir and any(NUMBERED_MD.fullmatch(s) for s in strings)
+    if has_dir and any(NUMBERED_MD.fullmatch(s) for s in strings):
+        return True
+    return any(_is_non_literal_fragment(n, dir_names) for n in ast.walk(node))
 
 
 def _fragment_exprs(scope: ast.AST, dir_names: frozenset[str]) -> bool:
@@ -67,10 +108,46 @@ def _mentions_skipif(node: ast.AST) -> bool:
     )
 
 
-def _guarded(func: ast.AST, changelog_names: set[str]) -> bool:
+def _local_fragments(func: ast.AST, fragment_names: set[str],
+                     dir_names: frozenset[str]) -> set[str]:
+    """The fragment constants plus every name the function binds to one (or to an
+    inline fragment path)."""
+    names = set(fragment_names)
+    assigns = [n for n in ast.walk(func) if isinstance(n, (ast.Assign, ast.AnnAssign))
+               and n.value is not None]
+    changed = True
+    while changed:
+        changed = False
+        for a in assigns:
+            if not (_is_fragment_expr(a.value, dir_names) or _names(a.value) & names):
+                continue
+            targets = a.targets if isinstance(a, ast.Assign) else [a.target]
+            new = {t.id for t in targets if isinstance(t, ast.Name)} - names
+            if new:
+                names |= new
+                changed = True
+    return names
+
+
+def _is_fragment_receiver(node: ast.AST, names: set[str], dir_names: frozenset[str]) -> bool:
+    """`<fragment name>`, `<fragment name>.parent`, or an inline fragment path."""
+    if isinstance(node, ast.Attribute) and node.attr == "parent":
+        node = node.value
+    if isinstance(node, ast.Name):
+        return node.id in names
+    return _is_fragment_expr(node, dir_names)
+
+
+def _guarded(func: ast.AST, fragment_names: set[str], changelog_names: set[str],
+             dir_names: frozenset[str] = frozenset()) -> bool:
+    """The function handles the fragment being gone: `.exists()`/`.is_file()` on the
+    fragment itself (#1226 — not on any other path), a pytest skip, or a fallback to
+    CHANGELOG.md."""
+    names = _local_fragments(func, fragment_names, dir_names)
     for n in ast.walk(func):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-            if n.func.attr in GUARD_ATTRS:
+            if n.func.attr in GUARD_ATTRS \
+                    and _is_fragment_receiver(n.func.value, names, dir_names):
                 return True
             if n.func.attr in SKIP_ATTRS and isinstance(n.func.value, ast.Name) \
                     and n.func.value.id == "pytest":
@@ -119,7 +196,7 @@ def unguarded_reads(source: str, label: str = "<src>") -> list[str]:
                         and not child_skipped:
                     body = ast.Module(body=child.body, type_ignores=[])
                     reaches = bool(_names(body) & fragment_names) or _fragment_exprs(body, dirs)
-                    if reaches and not _guarded(body, changelog_names):
+                    if reaches and not _guarded(body, fragment_names, changelog_names, dirs):
                         found.append(f"{label}:{child.name}")
                 visit(child, child_skipped)
 
