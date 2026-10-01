@@ -912,7 +912,7 @@ def _allow_listed(text):
     """True if `text` is a NOT_COMMANDS mention, and mentions nothing else.
 
     The rest of the line, with the allow-listed part cut out, must not mention
-    `yurtle-kanban`: prose after a frontmatter glob or a pip line could otherwise
+    `yurtle-kanban`: prose after a frontmatter glob could otherwise
     hide a real command the guard never checks (#516).
     """
     for pattern in NOT_COMMANDS:
