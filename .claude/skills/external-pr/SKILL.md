@@ -114,7 +114,7 @@ conflicts with a ruling); the verdict line stays `changes`.
 **4. Outcomes.**
 - **approve + routine**, CI green → `bash .claude/skills/pairit/safe_merge.sh <P>` (it reads the fork head
   from `refs/pull/<P>/head` and refuses anything escalated without `captain-approved`), the merged thank-you,
-  then **Release**.
+  then **Fleet releases** (below).
 - **approve + captain** (or escalated by label or path) → escalate and move on:
   ```bash
   gh issue create --label captain-approval --title "chore: Captain approval for external PR #<P>" \
@@ -129,20 +129,29 @@ conflicts with a ruling); the verdict line stays `changes`.
   gives the reason (out of scope / duplicate of #N / conflicts with the ruling in #N) and says the Captain
   makes the final call. Never close it.
 
-**Release** (the picker prints `RELEASE DUE — <bump>` once an external PR has merged since the last tag and
-no `chore: release v…` PR is open). Follow `skills/release/SKILL.md` for a **patch or minor** only:
-- a release PR `chore: release vX.Y.Z`, built with `python scripts/assemble_changelog.py X.Y.Z`. If a merged
-  external PR has no `changelog.d/` fragment, the release PR adds one first, crediting the author
+## Fleet releases
+
+The picker prints `RELEASE DUE — <bump>` once an external PR has merged since the last tag and no
+`chore: release v…` PR is open. The fleet cuts a **patch or minor** only (Fixed/Security → patch,
+Added/Changed → minor); **a major is the Captain's**. `skills/release/SKILL.md` is user-invoked only
+(`disable-model-invocation: true`, and `yurtle-kanban init` installs it into every consumer repo), so
+**Read `skills/release/SKILL.md` and follow its steps** rather than invoking it, with these additions:
+- the release PR is `chore: release vX.Y.Z`, built with `python scripts/assemble_changelog.py X.Y.Z`. If a
+  merged external PR has no `changelog.d/` fragment, the release PR adds one first, crediting the author
   (`… Thanks @login (#<P>)`), and an existing one gains that credit; its section decides the bump;
-- reviewed by a distinct `claude -p` session (pairit step 3), merged with `safe_merge.sh`;
+- it is reviewed by a distinct `claude -p` session (pairit step 3) and merged with
+  `.claude/skills/pairit/safe_merge.sh`;
 - tag the merge commit, push the tag, `gh release create vX.Y.Z` with notes under GitHub's **125,000-char**
   cap: the version's CHANGELOG section, or, if over, a short summary plus a link to `CHANGELOG.md` (#1191);
 - confirm `publish.yml` ran green and the version is on PyPI, then post the published note on each PR.
 
 `RELEASE NEEDS CAPTAIN` (a Removed or breaking fragment: a major) → open a chore issue labelled
-`captain-approval` naming the fragments and the PRs. **Never cut a major.**
+`captain-approval` naming the fragments and the PRs. **Never cut a major.** The fleet never sets
+`captain-approved`.
 
-**Boundaries.** Never set `captain-approved`. Never close an external PR. Never approve fork CI before reading
+## Boundaries
+
+Never set `captain-approved`. Never close an external PR. Never approve fork CI before reading
 the whole diff at that head, and never for `.github/` changes. Never check out, test or install an
 external PR's code on a fleet machine, and never review one with `--dangerously-skip-permissions`.
 Never cut a major release. A fleet member's PR is still review-only (its author merges it).

@@ -333,7 +333,8 @@ def release_due(prs: list[dict]) -> bool:
                   f"to the release PR, ending `Thanks @{m['author']['login']} (#{m['number']})`")
     print(f"  release PR `{RELEASE_TITLE}{v}`: python scripts/assemble_changelog.py {v}, set "
           f"{v} in pyproject.toml and src/yurtle_kanban/__init__.py"
-          "\n  follow .claude/skills/external-pr/SKILL.md (Release) and skills/release/SKILL.md"
+          "\n  follow .claude/skills/external-pr/SKILL.md (Fleet releases): Read and follow"
+          " skills/release/SKILL.md"
           "\n  after PyPI publishes, on each PR:")
     for m in ext:
         print(f"    gh pr comment {m['number']} --body "

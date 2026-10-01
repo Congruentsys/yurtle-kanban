@@ -73,7 +73,7 @@ resume the same PR, and the claim race can't tell them apart.
 | `RESUME PR #N [wait-ci]` | `gh pr checks N --watch`, then pick again |
 | `REVIEW PR #N` | pairit step 3, as the reviewer for someone else's PR |
 | `REVIEW EXTERNAL PR #N` / `RUN CI EXTERNAL PR #N` / `MERGE EXTERNAL PR #N` | `.claude/skills/external-pr/SKILL.md`; run the commands it prints |
-| `RELEASE DUE — <bump>` | the Release section of `external-pr/SKILL.md` (patch/minor only) |
+| `RELEASE DUE — <bump>` | the Fleet releases section of `external-pr/SKILL.md` (patch/minor only) |
 | `RESUME ISSUE #N` / `CLAIMED ISSUE #N` | triage it (yk-loop), then land it with `pairit` |
 | `NOTHING READY` / `ERROR: …` | stop |
 

@@ -395,10 +395,23 @@ def test_external_pr_skill_exists_and_names_the_limits() -> None:
         assert needle in text, needle
 
 
-def test_release_skill_is_model_invocable() -> None:
+def test_b4_release_skill_stays_user_only() -> None:
+    """r1 B4: `yurtle-kanban init` installs skills/release into every consumer repo, so it
+    stays `disable-model-invocation: true` and untouched by #1195; the fleet's release
+    steps live in the repo-local external-pr skill, which Reads and follows it."""
     text = (SKILLS.parent.parent / "skills" / "release" / "SKILL.md").read_text()
-    assert "disable-model-invocation: true" not in text
-    assert "#1195" in text
+    assert "disable-model-invocation: true" in text
+    assert "#1195" not in text
+
+
+def test_b4_external_pr_skill_carries_the_fleet_release_steps() -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    m = re.search(r"\n## Fleet releases\b(.*?)(?=\n## |\Z)", text, re.S)
+    assert m, "no `## Fleet releases` section in external-pr/SKILL.md"
+    sec = m.group(1)
+    for needle in ("skills/release/SKILL.md", "patch or minor", "a major is the Captain's",
+                   "125,000", "safe_merge.sh", "captain-approval"):
+        assert needle.lower() in sec.lower(), needle
 
 
 # --------------------------------------------------------------------------- safe_merge
