@@ -236,3 +236,71 @@ def test_tmp_path_fragments_are_not_flagged() -> None:
 def test_non_numbered_fragment_is_not_flagged() -> None:
     src = HEAD + 'def test_x():\n    (ROOT / "changelog.d" / "README.md").read_text()\n'
     assert unguarded_reads(src) == []
+
+
+# --- #1226: a guard must name the fragment; non-literal fragment paths are seen -----
+
+def test_an_unrelated_exists_is_not_a_guard() -> None:
+    # tmp_path.exists() says nothing about the fragment: this still raises on a release
+    src = CONST + ("def test_x(tmp_path):\n    assert tmp_path.exists()\n"
+                   "    FRAGMENT.read_text()\n")
+    other = CONST + ('def test_x():\n    assert (ROOT / "pyproject.toml").is_file()\n'
+                     "    FRAGMENT.read_text()\n")
+    assert unguarded_reads(src) == ["<src>:test_x"]
+    assert unguarded_reads(other) == ["<src>:test_x"]
+
+
+def test_a_guard_on_the_fragment_alias_parent_or_inline_path_is_accepted() -> None:
+    alias = CONST + ("F2 = FRAGMENT\ndef test_x():\n    if F2.exists():\n"
+                     "        F2.read_text()\n")
+    local = CONST + ("def test_x():\n    f = FRAGMENT\n    if f.is_file():\n"
+                     "        f.read_text()\n")
+    parent = CONST + ("def test_x():\n    if FRAGMENT.parent.exists():\n"
+                      "        FRAGMENT.read_text()\n")
+    inline = HEAD + ('def test_x():\n    p = ROOT / "changelog.d" / "12.md"\n'
+                     '    if (ROOT / "changelog.d" / "12.md").exists():\n'
+                     "        p.read_text()\n")
+    for src in (alias, local, parent, inline):
+        assert unguarded_reads(src) == [], src
+
+
+def test_fstring_fragment_paths_are_flagged() -> None:
+    literal = HEAD + 'def test_x(n):\n    Path(f"changelog.d/{n}.md").read_text()\n'
+    rooted = HEAD + 'def test_x(n):\n    Path(f"{ROOT}/changelog.d/{n}.md").read_text()\n'
+    segment = HEAD + 'def test_x(n):\n    (ROOT / "changelog.d" / f"{n}.md").read_text()\n'
+    for src in (literal, rooted, segment):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_parametrized_fragment_paths_are_flagged() -> None:
+    name = HEAD + ('@pytest.mark.parametrize("n", ["1207.md"])\n'
+                   'def test_x(n):\n    (ROOT / "changelog.d" / n).read_text()\n')
+    sub = HEAD + 'def test_x(ns):\n    (ROOT / "changelog.d" / ns[0]).read_text()\n'
+    call = HEAD + 'def test_x(n):\n    (ROOT / "changelog.d" / str(n)).read_text()\n'
+    via_dir = HEAD + ('FRAG_DIR = ROOT / "changelog.d"\n'
+                      "def test_x(n):\n    (FRAG_DIR / n).read_text()\n")
+    const = HEAD + ('N = "1207.md"\nFRAGMENT = ROOT / "changelog.d" / N\n'
+                    "def test_x():\n    FRAGMENT.read_text()\n")
+    for src in (name, sub, call, via_dir, const):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_guarded_non_literal_fragment_paths_are_accepted() -> None:
+    fstr = HEAD + ('def test_x(n):\n    p = Path(f"changelog.d/{n}.md")\n'
+                   "    if p.exists():\n        p.read_text()\n")
+    param = HEAD + ('def test_x(n):\n    p = ROOT / "changelog.d" / n\n'
+                    "    if not p.is_file():\n        pytest.skip('released')\n"
+                    "    p.read_text()\n")
+    inline = HEAD + ('def test_x(n):\n    if (ROOT / "changelog.d" / n).exists():\n'
+                     '        (ROOT / "changelog.d" / n).read_text()\n')
+    for src in (fstr, param, inline):
+        assert unguarded_reads(src) == [], src
+
+
+def test_temp_and_readme_non_literal_paths_are_not_flagged() -> None:
+    tmp = HEAD + ('def test_x(tmp_path, n):\n    (tmp_path / "changelog.d" / n).write_text("x")\n'
+                  '    Path(f"{tmp_path}/changelog.d/{n}.md").read_text()\n')
+    readme = HEAD + 'def test_x(d):\n    Path(f"{d}/changelog.d/README.md").read_text()\n'
+    listing = HEAD + 'def test_x(n):\n    return f"changelog.d/{n}\\n"\n'
+    for src in (tmp, readme, listing):
+        assert unguarded_reads(src) == [], src
