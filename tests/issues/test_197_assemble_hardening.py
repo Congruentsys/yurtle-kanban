@@ -11,7 +11,8 @@ Decided behaviour:
 5. `--date` must be YYYY-MM-DD (a real date) -> otherwise non-zero exit, nothing changed.
 6. Fragments are deleted only after the CHANGELOG write succeeded; a failed write
    exits non-zero cleanly (no traceback).
-7. CONTRIBUTING says the assemble step replaces step 4 of skills/release/SKILL.md;
+7. CONTRIBUTING says the assemble step replaces step 4 of the release skill (#1201: of
+   skills/release-foss/SKILL.md, via the repo-local release-yurtle-kanban skill);
    pairit's "Rebased after approval?" paragraph has no line under 60 chars but the last,
    and says only once that the PR's own patch is unchanged.
 """
@@ -367,7 +368,11 @@ class TestDocs:
     def test_contributing_says_assemble_replaces_step_4(self) -> None:
         text = CONTRIBUTING.read_text()
         sec = between(text, "### Releasing", "\n### ")
-        assert "skills/release/SKILL.md" in sec, sec
+        # #1201: this repo's procedure moved to the repo-local release-yurtle-kanban
+        # skill, which follows the shipped release-foss; the assemble step still
+        # replaces step 4 (writing the CHANGELOG section by hand).
+        assert ".claude/skills/release-yurtle-kanban/SKILL.md" in sec, sec
+        assert "skills/release-foss/SKILL.md" in sec, sec
         assert "step 4" in sec.lower(), f"Releasing doesn't name step 4:\n{sec}"
         low = sec.lower()
         assert "instead" in low or "replaces" in low, \

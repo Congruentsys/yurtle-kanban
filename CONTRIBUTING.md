@@ -57,19 +57,21 @@ npm run lint
 
 ### Releasing (maintainers)
 
-Follow the release steps in `skills/release/SKILL.md`, except for its step 4
-("Update CHANGELOG.md"): for this repo, assembling the changelog fragments into
-the new version's section replaces that step, so do this instead of writing the
-entry by hand:
+Run `/release-yurtle-kanban` (`.claude/skills/release-yurtle-kanban/SKILL.md`). It is
+repo-local, not shipped: it follows the shipped `skills/release-foss/SKILL.md` with this
+repo's specifics. Its CHANGELOG step replaces release-foss's step 4: instead of writing
+the entry by hand, assemble the changelog fragments into the new version's section:
 
 ```bash
 python scripts/assemble_changelog.py X.Y.Z   # --date YYYY-MM-DD to override today
-git add CHANGELOG.md changelog.d/
+git add -A changelog.d                       # stages the deleted fragments
 ```
 
 It moves every `changelog.d/<N>.md` (and anything still under `## [Unreleased]`) into
 `## [X.Y.Z] - <date>`, grouped by section and ordered by issue number, and deletes the
 fragments. With nothing to release it changes nothing.
+
+A release is the Captain's call.
 
 ### License
 

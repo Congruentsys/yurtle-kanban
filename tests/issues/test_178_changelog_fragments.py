@@ -249,10 +249,20 @@ class TestFragmentDocs:
     # the test works in a shallow CI checkout and after merge. A deliberate change to the
     # skill updates this pin.
     # Re-pinned by #1191 (step 8 builds the notes with scripts/release_notes.py).
-    RELEASE_SKILL_SHA256 = "e24351277fc1999e2450060cc40c9b72a4d9d528a43193296ba7612c590bba2f"
+    # Re-pinned by #1201: the skill is split. skills/release is now the internal-repo
+    # release and skills/release-foss the public one; both are generic, and this repo's
+    # own procedure is the repo-local .claude/skills/release-yurtle-kanban. Both pinned.
+    RELEASE_SKILL_SHA256 = "5118ee0426c5419a608f6005e0bce069af92bfe40e6f49d2783e84e1f2b3ebb6"
+    RELEASE_FOSS_SKILL_SHA256 = "1b02e597e1ac304ebd51f2761f2cef39523ec8a021e838336a2dafca3611619d"
 
     def test_release_skill_unchanged(self) -> None:  # control
         data = (REPO / "skills/release/SKILL.md").read_bytes()
         assert hashlib.sha256(data).hexdigest() == self.RELEASE_SKILL_SHA256, (
             "skills/release/SKILL.md changed; #178 must not change the shipped release skill"
+        )
+
+    def test_release_foss_skill_unchanged(self) -> None:  # control
+        data = (REPO / "skills/release-foss/SKILL.md").read_bytes()
+        assert hashlib.sha256(data).hexdigest() == self.RELEASE_FOSS_SKILL_SHA256, (
+            "skills/release-foss/SKILL.md changed; a deliberate change re-pins this"
         )

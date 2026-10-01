@@ -49,7 +49,9 @@ pytest tests/test_board.py  # Specific module
 
 Semantic versioning. Version locations must stay in sync:
 - `pyproject.toml` → `version`
-- `yurtle_kanban/__init__.py` → `__version__`
+- `src/yurtle_kanban/__init__.py` → `__version__`
+
+To release this repo, follow `/release-yurtle-kanban` (`.claude/skills/release-yurtle-kanban/SKILL.md`). The shipped `skills/release` (internal repos) and `skills/release-foss` (public repos) are for consumer repos.
 
 ## Multi-Agent Coordination
 
