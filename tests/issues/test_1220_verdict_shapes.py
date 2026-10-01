@@ -143,6 +143,7 @@ def test_4_references_algorithms_and_test_names_post(yk, prose) -> None:
     "db_password: summer_2024",              # only test_… keys hold identifier values
     "password=${DB_PW:-Hunter2secret}",      # r1: a shell default is a real password
     "password: ${PGPASS}x9Kq2",              # r1: a reference with a value glued on
+    "password: ${{x}}Hunter2secret",         # r2: a GitHub expression with a value glued on
     "password: Welcome.Home2024",            # r1: a dotted tail with digits
 ])
 def test_4_values_under_bare_or_env_keys_are_still_refused(yk, leak) -> None:
