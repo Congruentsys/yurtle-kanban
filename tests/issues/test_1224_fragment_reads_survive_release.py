@@ -327,17 +327,15 @@ def test_an_unrelated_exists_is_not_a_guard() -> None:
     assert unguarded_reads(other) == ["<src>:test_x"]
 
 
-def test_a_guard_on_the_fragment_alias_parent_or_inline_path_is_accepted() -> None:
+def test_a_guard_on_the_fragment_alias_or_inline_path_is_accepted() -> None:
     alias = CONST + ("F2 = FRAGMENT\ndef test_x():\n    if F2.exists():\n"
                      "        F2.read_text()\n")
     local = CONST + ("def test_x():\n    f = FRAGMENT\n    if f.is_file():\n"
                      "        f.read_text()\n")
-    parent = CONST + ("def test_x():\n    if FRAGMENT.parent.exists():\n"
-                      "        FRAGMENT.read_text()\n")
     inline = HEAD + ('def test_x():\n    p = ROOT / "changelog.d" / "12.md"\n'
                      '    if (ROOT / "changelog.d" / "12.md").exists():\n'
                      "        p.read_text()\n")
-    for src in (alias, local, parent, inline):
+    for src in (alias, local, inline):
         assert unguarded_reads(src) == [], src
 
 
@@ -381,3 +379,78 @@ def test_temp_and_readme_non_literal_paths_are_not_flagged() -> None:
     listing = HEAD + 'def test_x(n):\n    return f"changelog.d/{n}\\n"\n'
     for src in (tmp, readme, listing):
         assert unguarded_reads(src) == [], src
+
+
+# --- #1226 r1: CHANGELOG.md only as a branch fallback; exact aliases; no .parent guard;
+# --- os.path and FileNotFoundError guards ---------------------------------------------
+
+def test_a_bare_changelog_mention_is_not_a_guard() -> None:
+    # the CHANGELOG.md mention does not branch on the fragment: this still raises
+    literal = CONST + ('def test_x():\n    assert "CHANGELOG.md"\n'
+                       "    FRAGMENT.read_text()\n")
+    named = CONST + ('CHANGELOG = ROOT / "CHANGELOG.md"\n'
+                     "def test_x():\n    assert CHANGELOG.exists()\n"
+                     "    FRAGMENT.read_text()\n")
+    for src in (literal, named):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_a_changelog_fallback_behind_a_fragment_branch_is_accepted() -> None:
+    # test_1207's shape
+    src = CONST + ("def test_x():\n    if FRAGMENT.exists():\n"
+                   "        t = FRAGMENT.read_text()\n    else:\n"
+                   "        t = (ROOT / 'CHANGELOG.md').read_text()\n")
+    assert unguarded_reads(src) == []
+
+
+def test_an_alias_must_be_the_fragment_not_mention_it() -> None:
+    local = CONST + ('def test_x():\n    py = FRAGMENT.parent.parent / "pyproject.toml"\n'
+                     "    assert py.exists()\n    FRAGMENT.read_text()\n")
+    module = CONST + ('PY = FRAGMENT.parent.parent / "pyproject.toml"\n'
+                      "def test_x():\n    assert PY.exists()\n    FRAGMENT.read_text()\n")
+    for src in (local, module):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_the_fragment_parent_exists_is_not_a_guard() -> None:
+    # changelog.d/ survives a release: this check is always true
+    src = CONST + ("def test_x():\n    assert FRAGMENT.parent.exists()\n"
+                   "    FRAGMENT.read_text()\n")
+    branch = CONST + ("def test_x():\n    if FRAGMENT.parent.exists():\n"
+                      "        FRAGMENT.read_text()\n")
+    for s in (src, branch):
+        assert unguarded_reads(s) == ["<src>:test_x"], s
+
+
+def test_os_path_guards_on_the_fragment_are_accepted() -> None:
+    exists = CONST + ("import os\ndef test_x():\n    if os.path.exists(FRAGMENT):\n"
+                      "        FRAGMENT.read_text()\n")
+    isfile = CONST + ("import os\ndef test_x():\n    if not os.path.isfile(FRAGMENT):\n"
+                      "        return\n    FRAGMENT.read_text()\n")
+    for src in (exists, isfile):
+        assert unguarded_reads(src) == [], src
+
+
+def test_os_path_guards_on_another_path_are_not_accepted() -> None:
+    src = CONST + ("import os\ndef test_x(tmp_path):\n    assert os.path.exists(tmp_path)\n"
+                   "    FRAGMENT.read_text()\n")
+    assert unguarded_reads(src) == ["<src>:test_x"]
+
+
+def test_a_file_not_found_handler_around_the_read_is_accepted() -> None:
+    src = CONST + ("def test_x():\n    try:\n        FRAGMENT.read_text()\n"
+                   "    except FileNotFoundError:\n        return\n")
+    tupled = CONST + ("def test_x():\n    try:\n        FRAGMENT.read_text()\n"
+                      "    except (ValueError, FileNotFoundError):\n        return\n")
+    for s in (src, tupled):
+        assert unguarded_reads(s) == [], s
+
+
+def test_an_unrelated_handler_is_not_a_guard() -> None:
+    other = CONST + ("def test_x():\n    try:\n        FRAGMENT.read_text()\n"
+                     "    except ValueError:\n        return\n")
+    elsewhere = CONST + ("def test_x():\n    try:\n        int('x')\n"
+                         "    except FileNotFoundError:\n        return\n"
+                         "    FRAGMENT.read_text()\n")
+    for s in (other, elsewhere):
+        assert unguarded_reads(s) == ["<src>:test_x"], s
