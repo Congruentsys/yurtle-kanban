@@ -150,11 +150,15 @@ def test_3_at_inside_code_or_an_email_passes(yk, text) -> None:
 # --------------------------------------------------------------------------- 4. --post-verdict
 
 
-def run_post(yk, monkeypatch, tmp_path, body: str) -> tuple[list, object, str]:
+def run_post(yk, monkeypatch, tmp_path, body: str, swap: str | None = None
+             ) -> tuple[list, object, str]:
     calls: list[tuple[str, ...]] = []
+    posted: list[str | None] = []
 
-    def fake_gh(*args: str) -> str:
+    def fake_gh(*args: str, stdin: str | None = None) -> str:
         calls.append(args)
+        if args[:2] == ("pr", "comment"):
+            posted.append(stdin)
         if args[:2] == ("pr", "view"):
             assert args[2] == "1300" and "headRefOid" in args, args
             return HEAD + "\n"
@@ -165,6 +169,16 @@ def run_post(yk, monkeypatch, tmp_path, body: str) -> tuple[list, object, str]:
     f = tmp_path / "verdict.txt"
     f.write_text(body)
     monkeypatch.setattr(sys, "argv", ["x", "--post-verdict", "1300", str(f)])
+    if swap is not None:  # the file changes after it was read and checked
+        real_check = yk.check_verdict
+
+        def check_then_swap(text: str, head: str) -> str | None:
+            result = real_check(text, head)
+            f.write_text(swap)
+            return result
+
+        monkeypatch.setattr(yk, "check_verdict", check_then_swap)
+    run_post.posted = posted
     code = None
     try:
         yk.main()
@@ -176,7 +190,18 @@ def run_post(yk, monkeypatch, tmp_path, body: str) -> tuple[list, object, str]:
 def test_4_post_verdict_posts_a_passing_verdict(yk, monkeypatch, tmp_path, capsys) -> None:
     posts, code, path = run_post(yk, monkeypatch, tmp_path, GOOD + "fine\n")
     assert code in (None, 0), code
-    assert posts == [("pr", "comment", "1300", "--body-file", path)], posts
+    assert posts == [("pr", "comment", "1300", "--body-file", "-")], posts
+    assert run_post.posted == [GOOD + "fine\n"]
+
+
+def test_4_post_verdict_posts_the_checked_text_not_a_later_file(yk, monkeypatch, tmp_path,
+                                                                capsys) -> None:
+    """The text posted is the text checked: a file swapped after the check (here, to
+    leak a token) is never what reaches GitHub."""
+    posts, code, _ = run_post(yk, monkeypatch, tmp_path, GOOD + "fine\n",
+                              swap=GOOD + "token=ghp_" + "A1" * 18 + "\n")
+    assert code in (None, 0), code
+    assert run_post.posted == [GOOD + "fine\n"], run_post.posted
 
 
 @pytest.mark.parametrize("body", [
