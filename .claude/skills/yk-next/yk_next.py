@@ -155,8 +155,8 @@ MINOR_SECTIONS = {"Added", "Changed", "Deprecated"}  # Fixed/Security alone: a p
 BREAKING = re.compile(r"(?<![-\w])breaking\b", re.I)  # "non-breaking" isn't
 
 
-def gh(*args: str) -> str:
-    r = subprocess.run(["gh", *args], capture_output=True, text=True)
+def gh(*args: str, stdin: str | None = None) -> str:
+    r = subprocess.run(["gh", *args], capture_output=True, text=True, input=stdin)
     if r.returncode != 0:
         sys.exit(f"ERROR: gh {' '.join(args)}: {(r.stderr or r.stdout).strip()[:300]}")
     return r.stdout
@@ -572,8 +572,8 @@ def main() -> None:
                     help="check a reviewer's printed verdict before the driving session posts "
                     "it: exit 0 ok, 1 with the reason")
     ap.add_argument("--post-verdict", nargs=2, metavar=("PR", "FILE"),
-                    help="the same check, then `gh pr comment PR --body-file FILE` only if it "
-                    "passes; exit 1 with the reason otherwise")
+                    help="the same check, then posts the checked text (`gh pr comment PR "
+                    "--body-file -`) only if it passes; exit 1 with the reason otherwise")
     a = ap.parse_args()
 
     if a.check_verdict or a.post_verdict:
@@ -581,14 +581,17 @@ def main() -> None:
         number = str(int(number))
         head = gh("pr", "view", number, "--json", "headRefOid", "--jq", ".headRefOid").strip()
         with open(path, encoding="utf-8", errors="replace") as fh:
-            why = check_verdict(fh.read(), head)
+            text = fh.read()
+        why = check_verdict(text, head)
         if why:
             print(f"NOT POSTING the verdict for #{number}: {why}")
             sys.exit(1)
         if not a.post_verdict:
             print(f"ok: the verdict for #{number} names its head {head[:12]}; post it")
             return
-        url = gh("pr", "comment", number, "--body-file", path).strip()
+        # post the text that was checked, over stdin: gh re-reading the file could post
+        # something the check never saw
+        url = gh("pr", "comment", number, "--body-file", "-", stdin=text).strip()
         print(f"posted the verdict for #{number} at {head[:12]}: {url}")
         return
 

@@ -99,7 +99,7 @@ session saves it to a file, then checks and posts it in ONE command, which posts
 claude -p --permission-mode dontAsk --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)" < <brief> > <verdict-file>
 python3 .claude/skills/yk-next/yk_next.py --post-verdict <P> <verdict-file>
 ```
-It posts the file as a PR comment (`gh pr comment --body-file`) only when line 1 is exactly
+It posts the text it checked as a PR comment (over stdin, never by re-reading the file) only when line 1 is exactly
 `reviewed-at-sha: <the PR's current head>`, line 2 is `verdict: approve` or `verdict: changes`, the body
 is at most 60,000 chars, nothing in it looks like a secret (a private key; a GitHub/AWS/Slack/PyPI/Anthropic
 token; a `password`, `secret`, `token` or `api_key` with a value; a bare PEM body line), and it has no
