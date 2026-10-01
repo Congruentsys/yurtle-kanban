@@ -10,8 +10,12 @@ from pathlib import Path
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    import tomli as tomllib
+except ModuleNotFoundError:  # Python 3.10: no stdlib tomllib, and tomli is not a dependency
+    print(
+        "check_release_version.py needs Python 3.11+ (publish.yml pins 3.11)",
+        file=sys.stderr,
+    )
+    raise SystemExit(2) from None
 
 
 def _package_module_version(path: Path) -> str:
