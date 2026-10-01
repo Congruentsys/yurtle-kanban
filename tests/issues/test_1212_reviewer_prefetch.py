@@ -68,7 +68,8 @@ def test_gitignore_covers_the_prefetch_dir(yk) -> None:
 # --------------------------------------------------------------------------- --prefetch
 
 
-def run_prefetch(yk, monkeypatch, target: Path) -> tuple[list[tuple[str, ...]], object]:
+def run_prefetch(yk, monkeypatch, target: Path, moved: str | None = None
+                 ) -> tuple[list[tuple[str, ...]], object]:
     calls: list[tuple[str, ...]] = []
 
     def fake_gh(*args: str, stdin: str | None = None) -> str:
@@ -76,6 +77,8 @@ def run_prefetch(yk, monkeypatch, target: Path) -> tuple[list[tuple[str, ...]], 
         if args[:2] == ("pr", "diff"):
             assert args[2] == "1300", args
             return DIFF
+        if args[:2] == ("pr", "view") and "--jq" in args:  # the head re-check (r1)
+            return (moved or VIEW["headRefOid"]) + "\n"
         if args[:2] == ("pr", "view"):
             assert args[2] == "1300" and "--json" in args, args
             return json.dumps(VIEW)
@@ -181,3 +184,35 @@ def test_skill_brief_reads_the_prefetched_files_and_has_no_gh(yk) -> None:
     # the brief no longer sends the reviewer to gh
     assert "from `gh pr diff <P>`" not in sec, sec
     assert "-R" in sec, sec  # says why: gh reaches other (private) repos
+
+
+
+# --------------------------------------------------------------------------- r1
+
+
+def test_r1_reviewer_command_denies_bash_and_writes(yk) -> None:
+    """r1: --allowedTools only ADDS to a machine's allow rules, so a global `Bash(gh:*)`
+    would hand gh back; an explicit deny wins over any allow."""
+    assert '--disallowedTools "' in yk.REVIEW_CMD
+    deny = yk.REVIEW_CMD.split('--disallowedTools "', 1)[1].split('"', 1)[0].split(",")
+    assert {"Bash", "Edit", "Write", "WebFetch"} <= set(deny), deny
+
+
+def test_r1_files_fetch_keeps_previous_filename(yk, monkeypatch, tmp_path) -> None:
+    calls, code = run_prefetch(yk, monkeypatch, tmp_path / "pr-1300")
+    api = [c for c in calls if c[0] == "api"]
+    assert api and "previous_filename" in api[0][api[0].index("--jq") + 1], api
+
+
+def test_r1_prefetch_refuses_when_the_head_moves(yk, monkeypatch, tmp_path, capsys) -> None:
+    """r1: the diff, view and files are one head's: a push mid-prefetch is refused."""
+    target = tmp_path / "pr-1300"
+    calls, code = run_prefetch(yk, monkeypatch, target, moved="f" * 40)
+    assert code not in (None, 0), code
+    assert "moved" in str(code) + capsys.readouterr().out, code
+    assert not target.exists() or not any(target.iterdir())
+
+
+def test_r1_skill_says_run_from_the_checkout_root(yk) -> None:
+    text = (ROOT / ".claude/skills/external-pr/SKILL.md").read_text()
+    assert "checkout root" in text
