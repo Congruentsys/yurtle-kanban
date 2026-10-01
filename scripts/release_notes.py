@@ -7,16 +7,17 @@ A GitHub release body is capped at 125,000 characters, and a refused
 `gh release create` publishes nothing: `publish.yml` never runs, so PyPI is skipped
 silently. The version's section is printed whole when it fits. Otherwise the notes
 are condensed: the entry counts per section, every `**Breaking` entry (from any
-section, with its sub-bullets), the Removed and Deprecated sections, and a link to
-the full section. Notes that still don't fit, or a version not in the changelog, are
-refused: nothing on stdout, exit 1.
+section, with its sub-bullets), the Removed and Deprecated sections (except Breaking
+entries, listed once under Breaking changes), and a link to the full section. Notes
+that still don't fit, or a version not in the changelog, are refused: nothing on
+stdout, exit 1.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
+import unicodedata
 from pathlib import Path
 
 LIMIT = 125_000  # GitHub's release-body cap, in characters
@@ -52,13 +53,21 @@ def _subsections(body: str) -> dict[str, list[str]]:
     return {name: [e.rstrip("\n") for e in items] for name, items in found.items()}
 
 
+_ANCHOR_CATEGORIES = ("L", "Mn", "Mc", "Nd", "Pc")  # kept by GitHub's slugger
+
+
 def _anchor(heading: str) -> str:
     """GitHub's anchor for a markdown heading: `## [3.0.0] - 2026-09-30` -> `300---2026-09-30`.
 
-    GitHub's rule: lowercase; drop anything but letters (any script), digits, spaces,
-    `_` and `-`; spaces become `-`."""
+    GitHub's slugger, by Unicode category: lowercase; keep letters (L*), combining marks
+    (Mn, Mc), decimal digits (Nd), connector punctuation (Pc, including `_`) and `-`;
+    spaces become `-`; drop everything else, including other numbers (No) like `²`."""
     title = heading.lstrip("#").strip().lower()
-    return re.sub(r"[^\w -]", "", title).replace(" ", "-")
+    return "".join(
+        "-" if c == " " else c
+        for c in title
+        if c in " -" or unicodedata.category(c).startswith(_ANCHOR_CATEGORIES)
+    )
 
 
 def release_notes(changelog_text: str, version: str, *, limit: int = LIMIT) -> str:
