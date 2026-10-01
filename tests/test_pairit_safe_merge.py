@@ -49,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 
 STUB_GH = r'''#!__PYTHON__
 """Stub `gh` for #167 tests. Logs every call as one JSON line; never touches a network."""
-import json, os, shutil, subprocess, sys
+import json, os, re, shutil, subprocess, sys
 
 args = sys.argv[1:]
 log = os.environ["STUB_GH_LOG"]
@@ -187,7 +187,7 @@ if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
             {"author": {"login": c.get("login", "reviewer")},
              "authorAssociation": c.get("association", "MEMBER"),
              "body": c["body"], "createdAt": "2026-09-24T00:00:%02dZ" % i,
-             "id": "IC_%d" % i, "includesEditsToPreviousComment": False,
+             "id": "IC_%d" % i, "includesCreatedEdit": c.get("edited", False),
              "isMinimized": False, "minimizedReason": "", "reactionGroups": [],
              "url": "https://example.invalid/c/%d" % i, "viewerDidAuthor": False}
             for i, c in enumerate(comments)
@@ -210,6 +210,24 @@ if args and args[0] == "api" and any("/comments" in a for a in args):
          "html_url": "https://example.invalid/c/%d" % i}
         for i, c in enumerate(comments)
     ])
+    sys.exit(0)
+
+if args and args[0] == "api" and any(re.search(r"/pulls/\d+$", a) for a in args):
+    # #1195 r1 N4: the gate reads every PR's author association (a member, by default)
+    record()
+    emit({"author_association": os.environ.get("STUB_GH_ASSOC", "MEMBER")})
+    sys.exit(0)
+
+if args and args[0] == "api" and any(re.search(r"/pulls/\d+/files$", a) for a in args):
+    # #1195: REST `pulls/<P>/files` (paginated), which names a rename's previous_filename
+    record()
+    emit(json.loads(os.environ.get("STUB_GH_FILES", '[{"filename": "feature.txt"}]')))
+    sys.exit(0)
+
+if args and args[0] == "api" and any(re.search(r"/issues/\d+/events$", a) for a in args):
+    # #1195 r1 B1: REST issue events (who added a label, and when)
+    record()
+    emit(json.loads(os.environ.get("STUB_GH_EVENTS", "[]")))
     sys.exit(0)
 
 record({"unsupported": True})

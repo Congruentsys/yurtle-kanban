@@ -14,7 +14,8 @@ repeat:
              report one line
   3. TRIAGE  (issues only) fix, or decision? → /steer classifier: bucket 1–2 → record [steer] + build;
              bucket 3 → comment + hold
-  4. LAND    through pairit: a PR resumes at the step its state names; an issue starts at step 0
+  4. LAND    through pairit: a PR resumes at the step its state names; an issue starts at step 0.
+             REVIEW EXTERNAL PR / MERGE EXTERNAL PR / RELEASE DUE → .claude/skills/external-pr/SKILL.md
   5. CARRY   a finding that BLOCKS this item is filed and landed first; every other finding is FILED
              (`gh issue create --label bug`), unassigned
   6. goto 1 at once, in this same turn
@@ -64,5 +65,14 @@ rules keep it safe:
 - Don't run two items that edit the same function at once; hold the second until the first merges.
 - A regression you introduced jumps the queue: fix it before new work.
 
+**External PRs (#1195).** A PR whose author is not OWNER/MEMBER/COLLABORATOR follows
+`.claude/skills/external-pr/SKILL.md`: the fleet reviews it, merges it with `safe_merge.sh` and cuts the
+patch/minor release right after, within the Captain's limits. The picker hands out `REVIEW EXTERNAL PR #N`,
+`ESCALATE EXTERNAL PR #N`, `MERGE EXTERNAL PR #N` and `RELEASE DUE`; it only lists `WAIT CAPTAIN #N`
+(escalated and labelled `captain-approval`, no `captain-approved`)
+and `RELEASE NEEDS CAPTAIN` (a major), and skips a `proposed-reject` PR and one waiting on its author.
+
 **Boundaries.** Never push to `main`, since everything lands by PR (project CLAUDE.md). Never merge another
-author's PR; review it and move on. Never bump the version or publish; releases are the Captain's call.
+FLEET member's PR; review it and move on. External PRs follow `external-pr/SKILL.md`: the fleet merges and
+releases them within its limits. Never set `captain-approved` (only the Captain does), never close an
+external PR (propose it with `proposed-reject`), and never cut a major release.

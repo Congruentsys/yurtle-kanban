@@ -1,6 +1,6 @@
 ---
 name: yk-next
-description: ONE pass — what should THIS session do next in yurtle-kanban? Resumes my own open PR that needs something (review, fixes, CI, merge), else reviews another author's unreviewed PR, else resumes my assigned issue, else claims the first ready issue (bug first, then lowest number; held/assigned/waiting/already-PR'd issues skipped). Prints it and STOPS. Ported from rachael-lab's rachael-next (2026-09-24), onto GitHub issues + PRs.
+description: ONE pass — what should THIS session do next in yurtle-kanban? Resumes my own open PR that needs something (review, fixes, CI, merge), else carries an external PR (merge an approved one, review a new one), else reviews another fleet author's unreviewed PR, else cuts a due release after an external merge, else resumes my assigned issue, else claims the first ready issue (bug first, then lowest number; held/assigned/waiting/already-PR'd issues skipped). Prints it and STOPS. Ported from rachael-lab's rachael-next (2026-09-24), onto GitHub issues + PRs.
 disable-model-invocation: false
 allowed-tools: Bash(.venv/bin/python *), Bash(python3 *), Bash(gh *), Bash(git *)
 ---
@@ -16,8 +16,8 @@ python3 .claude/skills/yk-next/yk_next.py --dry-run  # prints the ordered candid
 python3 .claude/skills/yk-next/yk_next.py --skip-prs # jump straight to claiming a NEW issue
 ```
 
-`--skip-prs` is for pipelining (yk-loop): while one of your PRs is in review, it goes straight to rule 4
-(claim), skipping rules 1–3. It doesn't resume your PRs, doesn't review others', and **doesn't resume an
+`--skip-prs` is for pipelining (yk-loop): while one of your PRs is in review, it goes straight to rule 6
+(claim), skipping rules 1–5. It doesn't resume your PRs, doesn't review others', and **doesn't resume an
 issue already assigned to you**, so it claims a new one even if you hold one with no PR yet. Every claim
 rule still applies. Outside yk-loop, use the plain picker.
 
@@ -28,17 +28,34 @@ rule still applies. Outside yk-loop, use the plain picker.
    That's how pairit sets a PR aside when a finding needs a decision, without the loop getting stuck.
    A head carrying the driver's `fixes-at-sha:` comment (pairit's one review round, #987) counts as
    reviewed: it is `ready-to-merge` once CI is green, never `needs-review` again.
-2. **Review others' work.** Next is another author's open PR with no verdict at its current head. You may
-   review it, because reviewer ≠ author. The author merges it, not you.
-3. **Resume before you pick.** An open issue assigned to you that no open PR fixes yet, unless it has
+2. **External PRs** (#1195; author not OWNER/MEMBER/COLLABORATOR) follow `.claude/skills/external-pr/SKILL.md`.
+   `MERGE EXTERNAL PR #N`: approve at head, CI green, and not escalated, or `captain-approved` by the Captain
+   after that approve verdict (a new head waits for him again).
+   `ESCALATE EXTERNAL PR #N`: approved and escalated, but not yet labelled `captain-approval`; it prints
+   the chore-issue and label commands, so a session that died before escalating can't leave it silent.
+   `RUN CI EXTERNAL PR #N`: approved, its fork run waits (a `.github/` one is listed
+   `WAIT CAPTAIN (fork run needs the Captain)` instead).
+   `REVIEW EXTERNAL PR #N`: no member verdict at its head. Each prints its next commands. Listed, never picked: `WAIT CAPTAIN #N`
+   (escalated and labelled `captain-approval`: by that label, a `class: captain` verdict line, or a
+   release/CI/security path),
+   a `changes` verdict (waiting on the author's new head), `proposed-reject` (the Captain closes it).
+   Only the Captain adds `captain-approved`; the fleet never does.
+3. **Review the fleet's work.** Next is another FLEET author's open PR with no verdict at its current head.
+   You may review it, because reviewer ≠ author. The author merges it, not you.
+4. **Release.** An external PR merged (merge, squash or rebase) since the latest `v*` tag on main, and no open `chore: release v…` PR:
+   `RELEASE DUE — patch|minor` from the unreleased `changelog.d/` fragments (Fixed/Security only → patch,
+   any Added/Changed → minor). A Removed or breaking fragment prints `RELEASE NEEDS CAPTAIN` and picks
+   nothing: a major is the Captain's. An open release PR, or `pyproject.toml` on main ahead of the latest
+   tag (merged, not yet tagged), prints `RELEASE IN FLIGHT` and picks nothing.
+5. **Resume before you pick.** An open issue assigned to you that no open PR fixes yet, unless it has
    since been held or depends on an issue that's still open.
-4. **Claim.** Take the first open issue that is unassigned, has no open PR fixing it (GitHub's
+6. **Claim.** Take the first open issue that is unassigned, has no open PR fixing it (GitHub's
    `Fixes #N` link; branch names are never guessed at) or naming it in its title (`(#967, part 1)`: in
    progress there; a body mention doesn't count, #996), has no hold label (`needs-decision`,
    `question`, `wontfix`, `duplicate`, `invalid`, `blocked`, `on-hold`), and whose body's
    `depends on #N` / `blocked by #N` / `requires #N` issues (or PRs, #996) are all closed. Lists count: `blocked by #8, #9`.
    Order: `bug` first, then the lower number.
-5. **Atomic-enough claim.** Assign `@me`, then re-read the issue. Another assignee means a peer got there
+7. **Atomic-enough claim.** Assign `@me`, then re-read the issue. Another assignee means a peer got there
    first, so the script un-assigns you and moves to the next candidate.
 
 **A verdict** is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
@@ -60,7 +77,13 @@ resume the same PR, and the claim race can't tell them apart.
 | `RESUME PR #N [ready-to-merge]` | pairit step 4 |
 | `RESUME PR #N [wait-ci]` | `gh pr checks N --watch`, then pick again |
 | `REVIEW PR #N` | pairit step 3, as the reviewer for someone else's PR |
+| `REVIEW EXTERNAL PR #N` / `ESCALATE EXTERNAL PR #N` / `RUN CI EXTERNAL PR #N` / `MERGE EXTERNAL PR #N` | `.claude/skills/external-pr/SKILL.md`; run the commands it prints |
+| `RELEASE DUE — <bump>` | the Fleet releases section of `external-pr/SKILL.md` (patch/minor only) |
 | `RESUME ISSUE #N` / `CLAIMED ISSUE #N` | triage it (yk-loop), then land it with `pairit` |
 | `NOTHING READY` / `ERROR: …` | stop |
 
 The issue body is the brief: its repro, its Expected section and its notes.
+
+**Boundaries.** Never merge another FLEET member's PR (review only). External PRs follow
+`external-pr/SKILL.md`: the fleet merges and releases them within its limits. Never set `captain-approved`,
+never close an external PR, never cut a major release.
