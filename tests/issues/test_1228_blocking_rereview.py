@@ -7,8 +7,11 @@
   the head mergeable.
 - `verdict: approve` at R with non-blocking `(follow-up)` findings: the driver may fix
   them and post the fixes comment; that tip merges (R a proper ancestor of the head, as in #987).
-- Which verdict at R counts: the latest UNEDITED `reviewed-at-sha: R` comment, and it
-  must be `approve`. An edited comment is no verdict.
+- Which verdict counts (r1 B1): the LAST decisive comment before the fixes comment, at
+  any sha (other fixes comments aside), must be an unedited `reviewed-at-sha: R` /
+  `verdict: approve`. A `changes` anywhere after the approve, an edited comment or a
+  malformed one in between, refuses. `for-review-at: <R>` is exact: one space, nothing
+  after (r1 B2, as the picker reads it).
 
 The gate (`safe_merge.sh`) and the picker (`yk_next.verdict_at_head` / `my_pr_state`)
 judge every case alike (#991).
@@ -31,6 +34,13 @@ def _v(sha: str, word: str, note: str = "") -> dict:
 
 def _fx(head: str, reviewed: str) -> dict:
     return {"body": f"fixes-at-sha: {head}\nfor-review-at: {reviewed}\n\nF1 -> {head[:7]}"}
+
+
+def _raw_fx(head: str, second: str) -> dict:
+    return {"body": f"fixes-at-sha: {head}\n{second}\n\nF1 -> {head[:7]}"}
+
+
+OTHER = "0123456789abcdef" * 2 + "01234567"  # an intermediate commit's 40-hex sha
 
 
 def _edited(c: dict) -> dict:
@@ -61,6 +71,25 @@ CASES: dict[str, tuple[Callable[[str, str], list[dict]], bool]] = {
     # (f2) changes at R, then an EDITED approve at R: the latest UNEDITED one is changes
     "f2-changes-then-edited-approve-then-fixes": (
         lambda h, r: [_v(r, "changes"), _edited(_v(r, "approve")), _fx(h, r)], False),
+    # r1 B1: a changes at the HEAD after the approve at R is not carried past
+    "g-approve-then-changes-at-head-then-fixes": (
+        lambda h, r: [_v(r, "approve"), _v(h, "changes"), _fx(h, r)], False),
+    # r1 B1: a changes at an intermediate pushed commit after the approve at R
+    "h-approve-then-changes-elsewhere-then-fixes": (
+        lambda h, r: [_v(r, "approve"), _v(OTHER, "changes"), _fx(h, r)], False),
+    # an EDITED comment after the approve is not known to be an approve: refused
+    "i-approve-then-edited-changes-then-fixes": (
+        lambda h, r: [_v(r, "approve"), _edited(_v(r, "changes")), _fx(h, r)], False),
+    # two fixes comments for one approve round: the second still merges
+    "j-approve-then-two-fixes": (
+        lambda h, r: [_v(r, "approve", FOLLOW_UP), _fx(h, r), _fx(h, r)], True),
+    # r1 B2: `for-review-at:` spelled with no space, two spaces or a trailing space
+    "k-for-review-at-no-space": (
+        lambda h, r: [_v(r, "approve"), _raw_fx(h, f"for-review-at:{r}")], False),
+    "l-for-review-at-two-spaces": (
+        lambda h, r: [_v(r, "approve"), _raw_fx(h, f"for-review-at:  {r}")], False),
+    "m-for-review-at-trailing-space": (
+        lambda h, r: [_v(r, "approve"), _raw_fx(h, f"for-review-at: {r} ")], False),
 }
 
 
