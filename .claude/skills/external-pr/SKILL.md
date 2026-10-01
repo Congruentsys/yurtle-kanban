@@ -105,8 +105,8 @@ The brief tells the reviewer to:
   verdict: approve|changes
   class: routine            (or: class: captain (<reason>))
   ```
-  then the findings with `file:line`. `class: captain` for a breaking change, the release/CI/security path,
-  or anything else that needs the Captain's authority.
+  then the findings with `file:line`. `class: captain` for exactly two things: a breaking change, or the
+  release/CI/security path. Size and new features are routine: `class: routine`.
 
 A `reject` is the reviewer's recommendation in the findings (out of scope, a duplicate, or a design that
 conflicts with a ruling); the verdict line stays `changes`.

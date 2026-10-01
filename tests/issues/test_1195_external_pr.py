@@ -826,3 +826,14 @@ def test_b3_skill_review_is_read_only() -> None:
     # nothing runs the fork's tree on a fleet machine
     for bad in (".venv/bin/python -m pytest", "ruff check", "pip install"):
         assert bad not in text, bad
+
+
+# --------------------------------------------------------------------------- r1 N1: fidelity
+
+
+def test_n1_class_captain_names_only_the_two_criteria() -> None:
+    """The Captain escalates a breaking change or the release/CI/security path; he chose
+    NOT to escalate on size or new features."""
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    assert "anything else that needs the Captain" not in text
+    assert "size and new features are routine" in text.lower()
