@@ -6,8 +6,14 @@ and again test_1207 in v3.2.0). A test that reads a real fragment unconditionall
 red the moment the release lands. This static guard walks ``tests/**/*.py`` by AST:
 any function that builds a path to a real numbered fragment (directly, or through a
 module constant such as ``FRAGMENT = ROOT / "changelog.d" / "1207.md"``) must also
-handle the fragment being gone — an ``.exists()`` / ``.is_file()`` check, a
-``pytest.skip`` / ``pytest.importorskip`` / ``skipif``, or a fallback to CHANGELOG.md.
+handle the fragment being gone — an ``.exists()`` / ``.is_file()`` /
+``os.path.exists()`` / ``os.path.isfile()`` check on the fragment itself or an exact
+alias of it (#1226; not its ``.parent``, which survives a release), a ``try`` around the
+read that catches ``FileNotFoundError`` (or ``OSError``), or a ``pytest.skip`` /
+``pytest.importorskip`` / ``skipif``. A fallback to CHANGELOG.md counts only through
+such a branch: a bare mention of it guards nothing (#1226 r1). A fragment whose
+number is only known at run time (``f"changelog.d/{n}.md"``, ``ROOT / "changelog.d" / n``)
+is a read too (#1226).
 """
 from __future__ import annotations
 
@@ -21,6 +27,8 @@ SELF = Path(__file__).resolve()
 NUMBERED_MD = re.compile(r"\d+\.md")
 INLINE_FRAGMENT = re.compile(r"(?:.*/)?changelog\.d/\d+\.md")
 GUARD_ATTRS = {"exists", "is_file"}
+OS_PATH_GUARDS = {"exists", "isfile"}
+MISSING_ERRORS = {"FileNotFoundError", "OSError", "IOError", "EnvironmentError"}
 SKIP_ATTRS = {"skip", "importorskip"}
 
 
@@ -37,15 +45,68 @@ def _is_dir(s: str) -> bool:
     return s == "changelog.d" or s.endswith("/changelog.d")
 
 
+TEMP_ROOTS = {"tmp_path", "tmp_path_factory", "tmpdir"}
+PATH_CALLS = {"Path", "PurePath", "PosixPath"}
+NON_LITERAL = (ast.Name, ast.Subscript, ast.Call, ast.Attribute, ast.JoinedStr)
+FSTRING_FRAGMENT = re.compile(r"(?:.*/)?changelog\.d/([^/]*)\.md")
+
+
+def _ends_in_dir(node: ast.AST, dir_names: frozenset[str]) -> bool:
+    """`node` is a path whose last segment is `changelog.d`."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _is_dir(node.value)
+    if isinstance(node, ast.Name):
+        return node.id in dir_names
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _ends_in_dir(node.right, dir_names)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+            and node.func.id in PATH_CALLS and node.args:
+        return _ends_in_dir(node.args[-1], dir_names)
+    return False
+
+
+def _is_non_literal_fragment(node: ast.AST, dir_names: frozenset[str]) -> bool:
+    """`<changelog.d path> / <name|subscript|call|f-string>`, or an f-string
+    `...changelog.d/{n}.md` — a fragment whose number is only known at run time.
+    Temp-rooted paths and README.md are not real fragments."""
+    if isinstance(node, ast.JoinedStr):
+        text = "".join(v.value if isinstance(v, ast.Constant) else "{}"
+                       for v in node.values)
+        m = FSTRING_FRAGMENT.fullmatch(text)
+        return bool(m) and "{}" in m.group(1) and not _names(node) & TEMP_ROOTS
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) \
+            and isinstance(node.right, NON_LITERAL):
+        return _ends_in_dir(node.left, dir_names) and not _names(node.left) & TEMP_ROOTS
+    return False
+
+
 def _is_fragment_expr(node: ast.AST, dir_names: frozenset[str] = frozenset()) -> bool:
     """A path to a real numbered fragment: a `\\d+.md` literal beside a `changelog.d`
-    literal (or a module constant holding one) in the same expression, or one literal
-    naming `changelog.d/<N>.md`."""
+    literal (or a module constant holding one) in the same expression, one literal
+    naming `changelog.d/<N>.md`, or a non-literal last segment under a `changelog.d`
+    path (#1226)."""
     strings = _strings(node)
     if any(INLINE_FRAGMENT.fullmatch(s) for s in strings):
         return True
     has_dir = any(_is_dir(s) for s in strings) or bool(_names(node) & dir_names)
-    return has_dir and any(NUMBERED_MD.fullmatch(s) for s in strings)
+    if has_dir and any(NUMBERED_MD.fullmatch(s) for s in strings):
+        return True
+    return any(_is_non_literal_fragment(n, dir_names) for n in ast.walk(node))
+
+
+def _is_fragment_value(node: ast.AST, names: set[str],
+                       dir_names: frozenset[str]) -> bool:
+    """`node` IS a fragment path — a bare fragment name, or a path-shaped expression
+    (`a / b`, `Path(...)`, a literal, an f-string) that builds one — not merely an
+    expression that mentions one (`FRAGMENT.parent.parent / "pyproject.toml"`, r1)."""
+    if isinstance(node, ast.Name):
+        return node.id in names
+    path_call = isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+        and node.func.id in PATH_CALLS
+    path_op = isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)
+    if path_call or path_op or isinstance(node, (ast.Constant, ast.JoinedStr)):
+        return _is_fragment_expr(node, dir_names)
+    return False
 
 
 def _fragment_exprs(scope: ast.AST, dir_names: frozenset[str]) -> bool:
@@ -67,18 +128,76 @@ def _mentions_skipif(node: ast.AST) -> bool:
     )
 
 
-def _guarded(func: ast.AST, changelog_names: set[str]) -> bool:
+def _local_fragments(func: ast.AST, fragment_names: set[str],
+                     dir_names: frozenset[str]) -> set[str]:
+    """The fragment constants plus every name the function binds exactly to one (or to
+    an inline fragment path) — not to an expression that merely mentions one (r1)."""
+    names = set(fragment_names)
+    assigns = [n for n in ast.walk(func) if isinstance(n, (ast.Assign, ast.AnnAssign))
+               and n.value is not None]
+    changed = True
+    while changed:
+        changed = False
+        for a in assigns:
+            if not _is_fragment_value(a.value, names, dir_names):
+                continue
+            targets = a.targets if isinstance(a, ast.Assign) else [a.target]
+            new = {t.id for t in targets if isinstance(t, ast.Name)} - names
+            if new:
+                names |= new
+                changed = True
+    return names
+
+
+def _is_fragment_receiver(node: ast.AST, names: set[str], dir_names: frozenset[str]) -> bool:
+    """`<fragment name>` or an inline fragment path — not its `.parent`: changelog.d/
+    survives a release, so a check on it guards nothing (r1)."""
+    if isinstance(node, ast.Name):
+        return node.id in names
+    return _is_fragment_expr(node, dir_names)
+
+
+def _is_os_path_guard(call: ast.Call) -> bool:
+    """`os.path.exists(...)` / `os.path.isfile(...)`, or the bare imported name."""
+    f = call.func
+    if isinstance(f, ast.Attribute) and f.attr in OS_PATH_GUARDS:
+        v = f.value
+        return isinstance(v, ast.Attribute) and v.attr == "path" \
+            and isinstance(v.value, ast.Name) and v.value.id == "os"
+    return isinstance(f, ast.Name) and f.id in OS_PATH_GUARDS
+
+
+def _catches_missing(handler: ast.ExceptHandler) -> bool:
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(isinstance(t, ast.Name) and t.id in MISSING_ERRORS for t in types)
+
+
+def _guarded(func: ast.AST, fragment_names: set[str],
+             dir_names: frozenset[str] = frozenset()) -> bool:
+    """The function branches on the fragment being gone: `.exists()`/`.is_file()` on
+    the fragment itself (#1226 — not on any other path, nor its `.parent`), the same
+    through `os.path.exists`/`os.path.isfile` (r1), a `try` around a fragment read
+    that catches FileNotFoundError (r1), or a pytest skip. A CHANGELOG.md fallback is
+    accepted only through one of these branches — a bare mention guards nothing (r1)."""
+    names = _local_fragments(func, fragment_names, dir_names)
+
+    def reads_fragment(nodes: list[ast.stmt]) -> bool:
+        body = ast.Module(body=nodes, type_ignores=[])
+        return bool(_names(body) & names) or _fragment_exprs(body, dir_names)
+
     for n in ast.walk(func):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-            if n.func.attr in GUARD_ATTRS:
+            if n.func.attr in GUARD_ATTRS \
+                    and _is_fragment_receiver(n.func.value, names, dir_names):
                 return True
             if n.func.attr in SKIP_ATTRS and isinstance(n.func.value, ast.Name) \
                     and n.func.value.id == "pytest":
                 return True
-        if isinstance(n, ast.Constant) and isinstance(n.value, str) \
-                and "CHANGELOG.md" in n.value:
+        if isinstance(n, ast.Call) and _is_os_path_guard(n) and n.args \
+                and _is_fragment_receiver(n.args[0], names, dir_names):
             return True
-        if isinstance(n, ast.Name) and n.id in changelog_names:
+        if isinstance(n, ast.Try) and any(_catches_missing(h) for h in n.handlers) \
+                and reads_fragment(n.body):
             return True
     return False
 
@@ -88,7 +207,6 @@ def unguarded_reads(source: str, label: str = "<src>") -> list[str]:
     never handles it being gone."""
     tree = ast.parse(source)
     fragment_names: set[str] = set()
-    changelog_names: set[str] = set()
     dir_names: set[str] = set()
     module_skip = False
     for stmt in tree.body:
@@ -97,13 +215,10 @@ def unguarded_reads(source: str, label: str = "<src>") -> list[str]:
             names = {t.id for t in targets if isinstance(t, ast.Name)}
             if "pytestmark" in names and _mentions_skipif(stmt.value):
                 module_skip = True
-            if _is_fragment_expr(stmt.value, frozenset(dir_names)) \
-                    or _names(stmt.value) & fragment_names:
+            if _is_fragment_value(stmt.value, fragment_names, frozenset(dir_names)):
                 fragment_names |= names
             elif any(_is_dir(s) for s in _strings(stmt.value)):
                 dir_names |= names
-            elif any("CHANGELOG.md" in s for s in _strings(stmt.value)):
-                changelog_names |= names
     if module_skip:
         return []
 
@@ -119,7 +234,7 @@ def unguarded_reads(source: str, label: str = "<src>") -> list[str]:
                         and not child_skipped:
                     body = ast.Module(body=child.body, type_ignores=[])
                     reaches = bool(_names(body) & fragment_names) or _fragment_exprs(body, dirs)
-                    if reaches and not _guarded(body, changelog_names):
+                    if reaches and not _guarded(body, fragment_names, dirs):
                         found.append(f"{label}:{child.name}")
                 visit(child, child_skipped)
 
@@ -236,3 +351,144 @@ def test_tmp_path_fragments_are_not_flagged() -> None:
 def test_non_numbered_fragment_is_not_flagged() -> None:
     src = HEAD + 'def test_x():\n    (ROOT / "changelog.d" / "README.md").read_text()\n'
     assert unguarded_reads(src) == []
+
+
+# --- #1226: a guard must name the fragment; non-literal fragment paths are seen -----
+
+def test_an_unrelated_exists_is_not_a_guard() -> None:
+    # tmp_path.exists() says nothing about the fragment: this still raises on a release
+    src = CONST + ("def test_x(tmp_path):\n    assert tmp_path.exists()\n"
+                   "    FRAGMENT.read_text()\n")
+    other = CONST + ('def test_x():\n    assert (ROOT / "pyproject.toml").is_file()\n'
+                     "    FRAGMENT.read_text()\n")
+    assert unguarded_reads(src) == ["<src>:test_x"]
+    assert unguarded_reads(other) == ["<src>:test_x"]
+
+
+def test_a_guard_on_the_fragment_alias_or_inline_path_is_accepted() -> None:
+    alias = CONST + ("F2 = FRAGMENT\ndef test_x():\n    if F2.exists():\n"
+                     "        F2.read_text()\n")
+    local = CONST + ("def test_x():\n    f = FRAGMENT\n    if f.is_file():\n"
+                     "        f.read_text()\n")
+    inline = HEAD + ('def test_x():\n    p = ROOT / "changelog.d" / "12.md"\n'
+                     '    if (ROOT / "changelog.d" / "12.md").exists():\n'
+                     "        p.read_text()\n")
+    for src in (alias, local, inline):
+        assert unguarded_reads(src) == [], src
+
+
+def test_fstring_fragment_paths_are_flagged() -> None:
+    literal = HEAD + 'def test_x(n):\n    Path(f"changelog.d/{n}.md").read_text()\n'
+    rooted = HEAD + 'def test_x(n):\n    Path(f"{ROOT}/changelog.d/{n}.md").read_text()\n'
+    segment = HEAD + 'def test_x(n):\n    (ROOT / "changelog.d" / f"{n}.md").read_text()\n'
+    for src in (literal, rooted, segment):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_parametrized_fragment_paths_are_flagged() -> None:
+    name = HEAD + ('@pytest.mark.parametrize("n", ["1207.md"])\n'
+                   'def test_x(n):\n    (ROOT / "changelog.d" / n).read_text()\n')
+    sub = HEAD + 'def test_x(ns):\n    (ROOT / "changelog.d" / ns[0]).read_text()\n'
+    call = HEAD + 'def test_x(n):\n    (ROOT / "changelog.d" / str(n)).read_text()\n'
+    via_dir = HEAD + ('FRAG_DIR = ROOT / "changelog.d"\n'
+                      "def test_x(n):\n    (FRAG_DIR / n).read_text()\n")
+    const = HEAD + ('N = "1207.md"\nFRAGMENT = ROOT / "changelog.d" / N\n'
+                    "def test_x():\n    FRAGMENT.read_text()\n")
+    for src in (name, sub, call, via_dir, const):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_guarded_non_literal_fragment_paths_are_accepted() -> None:
+    fstr = HEAD + ('def test_x(n):\n    p = Path(f"changelog.d/{n}.md")\n'
+                   "    if p.exists():\n        p.read_text()\n")
+    param = HEAD + ('def test_x(n):\n    p = ROOT / "changelog.d" / n\n'
+                    "    if not p.is_file():\n        pytest.skip('released')\n"
+                    "    p.read_text()\n")
+    inline = HEAD + ('def test_x(n):\n    if (ROOT / "changelog.d" / n).exists():\n'
+                     '        (ROOT / "changelog.d" / n).read_text()\n')
+    for src in (fstr, param, inline):
+        assert unguarded_reads(src) == [], src
+
+
+def test_temp_and_readme_non_literal_paths_are_not_flagged() -> None:
+    tmp = HEAD + ('def test_x(tmp_path, n):\n    (tmp_path / "changelog.d" / n).write_text("x")\n'
+                  '    Path(f"{tmp_path}/changelog.d/{n}.md").read_text()\n')
+    readme = HEAD + 'def test_x(d):\n    Path(f"{d}/changelog.d/README.md").read_text()\n'
+    listing = HEAD + 'def test_x(n):\n    return f"changelog.d/{n}\\n"\n'
+    for src in (tmp, readme, listing):
+        assert unguarded_reads(src) == [], src
+
+
+# --- #1226 r1: CHANGELOG.md only as a branch fallback; exact aliases; no .parent guard;
+# --- os.path and FileNotFoundError guards ---------------------------------------------
+
+def test_a_bare_changelog_mention_is_not_a_guard() -> None:
+    # the CHANGELOG.md mention does not branch on the fragment: this still raises
+    literal = CONST + ('def test_x():\n    assert "CHANGELOG.md"\n'
+                       "    FRAGMENT.read_text()\n")
+    named = CONST + ('CHANGELOG = ROOT / "CHANGELOG.md"\n'
+                     "def test_x():\n    assert CHANGELOG.exists()\n"
+                     "    FRAGMENT.read_text()\n")
+    for src in (literal, named):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_a_changelog_fallback_behind_a_fragment_branch_is_accepted() -> None:
+    # test_1207's shape
+    src = CONST + ("def test_x():\n    if FRAGMENT.exists():\n"
+                   "        t = FRAGMENT.read_text()\n    else:\n"
+                   "        t = (ROOT / 'CHANGELOG.md').read_text()\n")
+    assert unguarded_reads(src) == []
+
+
+def test_an_alias_must_be_the_fragment_not_mention_it() -> None:
+    local = CONST + ('def test_x():\n    py = FRAGMENT.parent.parent / "pyproject.toml"\n'
+                     "    assert py.exists()\n    FRAGMENT.read_text()\n")
+    module = CONST + ('PY = FRAGMENT.parent.parent / "pyproject.toml"\n'
+                      "def test_x():\n    assert PY.exists()\n    FRAGMENT.read_text()\n")
+    for src in (local, module):
+        assert unguarded_reads(src) == ["<src>:test_x"], src
+
+
+def test_the_fragment_parent_exists_is_not_a_guard() -> None:
+    # changelog.d/ survives a release: this check is always true
+    src = CONST + ("def test_x():\n    assert FRAGMENT.parent.exists()\n"
+                   "    FRAGMENT.read_text()\n")
+    branch = CONST + ("def test_x():\n    if FRAGMENT.parent.exists():\n"
+                      "        FRAGMENT.read_text()\n")
+    for s in (src, branch):
+        assert unguarded_reads(s) == ["<src>:test_x"], s
+
+
+def test_os_path_guards_on_the_fragment_are_accepted() -> None:
+    exists = CONST + ("import os\ndef test_x():\n    if os.path.exists(FRAGMENT):\n"
+                      "        FRAGMENT.read_text()\n")
+    isfile = CONST + ("import os\ndef test_x():\n    if not os.path.isfile(FRAGMENT):\n"
+                      "        return\n    FRAGMENT.read_text()\n")
+    for src in (exists, isfile):
+        assert unguarded_reads(src) == [], src
+
+
+def test_os_path_guards_on_another_path_are_not_accepted() -> None:
+    src = CONST + ("import os\ndef test_x(tmp_path):\n    assert os.path.exists(tmp_path)\n"
+                   "    FRAGMENT.read_text()\n")
+    assert unguarded_reads(src) == ["<src>:test_x"]
+
+
+def test_a_file_not_found_handler_around_the_read_is_accepted() -> None:
+    src = CONST + ("def test_x():\n    try:\n        FRAGMENT.read_text()\n"
+                   "    except FileNotFoundError:\n        return\n")
+    tupled = CONST + ("def test_x():\n    try:\n        FRAGMENT.read_text()\n"
+                      "    except (ValueError, FileNotFoundError):\n        return\n")
+    for s in (src, tupled):
+        assert unguarded_reads(s) == [], s
+
+
+def test_an_unrelated_handler_is_not_a_guard() -> None:
+    other = CONST + ("def test_x():\n    try:\n        FRAGMENT.read_text()\n"
+                     "    except ValueError:\n        return\n")
+    elsewhere = CONST + ("def test_x():\n    try:\n        int('x')\n"
+                         "    except FileNotFoundError:\n        return\n"
+                         "    FRAGMENT.read_text()\n")
+    for s in (other, elsewhere):
+        assert unguarded_reads(s) == ["<src>:test_x"], s
