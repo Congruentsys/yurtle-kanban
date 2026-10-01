@@ -273,6 +273,8 @@ def test_b_escalated_waits_for_the_captain(yk, monkeypatch, capsys, why) -> None
     ".claude/skills/pairit/safe_merge.sh",
     # r2 R2-2: `yurtle-kanban init` copies EVERY skills/* dir into each consumer repo
     "skills/status/SKILL.md", "skills/sync/SKILL.md", "skills/software/feature/SKILL.md",
+    # #1210: the shipped FOSS release skill and this repo's own release procedure
+    "skills/release-foss/SKILL.md", ".claude/skills/release-yurtle-kanban/SKILL.md",
 ])
 def test_b_every_escalation_path(yk, monkeypatch, capsys, path) -> None:
     p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
@@ -411,11 +413,17 @@ def test_external_pr_skill_exists_and_names_the_limits() -> None:
 
 def test_b4_release_skill_stays_user_only() -> None:
     """r1 B4: `yurtle-kanban init` installs skills/release into every consumer repo, so it
-    stays `disable-model-invocation: true` and untouched by #1195; the fleet's release
-    steps live in the repo-local external-pr skill, which Reads and follows it."""
-    text = (SKILLS.parent.parent / "skills" / "release" / "SKILL.md").read_text()
-    assert "disable-model-invocation: true" in text
-    assert "#1195" not in text
+    stays `disable-model-invocation: true` and untouched by #1195. The fleet's release steps
+    live in the repo-local external-pr skill, which Reads and follows this repo's own
+    release skill (#1210), itself user-invoked only."""
+    root = SKILLS.parent.parent
+    for rel in ("skills/release/SKILL.md", "skills/release-foss/SKILL.md", LOCAL_RELEASE):
+        text = (root / rel).read_text()
+        assert "disable-model-invocation: true" in text, rel
+    assert "#1195" not in (root / "skills" / "release" / "SKILL.md").read_text()
+
+
+LOCAL_RELEASE = ".claude/skills/release-yurtle-kanban/SKILL.md"  # #1210: this repo's release
 
 
 def test_b4_external_pr_skill_carries_the_fleet_release_steps() -> None:
@@ -423,7 +431,7 @@ def test_b4_external_pr_skill_carries_the_fleet_release_steps() -> None:
     m = re.search(r"\n## Fleet releases\b(.*?)(?=\n## |\Z)", text, re.S)
     assert m, "no `## Fleet releases` section in external-pr/SKILL.md"
     sec = m.group(1)
-    for needle in ("skills/release/SKILL.md", "patch or minor", "a major is the Captain's",
+    for needle in (LOCAL_RELEASE, "patch or minor", "a major is the Captain's",
                    "125,000", "safe_merge.sh", "captain-approval"):
         assert needle.lower() in sec.lower(), needle
 
@@ -888,6 +896,36 @@ def test_r2_2_all_of_skills_escalates(yk) -> None:
     assert "skills/release/" not in yk.ESCALATE_DIRS  # subsumed, not a narrower copy
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
     assert "`skills/**`" in text and "`skills/release/**`" not in text
+
+
+# --------------------------------------------------------------------------- r2 X (#1210)
+# Mini's cross-PR note: after #1210, skills/release/SKILL.md is the INTERNAL shipped skill
+# (no PyPI); this repo's release is the repo-local release-yurtle-kanban skill. The fleet's
+# release steps must point there, never at skills/release.
+
+
+def fleet_releases() -> str:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    m = re.search(r"\n## Fleet releases\b(.*?)(?=\n## |\Z)", text, re.S)
+    assert m, "no Fleet releases section"
+    return m.group(1)
+
+
+def test_x_fleet_releases_follow_the_repo_local_release_skill() -> None:
+    sec = fleet_releases()
+    assert LOCAL_RELEASE in sec, sec
+    assert (SKILLS.parent.parent / LOCAL_RELEASE).is_file()
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    assert "skills/release/SKILL.md" not in text, \
+        "external-pr still points at the internal shipped skills/release"
+    assert "step 8 of skills/release" not in text
+
+
+def test_x_release_due_names_the_repo_local_release_skill(yk, monkeypatch, capsys) -> None:
+    out = _release(yk, monkeypatch, capsys, FIX)
+    assert "RELEASE DUE" in out, out
+    assert LOCAL_RELEASE in out, out
+    assert " skills/release/SKILL.md" not in out, out
 
 # --------------------------------------------------------------------------- r1 N1: fidelity
 

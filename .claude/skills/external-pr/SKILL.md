@@ -140,9 +140,12 @@ conflicts with a ruling); the verdict line stays `changes`.
 
 The picker prints `RELEASE DUE — <bump>` once an external PR has merged since the last tag and no
 `chore: release v…` PR is open. The fleet cuts a **patch or minor** only (Fixed/Security → patch,
-Added/Changed → minor); **a major is the Captain's**. `skills/release/SKILL.md` is user-invoked only
-(`disable-model-invocation: true`, and `yurtle-kanban init` installs it into every consumer repo), so
-**Read `skills/release/SKILL.md` and follow its steps** rather than invoking it, with these additions:
+Added/Changed → minor); **a major is the Captain's**. This repo's release procedure is the repo-local
+`.claude/skills/release-yurtle-kanban/SKILL.md` (#1210; it follows the shipped `skills/release-foss`).
+It is user-invoked only (`disable-model-invocation: true`), so **Read
+`.claude/skills/release-yurtle-kanban/SKILL.md` and follow its steps** rather than invoking it. (The
+shipped `skills/release` is the INTERNAL-repo skill, with no PyPI: never follow it here.) These
+additions apply:
 - **right before opening the release PR, re-check**: `gh pr list --state open --search "chore: release v in:title"`
   must be empty, and no comment from Mini or anyone else (on the merged PRs, the release issues, or the
   latest open PRs) may ask to hold the release. If either fails, stop: the release is in flight (the
@@ -154,8 +157,8 @@ Added/Changed → minor); **a major is the Captain's**. `skills/release/SKILL.md
 - it is reviewed by a distinct `claude -p` session (pairit step 3) and merged with
   `.claude/skills/pairit/safe_merge.sh`;
 - tag the merge commit, push the tag, then publish with notes from `scripts/release_notes.py X.Y.Z`
-  exactly as `skills/release/SKILL.md` step 8 does: it keeps them under GitHub's **125,000-char** cap and
-  exits 1 when it can't (#1191);
+  exactly as that skill's step 8 does: it keeps them under GitHub's **125,000-char** cap and exits 1
+  when it can't (#1191);
 - confirm `publish.yml` ran green and the version is on PyPI, then post the published note on each PR.
 
 `RELEASE NEEDS CAPTAIN` (a Removed or breaking fragment: a major) → open a chore issue labelled
