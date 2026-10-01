@@ -630,7 +630,7 @@ on:
 jobs:
   auto-close:
     if: github.event.pull_request.merged == true
-    uses: hankh95/yurtle-kanban/.github/workflows/kanban-auto-close.yml@main
+    uses: Congruentsys/yurtle-kanban/.github/workflows/kanban-auto-close.yml@main
     with:
       target-status: done       # or "review"
       kanban-version: main      # yurtle-kanban git ref

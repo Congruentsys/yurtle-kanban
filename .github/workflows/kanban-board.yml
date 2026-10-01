@@ -83,7 +83,7 @@ jobs:
           <body>
             <h1>Kanban Board</h1>
             <p>No work items found. Add work items to your configured paths.</p>
-            <p><a href="https://github.com/hankh95/yurtle-kanban">yurtle-kanban documentation</a></p>
+            <p><a href="https://github.com/Congruentsys/yurtle-kanban">yurtle-kanban documentation</a></p>
           </body>
           </html>
           EOF

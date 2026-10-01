@@ -13,7 +13,7 @@
 #   jobs:
 #     auto-close:
 #       if: github.event.pull_request.merged == true
-#       uses: hankh95/yurtle-kanban/.github/workflows/kanban-auto-close.yml@main
+#       uses: Congruentsys/yurtle-kanban/.github/workflows/kanban-auto-close.yml@main
 #       with:
 #         target-status: done
 
@@ -59,7 +59,7 @@ jobs:
           python3.11 --version
 
       - name: Install yurtle-kanban
-        run: pip install "git+https://github.com/hankh95/yurtle-kanban.git@${{ inputs.kanban-version }}"
+        run: pip install "git+https://github.com/Congruentsys/yurtle-kanban.git@${{ inputs.kanban-version }}"
 
       - name: Extract item IDs
         id: extract
