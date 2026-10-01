@@ -166,15 +166,18 @@ SHA_SEGMENT = re.compile(r"(?:^|/)[0-9a-f]{40}(?:/|$)")
 # `<key>password: <value>`: a 6+ char value that is not code — a call or subscript
 # (`getpass()`, `Optional[str]`) with no digit in it, a dotted name (`self.pw`) or a digit-free
 # identifier (`str`, `SecretStr`, `password`); a dotted or called head is a digit-free
-# identifier and each later part starts with a letter, so `hunter2.v1`, `Summer.2024` and
+# identifier and every dotted part is digit-free, so `hunter2.v1`, `Welcome.Home2024` and
 # `admin(123)` are values (#1220). An all-letter password passes (the price of postable prose).
 PASSWORD = re.compile(r"(?i)(\w*pass(?:word|wd))['\"]?\s*[:=]\s*['\"]?([^\s'\"`]{6,})")
-PASSWORD_CODE = re.compile(r"[A-Za-z_]+(?:\.[A-Za-z_]\w*)*[(\[][^\d]*"
-                           r"|[A-Za-z_]+(?:\.[A-Za-z_]\w*)+|[A-Za-z_]+")
+PASSWORD_CODE = re.compile(r"[A-Za-z_]+(?:\.[A-Za-z_]+)*[(\[][^\d]*"
+                           r"|[A-Za-z_]+(?:\.[A-Za-z_]+)*\[\d+\]?"  # `pw_hash[0]` (r1)
+                           r"|[A-Za-z_]+(?:\.[A-Za-z_]+)+|[A-Za-z_]+")
 # also prose as a password value (#1220): an env-var reference (`$PGPASSWORD`, `${DB_PW}`,
 # `${{ secrets.X }}`; upper case, so `$ecret1` is a value) or a hash-algorithm name
 PASSWORD_PROSE = re.compile(
-    r"\$[A-Z_][A-Z0-9_]*|\$\{.*"
+    # a whole reference only: `${VAR}` (a trailing `}` may be stripped) or a GitHub
+    # `${{ … }}` expression, never `${VAR:-default}` or a value glued on (r1)
+    r"\$[A-Z_][A-Z0-9_]*|\$\{[A-Z_][A-Z0-9_]*\}?|\$\{\{.*"
     r"|(?i:pbkdf2(?:_sha(?:1|256|512))?|argon2(?:id|i|d)?|bcrypt(?:_sha256)?|scrypt"
     r"|sha(?:1|224|256|384|512)|md5)")
 # a test's key (`test_password`, `test_reset_password`) is code, so its value may be an
