@@ -568,9 +568,15 @@ def main() -> None:
             state = "SKIP: conflict, waiting on the author"
         elif ci != "green" and any(
                 (c.get("conclusion") or "").upper() == "ACTION_REQUIRED"
-                for c in p.get("statusCheckRollup") or []) and not touches_github(p):
-            state = "approved, fork run waits"
-            picks.append((1, p, why))
+                for c in p.get("statusCheckRollup") or []):
+            if touches_github(p):  # the fleet never approves a run that touches .github/
+                state = "WAIT CAPTAIN (fork run needs the Captain)"
+                print(f"  WAIT CAPTAIN (fork run needs the Captain) #{p['number']} by "
+                      f"{p['author']['login']} — approved, touches .github/; its fork run "
+                      "waits for the Captain's approval")
+            else:
+                state = "approved, fork run waits"
+                picks.append((1, p, why))
         elif ci != "green":
             state = f"SKIP: approved, CI {ci}"
         elif why and not (cap := captain_approval(p))[0]:

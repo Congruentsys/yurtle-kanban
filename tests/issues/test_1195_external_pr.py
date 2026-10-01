@@ -934,3 +934,17 @@ def test_n4_picker_bot_pr_in_this_repo_is_external(yk, monkeypatch, capsys) -> N
     p["author"]["is_bot"] = True
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE, assoc={1300: "NONE"})
     assert "REVIEW EXTERNAL PR #1300" in out, out
+
+
+# --------------------------------------------------------------------------- r1 N5
+
+
+def test_n5_approved_github_pr_with_a_waiting_run_waits_for_the_captain(
+        yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=(".github/workflows/ci.yml",), checks=WAITING_RUN,
+               comments=(approve_at_head("class: captain (CI path)"),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN (fork run needs the Captain)" in out, out
+    assert "#1300" in out, out
+    assert "CI red" not in out, out
+    assert "/approve" not in out, out

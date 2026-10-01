@@ -31,7 +31,8 @@ rule still applies. Outside yk-loop, use the plain picker.
 2. **External PRs** (#1195; author not OWNER/MEMBER/COLLABORATOR) follow `.claude/skills/external-pr/SKILL.md`.
    `MERGE EXTERNAL PR #N`: approve at head, CI green, and not escalated, or `captain-approved` by the Captain
    after that approve verdict (a new head waits for him again).
-   `RUN CI EXTERNAL PR #N`: approved, its fork run waits (never for `.github/`).
+   `RUN CI EXTERNAL PR #N`: approved, its fork run waits (a `.github/` one is listed
+   `WAIT CAPTAIN (fork run needs the Captain)` instead).
    `REVIEW EXTERNAL PR #N`: no member verdict at its head. Each prints its next commands. Listed, never picked: `WAIT CAPTAIN #N`
    (escalated: label `captain-approval`, a `class: captain` verdict line, or a release/CI/security path),
    a `changes` verdict (waiting on the author's new head), `proposed-reject` (the Captain closes it).
