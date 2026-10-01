@@ -10,6 +10,12 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-10-01
+
+### Fixed
+
+- The PyPI workflow now rejects release tags that do not match the package versions (#1192; thanks @PandaHUN777, #1193).
+
 ## [3.0.0] - 2026-09-30
 
 ### Added
