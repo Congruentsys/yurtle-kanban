@@ -10,12 +10,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_release_version.py"
 
-# The script runs only in publish.yml, which pins Python 3.11, so it needs the stdlib
-# tomllib (#1194). Every test that loads it skips below 3.11, except the one that
-# proves the script refuses an older Python cleanly.
-needs_311 = pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="check_release_version.py needs Python 3.11+"
-)
 
 
 def _load() -> ModuleType:
@@ -40,7 +34,6 @@ def _write_versions(root: Path, project_version: str, package_version: str) -> N
     module.write_text(f'__version__ = "{package_version}"\n', encoding="utf-8")
 
 
-@needs_311
 def test_check_release_version_accepts_matching_tag_and_package_versions(
     tmp_path: Path, check_release_version: ModuleType
 ) -> None:
@@ -49,7 +42,6 @@ def test_check_release_version_accepts_matching_tag_and_package_versions(
     check_release_version.check_release_version(tmp_path, "v2.3.0")
 
 
-@needs_311
 def test_check_release_version_rejects_a_mismatched_release_tag(
     tmp_path: Path, check_release_version: ModuleType
 ) -> None:
@@ -61,7 +53,6 @@ def test_check_release_version_rejects_a_mismatched_release_tag(
         check_release_version.check_release_version(tmp_path, "v2.2.0")
 
 
-@needs_311
 def test_check_release_version_rejects_mismatched_package_versions(
     tmp_path: Path, check_release_version: ModuleType
 ) -> None:
@@ -76,7 +67,6 @@ def test_check_release_version_rejects_mismatched_package_versions(
         check_release_version.check_release_version(tmp_path, "v2.3.0")
 
 
-@needs_311
 def test_package_mismatch_is_reported_even_when_the_tag_also_mismatches(
     tmp_path: Path, check_release_version: ModuleType
 ) -> None:
@@ -86,7 +76,6 @@ def test_package_mismatch_is_reported_even_when_the_tag_also_mismatches(
         check_release_version.check_release_version(tmp_path, "v9.9.9")
 
 
-@needs_311
 @pytest.mark.parametrize("tag", [None, ""], ids=["unset", "empty"])
 def test_main_rejects_an_unset_or_empty_release_tag(
     tag: str | None,
@@ -105,11 +94,11 @@ def test_main_rejects_an_unset_or_empty_release_tag(
     assert captured.out == ""
 
 
-def test_script_without_tomllib_exits_2_saying_it_needs_python_311(
+def test_script_without_tomllib_or_tomli_exits_2_saying_what_it_needs(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # Python 3.10 has no tomllib; a None entry in sys.modules makes the import fail the
-    # same way on any Python, so this runs everywhere. No tomli fallback (#1194).
+    # neither tomllib nor tomli: a None entry in sys.modules makes each import fail the
+    # same way on any Python, so this runs everywhere (#1194)
     monkeypatch.setitem(sys.modules, "tomllib", None)
     monkeypatch.setitem(sys.modules, "tomli", None)
 
@@ -118,5 +107,5 @@ def test_script_without_tomllib_exits_2_saying_it_needs_python_311(
 
     assert exit_info.value.code == 2
     captured = capsys.readouterr()
-    assert "check_release_version.py needs Python 3.11+ (publish.yml pins 3.11)" in captured.err
+    assert "check_release_version.py needs Python 3.11+, or tomli on 3.10 (publish.yml pins 3.11)" in captured.err
     assert "Traceback" not in captured.err

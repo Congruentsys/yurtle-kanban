@@ -10,12 +10,18 @@ from pathlib import Path
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Python 3.10: no stdlib tomllib, and tomli is not a dependency
-    print(
-        "check_release_version.py needs Python 3.11+ (publish.yml pins 3.11)",
-        file=sys.stderr,
-    )
-    raise SystemExit(2) from None
+except ModuleNotFoundError:
+    try:  # Python 3.10: the dev extra's tomli (#555) serves the tests
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        # publish.yml runs this on Python 3.11 before installing anything, so neither
+        # source can be missing there; anywhere else, say what's needed (#1194)
+        print(
+            "check_release_version.py needs Python 3.11+, or tomli on 3.10 "
+            "(publish.yml pins 3.11)",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
 
 
 def _package_module_version(path: Path) -> str:
