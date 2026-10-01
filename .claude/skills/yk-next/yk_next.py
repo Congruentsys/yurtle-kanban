@@ -131,8 +131,11 @@ PREFETCH_VIEW_FIELDS = ("number,title,body,author,headRefOid,files,commits,comme
                         "statusCheckRollup,labels")
 PREFETCH_CMD = f"python3 .claude/skills/yk-next/yk_next.py --prefetch <P> {PREFETCH_DIR}"
 CLEANUP_CMD = f"rm -rf {PREFETCH_DIR}"
+# --allowedTools only ADDS to a machine's allow rules (a global `Bash(gh:*)` would hand gh
+# back), so the reviewer also gets an explicit deny, which wins over any allow (r1)
+REVIEW_DENY = "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch"
 REVIEW_CMD = (f'claude -p --permission-mode dontAsk --allowedTools "{REVIEW_TOOLS}"'
-              " < <brief> > <verdict-file>")
+              f' --disallowedTools "{REVIEW_DENY}" < <brief> > <verdict-file>')
 # A dry check only; --post-verdict checks, then posts (#1213), so the order is structural.
 CHECK_CMD = "python3 .claude/skills/yk-next/yk_next.py --check-verdict <P> <verdict-file>"
 POST_VERDICT_CMD = "python3 .claude/skills/yk-next/yk_next.py --post-verdict <P> <verdict-file>"
@@ -236,10 +239,16 @@ def prefetch(number: int, target: str) -> list[str]:
         sys.exit(f"ERROR: --prefetch: {target} exists and is not a directory; refusing")
     if path.is_dir() and any(path.iterdir()):
         sys.exit(f"ERROR: --prefetch: {target} is not empty; refusing (remove it first)")
-    diff = gh("pr", "diff", str(number))
     view = gh("pr", "view", str(number), "--json", PREFETCH_VIEW_FIELDS)
+    diff = gh("pr", "diff", str(number))
     rows = gh("api", "--paginate", f"repos/{{owner}}/{{repo}}/pulls/{number}/files",
               "--jq", ".[] | {filename, previous_filename, status, additions, deletions}")
+    # the three are one head's: a push between the fetches would mix two heads (r1)
+    head = json.loads(view)["headRefOid"]
+    now = gh("pr", "view", str(number), "--json", "headRefOid", "--jq", ".headRefOid").strip()
+    if now != head:
+        sys.exit(f"ERROR: --prefetch: PR #{number}'s head moved during the prefetch "
+                 f"({head[:12]} → {now[:12]}); refusing — run it again")
     files = [json.loads(line) for line in rows.splitlines() if line.strip()]
     path.mkdir(parents=True, exist_ok=True)
     names = [n.replace("<P>", str(number)) for n in PREFETCH_FILES]

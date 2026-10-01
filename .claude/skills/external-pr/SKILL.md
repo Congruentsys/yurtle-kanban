@@ -91,7 +91,7 @@ GitHub may stop holding their later pushes, so re-read every new head (`gh pr di
 first. **Never approve a run for a PR that touches `.github/`.** Escalate it instead (step 4,
 approve+captain), even before review; the Captain decides whether its CI runs.
 
-**3. Review, by a distinct session, read-only, with no gh.** This (driving) session first prefetches the PR
+**3. Review, by a distinct session, read-only, with no gh.** Run every step-3 command from the checkout root (the prefetch path and `Read(./**)` are relative to it). This (driving) session first prefetches the PR
 into `.yk-review/pr-<P>/` (ignored by git, inside the checkout): `pr-<P>.diff` (`gh pr diff <P>`),
 `pr-<P>.json` (`gh pr view <P> --json number,title,body,author,headRefOid,files,commits,comments,statusCheckRollup,labels`)
 and `pr-<P>-files.json` (REST `pulls/<P>/files`, paginated, with each rename's `previous_filename`). It refuses
@@ -102,7 +102,7 @@ never posts; this session saves it to a file, then checks and posts it in ONE co
 check passes, then removes the prefetch:
 ```bash
 python3 .claude/skills/yk-next/yk_next.py --prefetch <P> .yk-review/pr-<P>
-claude -p --permission-mode dontAsk --allowedTools "Read(./**)" < <brief> > <verdict-file>
+claude -p --permission-mode dontAsk --allowedTools "Read(./**)" --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch" < <brief> > <verdict-file>
 python3 .claude/skills/yk-next/yk_next.py --post-verdict <P> <verdict-file>
 rm -rf .yk-review/pr-<P>
 ```
