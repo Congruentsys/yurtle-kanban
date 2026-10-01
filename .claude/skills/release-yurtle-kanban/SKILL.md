@@ -2,7 +2,7 @@
 name: release-yurtle-kanban
 description: Release yurtle-kanban itself — changelog.d assembly, both version files, sized GitHub release notes, the PyPI publish via publish.yml, and contributor credit. Follows the shipped release-foss skill with this repo's specifics.
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Bash(python *), Bash(pip *), Bash(head *), Bash(sort *), Bash(tr *), Bash(paste *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Bash(python *), Bash(pip index *), Bash(ls *), Bash(head *), Bash(sort *), Bash(tr *), Bash(paste *), Read, Edit, Write
 argument-hint: "[patch|minor|major] [--message 'Description']"
 ---
 

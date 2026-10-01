@@ -255,7 +255,7 @@ class TestFragmentDocs:
     RELEASE_SKILL_SHA256 = "5118ee0426c5419a608f6005e0bce069af92bfe40e6f49d2783e84e1f2b3ebb6"
     # Re-pinned by #1211: release-foss's allowed-tools grant the commands its steps run
     # (wc, pip, the registry checks, the credit pipeline's helpers).
-    RELEASE_FOSS_SKILL_SHA256 = "ab5649d8043d46d18d213dad4f65049b6fd81525593a066b1d058c899b3fef99"
+    RELEASE_FOSS_SKILL_SHA256 = "bf3ce537bd8f1eabc67ccaba7480cc2789594fb985a01e5c1f98fc3a046cc090"
 
     def test_release_skill_unchanged(self) -> None:  # control
         data = (REPO / "skills/release/SKILL.md").read_bytes()
