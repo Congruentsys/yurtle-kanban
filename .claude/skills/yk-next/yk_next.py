@@ -131,27 +131,31 @@ VERDICT_MAX = 60_000  # GitHub refuses a comment body of 65,536+ chars
 SECRET = re.compile(
     r"-----BEGIN|\bgh[pousr]_[A-Za-z0-9]{16,}|\bgithub_pat_[A-Za-z0-9_]{16,}"
     r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-|\bpypi-[A-Za-z0-9_-]{16,}"
-    r"|\bsk-ant-[A-Za-z0-9_-]{16,}"
+    r"|\bsk-ant-[A-Za-z0-9_-]{16,}|\bsk-proj-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9]{20,}"
     # a PEM body line without its header: a base64 run of 60+, mixed case and a digit (a hex
     # sha, all lower case, is not one)
     r"|(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*\d)"
     r"[A-Za-z0-9+/]{60,}"
 )
-# secret / token / api_key / aws_secret_access_key / GITHUB_TOKEN = <value>. The keyword starts
-# at a non-letter (r1 B1: `tokenizer:` is not one); a value is a secret when it starts with a 20+
-# run with a digit and a letter (SECRET_VALUE) and is not a path (`a/b.py`, `x.py::test`).
-GENERIC = re.compile(r"(?i)(?<![A-Za-z])(?:aws_)?(?:secret|token|api_?key)(?:_[A-Za-z]+)*"
-                     r"\s*[:=]\s*['\"]?(\S+)")
+# secret / token / api_key / aws_secret_access_key / GITHUB_TOKEN = <value>, or a JSON
+# `"token": "<value>"`, or an upper-case env name and a space (`GITHUB_TOKEN <value>`). The
+# keyword starts at a non-letter (r1 B1: `tokenizer:` is not one); a value is a secret when it
+# starts with a 20+ run with a digit and a letter (SECRET_VALUE) and is not a path (`a/b.py`,
+# `x.py::test`).
+GENERIC = re.compile(
+    r"(?i:(?<![A-Za-z])(?:aws_)?(?:secret|token|api_?key)(?:_[A-Za-z]+)*)['\"]?\s*[:=]\s*['\"]?(\S+)"
+    r"|(?<![A-Za-z])(?:[A-Z]+_)*(?:SECRET|TOKEN|API_?KEY)(?:_[A-Z]+)*[ \t]+['\"]?(\S+)")
 SECRET_VALUE = re.compile(r"(?=[A-Za-z0-9_/+=-]*\d)(?=[A-Za-z0-9_/+=-]*[A-Za-z])"
                           r"[A-Za-z0-9_/+=-]{20,}")
 PATH_VALUE = re.compile(r"::|/.*\.[A-Za-z][A-Za-z0-9]{0,4}$")
 # `password: <value>`: a 6+ char value that is not code — a call or subscript (`getpass()`,
 # `Optional[str]`), a dotted name (`self.pw`) or a digit-free identifier (`str`, `SecretStr`,
 # `password`); so an all-letter password passes (the price of postable review prose).
-PASSWORD = re.compile(r"(?i)pass(?:word|wd)\s*[:=]\s*['\"]?([^\s'\"`]{6,})")
+PASSWORD = re.compile(r"(?i)pass(?:word|wd)['\"]?\s*[:=]\s*['\"]?([^\s'\"`]{6,})")
 PASSWORD_CODE = re.compile(r"[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_]+")
 CODE_FENCE = re.compile(r"(?ms)^ {0,3}(`{3,}|~{3,}).*?(?:^ {0,3}\1[`~]*[ \t]*$|\Z)")
-CODE_SPAN = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
+# a code span never crosses a blank line: GitHub ends it at the paragraph break (r1)
+CODE_SPAN = re.compile(r"(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)", re.S)
 # an @-mention (a user, a team, @everyone) GitHub would notify: not inside code, not an email
 MENTION = re.compile(r"(?<![\w.+/`-])@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9_.-]+)?")
 FRAGMENT_NAME = re.compile(r"(\d+)(?:-.*)?\.md")      # as scripts/assemble_changelog.py
@@ -257,7 +261,7 @@ def check_verdict(text: str, head: str) -> str | None:
     if m := SECRET.search(text):
         return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     for m in GENERIC.finditer(text):
-        value = m.group(1).rstrip("'\"`.,;:)]}")
+        value = (m.group(1) or m.group(2)).rstrip("'\"`.,;:)]}")
         if SECRET_VALUE.match(value) and not PATH_VALUE.search(value):
             return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     for m in PASSWORD.finditer(text):
