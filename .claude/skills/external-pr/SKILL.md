@@ -28,8 +28,10 @@ The definitions live ONCE, in `.claude/skills/yk-next/yk_next.py`; `safe_merge.s
 - **escalated**: label `captain-approval`, OR the latest member verdict has a line `class: captain…`, OR the
   PR touches, by its new or its previous name (`gh api --paginate repos/{owner}/{repo}/pulls/<P>/files`:
   `filename` and `previous_filename`), any of `.github/**`, `.claude/**`, `.kanban/**`, `scripts/**`,
-  `skills/**` (`yurtle-kanban init` installs every one into consumer repos), `pyproject.toml`, `src/yurtle_kanban/__init__.py`, `CLAUDE.md` or
-  `AGENT-QUICK-REF.md`: the release/CI/security path and whatever runs on fleet machines. Size never
+  `skills/**` (`yurtle-kanban init` installs every one into consumer repos), `pyproject.toml` or
+  `src/yurtle_kanban/__init__.py`, or, by file name at ANY depth, `CLAUDE.md`, `CLAUDE.local.md`,
+  `AGENTS.md`, `AGENT-QUICK-REF.md` or `.mcp.json` (Claude Code loads a nested `CLAUDE.md` in any
+  directory it reads): the release/CI/security path and whatever runs on fleet machines. Size never
   escalates.
 
 ```text

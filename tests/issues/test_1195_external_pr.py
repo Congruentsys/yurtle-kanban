@@ -7,7 +7,8 @@ The fleet reviews, merges and releases it, within limits:
 - ESCALATED: label `captain-approval`, OR the latest member verdict carries a line
   `class: captain…`, OR the PR touches (new or previous name) `.github/**`, `.claude/**`,
   `.kanban/**`, `scripts/**`, `skills/**` (r2 R2-2), `pyproject.toml`,
-  `src/yurtle_kanban/__init__.py`, `CLAUDE.md` or `AGENT-QUICK-REF.md` (r1 B2). An
+  `src/yurtle_kanban/__init__.py` (r1 B2), or by basename at any depth `CLAUDE.md`,
+  `CLAUDE.local.md`, `AGENTS.md`, `AGENT-QUICK-REF.md`, `.mcp.json` (r2 N-a). An
   escalated PR waits for the Captain's `captain-approved`.
 - PROPOSED-REJECT: label `proposed-reject`; the picker skips it, the gate refuses it.
 
@@ -720,14 +721,14 @@ def test_b2_escalation_paths_have_one_definition(yk) -> None:
     """The gate holds no copy of the path list: it asks yk_next.py --escalation."""
     gate = base.SCRIPT.read_text()
     assert "--escalation" in gate and "yk_next.py" in gate, "the gate doesn't ask yk_next.py"
-    for d in [*yk.ESCALATE_DIRS, *yk.ESCALATE_FILES]:
+    for d in [*yk.ESCALATE_DIRS, *yk.ESCALATE_FILES, *getattr(yk, "ESCALATE_BASENAMES", ())]:
         assert f'"{d}"' not in gate, f"safe_merge.sh keeps its own copy of {d}"
     assert "changedFiles" not in gate
 
 
 def test_b2_skill_names_every_escalation_path(yk) -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
-    for d in [*yk.ESCALATE_DIRS, *yk.ESCALATE_FILES]:
+    for d in [*yk.ESCALATE_DIRS, *yk.ESCALATE_FILES, *getattr(yk, "ESCALATE_BASENAMES", ())]:
         assert f"`{d}" in text, d
 
 
@@ -926,6 +927,46 @@ def test_x_release_due_names_the_repo_local_release_skill(yk, monkeypatch, capsy
     assert "RELEASE DUE" in out, out
     assert LOCAL_RELEASE in out, out
     assert " skills/release/SKILL.md" not in out, out
+
+
+# --------------------------------------------------------------------------- r2 N-a
+# Mini's round 2: Claude Code loads a nested CLAUDE.md / CLAUDE.local.md in any directory it
+# reads, and `.mcp.json` declares project MCP servers: agent-instruction files escalate by
+# BASENAME, at any depth.
+
+BASENAME_PATHS = ["docs/CLAUDE.md", "src/yurtle_kanban/CLAUDE.local.md", "CLAUDE.local.md",
+                  "AGENTS.md", "tests/AGENTS.md", "docs/AGENT-QUICK-REF.md", ".mcp.json",
+                  "sub/.mcp.json"]
+
+
+def test_n_a_basenames_are_one_definition(yk) -> None:
+    assert set(yk.ESCALATE_BASENAMES) == {"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md",
+                                          "AGENT-QUICK-REF.md", ".mcp.json"}
+
+
+@pytest.mark.parametrize("path", BASENAME_PATHS)
+def test_n_a_agent_files_escalate_at_any_depth(yk, monkeypatch, capsys, path) -> None:
+    p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN #1300" in out, out
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+
+
+@pytest.mark.parametrize("path", ["docs/NOT-CLAUDE.md", "docs/claude.md.txt", "mcp.json"])
+def test_n_a_near_miss_basenames_are_routine(yk, monkeypatch, capsys, path) -> None:
+    p = ext_pr(1300, files=(path,), comments=(approve_at_head(),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "MERGE EXTERNAL PR #1300" in out, out
+
+
+@needs_tools
+@pytest.mark.parametrize("path", ["docs/CLAUDE.md", "sub/.mcp.json"])
+def test_n_a_gate_refuses_nested_agent_files(tmp_path: Path, path: str) -> None:
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(files=(path,))
+    assert r.returncode != 0, _out(r)
+    assert "captain-approved" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()
 
 # --------------------------------------------------------------------------- r1 N1: fidelity
 

@@ -89,8 +89,11 @@ PR_FIELDS = (
 # external PR touching it (by its new OR its previous name) waits for the Captain. All of
 # skills/ (r2 R2-2): `yurtle-kanban init` copies every skills/* dir into consumer repos.
 ESCALATE_DIRS = (".github/", ".claude/", ".kanban/", "scripts/", "skills/")
-ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py", "CLAUDE.md",
-                  "AGENT-QUICK-REF.md"}
+ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py"}
+# Agent-instruction and MCP files escalate by BASENAME at any depth (r2 N-a): Claude Code loads
+# a nested CLAUDE.md / CLAUDE.local.md in any directory it reads; .mcp.json declares servers.
+ESCALATE_BASENAMES = {"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", "AGENT-QUICK-REF.md",
+                      ".mcp.json"}
 CAPTAIN_APPROVAL = "captain-approval"  # escalated: the fleet sets it and waits
 CAPTAIN_APPROVED = "captain-approved"  # the Captain's yes: ONLY the Captain sets it
 # The Captain's GitHub login(s), the ONE definition (the gate asks --escalation). Confirmed by
@@ -174,7 +177,8 @@ def escalation(pr: dict, paths: list[str]) -> list[str]:
     if CLASS_CAPTAIN.search(latest_verdict(pr).replace("\r", "")):
         why.append("verdict class: captain")
     hits = list(dict.fromkeys(f for f in paths
-                              if f in ESCALATE_FILES or f.startswith(ESCALATE_DIRS)))
+                              if f in ESCALATE_FILES or f.startswith(ESCALATE_DIRS)
+                              or f.rsplit("/", 1)[-1] in ESCALATE_BASENAMES))
     if hits:
         why.append("touches " + ", ".join(hits[:5]) + (" …" if len(hits) > 5 else ""))
     return why
