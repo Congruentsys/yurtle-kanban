@@ -315,7 +315,6 @@ def test_r1_followup_skill_names_the_dry_check(yk) -> None:
     "- test_secret_shapes: test_1213_check_verdict_function_name fails",
     "test_token_limit = test_1213_token_budget_check_v2",
     "token: test_1213_check_verdict",
-    "password: hashed_pw_v2",
     "password: <redacted>",
     "api_key: <your key here>",
     "see https://github.com/Congruentsys/carclaw/blob/" + "a1" * 20 + "/x.py#L3",
@@ -336,3 +335,24 @@ def test_r2_identifier_placeholder_and_permalink_values_are_prose(yk, prose) -> 
 ])
 def test_r2_real_values_are_still_refused(yk, leak) -> None:
     assert check(yk, GOOD + leak + "\n") is not None, leak
+
+
+@pytest.mark.parametrize("leak", [
+    "token: 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",          # Shopify: prefix + 32 hex
+    "SHOPIFY_TOKEN=shpat_" + "a1" * 16,
+    '{"token": "shpat_' + "b2" * 16 + '"}',
+    "api_key: sbp_" + "c3" * 20,                              # Supabase
+    "token: bkua_" + "d4" * 20,                               # Buildkite
+    "secret = a1b2c3d4_e5f6a7b8c9d0e1f2a3b4",
+    "password: summer_2024",                                  # passwords: placeholders only
+    "DB_PASSWORD=admin_pass_2024",
+    "password: hashed_pw_v2",
+    "see https://github.com/Congruentsys/carclaw/blob/" + "e5" * 20
+    + "/ghp_ABCDEFGHIJKLMNOPqrstuvwx1234",                    # a token inside a permalink
+])
+def test_r3_keyed_tokens_and_snake_passwords_are_refused(yk, leak) -> None:
+    """r3 B1: an identifier has short segments; a token has one long random segment, so
+    the identifier exemption caps segment length. A password value is exempt only as a
+    `<placeholder>` (leaking is worse than refusing). r3 follow-up: a permalink skip never
+    hides a token prefix inside it."""
+    assert check(yk, leak) is not None, leak
