@@ -260,3 +260,49 @@ def test_r1_b1_identifiers_and_paths_are_prose(yk, prose) -> None:
     """r1 B1: a name that merely CONTAINS secret/token (`test_secret_shapes`, `tokenizer`),
     or a value that is a path (`a/b.py`, `x.py::test`), is review prose, not a credential."""
     assert check(yk, prose) is None, (prose, check(yk, prose))
+
+
+# --------------------------------------------------------------------------- r1 follow-ups
+
+
+@pytest.mark.parametrize("leak", [
+    '{"token": "a1b2c3d4e5f6g7h8i9j0k1l2"}',
+    '"api_key": "sk-proj-Ab12Cd34Ef56Gh78Ij90Kl12"',
+    '"password": "hunter2xyz"',
+    "'secret': 'Zx81Qw92Er03Ty14Ui25Op36'",
+    "sk-proj-Ab12Cd34Ef56Gh78Ij90Kl12Mn34",
+    "OPENAI_KEY is sk-Ab12Cd34Ef56Gh78Ij90Kl12",
+    "GITHUB_TOKEN 0123456789abcdef0123456789abcdef01234567",
+    "API_KEY\tAbC123dEf456GhI789jKl012",
+])
+def test_r1_followup_json_openai_and_spaced_secrets_are_refused(yk, leak) -> None:
+    """r1 follow-ups: a quote after the keyword (JSON), OpenAI `sk-…` keys, and an
+    upper-case env name followed by a space and its value."""
+    why = check(yk, leak)
+    assert why and "secret" in why, (leak, why)
+
+
+@pytest.mark.parametrize("prose", [
+    "the token is read from the env",
+    "secret_shapes test_1213_check_verdict_function_name",
+    "a sk-short id",
+    '"token": "str"',
+])
+def test_r1_followup_spaced_prose_still_passes(yk, prose) -> None:
+    assert check(yk, prose) is None, (prose, check(yk, prose))
+
+
+def test_r1_followup_a_code_span_stops_at_a_blank_line(yk) -> None:
+    """GitHub ends a code span at a paragraph break, so a mention between two lone
+    backticks in different paragraphs notifies and is refused."""
+    why = check(yk, "use `foo\n\n@someone please look\n\nand `bar")
+    assert why and "mention" in why, why
+    assert check(yk, "a `multi\nline @span` is code") is None
+
+
+def test_r1_followup_skill_names_the_dry_check(yk) -> None:
+    """CHECK_CMD is the dry check the skill names: keep the two the same."""
+    text = SKILL.read_text()
+    sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
+    assert yk.CHECK_CMD in sec, sec
+    assert sec.index(yk.POST_VERDICT_CMD) < sec.index(yk.CHECK_CMD), sec
