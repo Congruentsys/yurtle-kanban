@@ -460,7 +460,8 @@ yurtle-kanban includes **theme-specific** Claude Code skills for multi-agent wor
 |-------|---------|---------|
 | `/sync` | Start of session | Pull latest, check handoffs, reviews, blocked items |
 | `/status` | Show kanban board | See what's in progress, ready, blocked |
-| `/release [patch\|minor\|major]` | Create release | Bump version, update CHANGELOG, create git tag |
+| `/release [patch\|minor\|major]` | Release an internal repo | Bump version, update CHANGELOG, release PR, tag after merge |
+| `/release-foss [patch\|minor\|major]` | Release a public repo | `/release` plus a public GitHub release (notes cut to fit), the registry publish, contributor credit |
 
 **Nautical theme** (`--theme nautical`):
 
@@ -517,7 +518,7 @@ yurtle-kanban init --theme software   # Installs software skills (/feature, etc.
 To install manually:
 ```bash
 # Theme-neutral skills (always needed)
-cp -r skills/sync skills/status skills/release .claude/skills/
+cp -r skills/sync skills/status skills/release skills/release-foss .claude/skills/
 
 # Theme-specific skills (pick one)
 cp -r skills/nautical/* .claude/skills/   # Nautical theme

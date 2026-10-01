@@ -899,9 +899,10 @@ MENTION = re.compile(r"(?<![\w/.-])yurtle-kanban\s+\S")
 # Mentions that are deliberately NOT commands. Each one needs a reason; anything
 # else that mentions `yurtle-kanban` must parse, or the guard is silently blind.
 ALLOWED_TOOLS_GLOB = re.compile(r"^allowed-tools:\s*Bash\(yurtle-kanban \*\)")
+# (#1201 removed `pip index versions yurtle-kanban`: the shipped release skill no longer
+# names this package, so that entry was stale, and so were its anchoring cases below.)
 NOT_COMMANDS = {
     ALLOWED_TOOLS_GLOB: "an allowed-tools permission glob",
-    re.compile(r"^pip index versions yurtle-kanban(?=\s|$)"): "the package name, passed to pip",
     re.compile(r"^## yurtle-kanban "): "a markdown heading",
     re.compile(r"^Initialize yurtle-kanban in "): "init's one-line description",
 }
@@ -936,11 +937,8 @@ def _mention_lines():
     "text,allowed",
     [
         ("allowed-tools: Bash(yurtle-kanban *), Bash(git *)", True),
-        ("pip index versions yurtle-kanban 2>/dev/null | head -2", True),
         # #488: the same words elsewhere on a line are not the allow-listed use
         ("Then run Bash(yurtle-kanban *) to see", False),
-        ("cd x && pip index versions yurtle-kanban", False),
-        ("pip index versions yurtle-kanban-extra", False),
         # #516: prose on an allow-listed line must not hide a command mention
         ("allowed-tools: Bash(yurtle-kanban *) — then yurtle-kanban move X done", False),
         # #516 round 2: a greedy `.*` would cut prose out along with the glob
@@ -950,7 +948,6 @@ def _mention_lines():
             " Bash(yurtle-kanban *)",
             False,
         ),
-        ("pip index versions yurtle-kanban 2>/dev/null   # or yurtle-kanban list", False),
         ("## yurtle-kanban HDD Board: run yurtle-kanban hdd validate", False),
         ("## yurtle-kanban HDD Board", True),
     ],
