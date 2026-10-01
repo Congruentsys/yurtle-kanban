@@ -1,7 +1,7 @@
 """Issue #1207 — `_anchor` follows GitHub's slugger by Unicode category.
 
 GitHub (github-slugger) lowercases the heading, keeps letters (L*), combining marks
-(Mn, Mc), decimal digits (Nd), connector punctuation (Pc, including `_`) and `-`, turns
+(Mn, Mc, Me), decimal and letter numbers (Nd, Nl), connector punctuation (Pc, including `_`) and `-`, turns
 spaces into `-`, and drops everything else — including other numbers (No) such as `²`.
 Python's `\\w` got two of these wrong: it drops combining marks and keeps `²`.
 
@@ -61,3 +61,9 @@ def test_fragment_wording_excludes_breaking_from_removed_and_deprecated() -> Non
     flat = " ".join(text.split())
     assert "except Breaking entries, listed once under Breaking changes" in flat
     assert "(#1207)" in flat
+
+
+def test_r1_enclosing_marks_and_letter_numbers_are_kept() -> None:
+    """r1: github-slugger also keeps Me (U+20DD) and Nl (Roman numeral Ⅻ, U+216B)."""
+    assert _module()._anchor("a\u20ddb") == "a\u20ddb"
+    assert _module()._anchor("Part Ⅻ") == "part-ⅻ"

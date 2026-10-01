@@ -53,7 +53,9 @@ def _subsections(body: str) -> dict[str, list[str]]:
     return {name: [e.rstrip("\n") for e in items] for name, items in found.items()}
 
 
-_ANCHOR_CATEGORIES = ("L", "Mn", "Mc", "Nd", "Pc")  # kept by GitHub's slugger
+# kept by GitHub's slugger (github-slugger): letters, marks (incl. enclosing Me),
+# decimal and letter numbers (Nd, Nl), connectors; tables track the Unicode version
+_ANCHOR_CATEGORIES = ("L", "Mn", "Mc", "Me", "Nd", "Nl", "Pc")
 
 
 def _anchor(heading: str) -> str:
