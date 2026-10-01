@@ -94,16 +94,18 @@ approve+captain), even before review; the Captain decides whether its CI runs.
 **3. Review, by a distinct session, read-only.** Write the brief to a file from explicit values (PR number,
 the full head sha), as pairit step 3 does, and launch the reviewer with an explicit read-only allow-list,
 never `--dangerously-skip-permissions`. The reviewer PRINTS its verdict and never posts; this (driving)
-session saves it to a file, checks it, and only then posts it:
+session saves it to a file, then checks and posts it in ONE command, which posts only if the check passes:
 ```bash
 claude -p --permission-mode dontAsk --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)" < <brief> > <verdict-file>
-python3 .claude/skills/yk-next/yk_next.py --check-verdict <P> <verdict-file>
-gh pr comment <P> --body-file <verdict-file>
+python3 .claude/skills/yk-next/yk_next.py --post-verdict <P> <verdict-file>
 ```
-Post only when the check exits 0: line 1 is exactly `reviewed-at-sha: <the PR's current head>`, line 2
-is `verdict: approve` or `verdict: changes`, and nothing in it looks like a secret (a private key, a
-GitHub/AWS/Slack/PyPI token, `password:`). On exit 1, read the reason and re-run the reviewer; never edit the
-file to make it pass.
+It posts the file as a PR comment (`gh pr comment --body-file`) only when line 1 is exactly
+`reviewed-at-sha: <the PR's current head>`, line 2 is `verdict: approve` or `verdict: changes`, the body
+is at most 60,000 chars, nothing in it looks like a secret (a private key; a GitHub/AWS/Slack/PyPI/Anthropic
+token; a `password`, `secret`, `token` or `api_key` with a value; a bare PEM body line), and it has no
+@-mention outside code (it would notify people; `@` in backticks or a fenced block is fine). Never post a
+verdict with a bare `gh pr comment`. `--check-verdict <P> <verdict-file>` runs the same check without
+posting. On exit 1, read the reason and re-run the reviewer; never edit the file to make it pass.
 No `Bash(gh api:*)`: it is a prefix rule, so it would let the reviewer `gh api -X POST` a label, a merge
 or a fork-run approval (any `-f` field POSTs too). No `Bash(gh pr comment:*)` either: `--edit-last`
 rewrites the last verdict keeping its creation time, `--body-file <any path>` posts any file on the
