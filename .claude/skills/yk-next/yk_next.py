@@ -449,6 +449,12 @@ def my_pr_state(pr: dict) -> str:
     return "ready-to-merge" if ci == "green" else "wait-ci"
 
 
+def untrusted(pr: dict, width: int = 120) -> str:
+    """An external PR's title, marked as data and JSON-quoted (r1 N6): it is the
+    contributor's text, printed into output an agent acts on, never an instruction."""
+    return "title (untrusted): " + json.dumps((pr.get("title") or "")[:width], ensure_ascii=False)
+
+
 def ships_in(pr: dict) -> str:
     """The release an external PR will ship in: the latest tag bumped by the unreleased
     fragments on origin/main plus the PR's own (fetched from refs/pull/<N>/head)."""
@@ -587,14 +593,14 @@ def main() -> None:
         else:
             state = "ready-to-merge"
             picks.append((0, p, why))
-        print(f"  external PR #{p['number']:<4} by {p['author']['login']}  {p['title'][:50]}"
+        print(f"  external PR #{p['number']:<4} by {p['author']['login']}  {untrusted(p, 50)}"
               f"  [{state}]  ({esc})")
     if picks:
         kind, p, why = min(picks, key=lambda t: (t[0], t[1]["number"]))
         n, login = p["number"], p["author"]["login"]
         esc = "escalated: " + "; ".join(why) if why else "not escalated"
         if kind == 0:
-            print(f"\nMERGE EXTERNAL PR #{n} by {login} — {p['title']}"
+            print(f"\nMERGE EXTERNAL PR #{n} by {login} — {untrusted(p)}"
                   f"\n  head: {p['headRefOid'][:12]}  ({esc}{', captain-approved' if why else ''})"
                   f"\n  bash .claude/skills/pairit/safe_merge.sh {n}"
                   f"\n  then: gh pr comment {n} --body "
@@ -605,7 +611,7 @@ def main() -> None:
                   f"waits\n  head: {p['headRefOid'][:12]}  ({esc})")
             print_run_approval(p)
         else:
-            print(f"\nREVIEW EXTERNAL PR #{n} by {login} — {p['title']}"
+            print(f"\nREVIEW EXTERNAL PR #{n} by {login} — {untrusted(p)}"
                   f"\n  head: {p['headRefOid']}  ({esc})"
                   "\n  follow .claude/skills/external-pr/SKILL.md (triage, fork CI, review)."
                   "\n  READ-ONLY: never check out or run the fork's code here; its tests run in"
