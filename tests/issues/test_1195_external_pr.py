@@ -576,14 +576,17 @@ def test_gate_refuses_proposed_reject(tmp_path: Path) -> None:
 
 @needs_tools
 def test_gate_fleet_pr_touching_ci_is_unaffected(tmp_path: Path) -> None:
-    """A fleet PR (same repo) is never escalated by path, and no association call is made."""
+    """A fleet PR (same repo, a MEMBER) is never escalated by path. Its association is
+    read (r1 N4: every PR), but no file list is: a member's paths don't matter."""
     sb = ExtSandbox(tmp_path, fork=False)
     r = sb.run_ext(files=(".github/workflows/ci.yml", "pyproject.toml"), assoc="MEMBER")
     assert r.returncode == 0, _out(r)
     merges = sb.merge_calls()
     assert len(merges) == 1, sb.calls()
     assert "--delete-branch" in merges[0]["argv"], merges
-    assert not [c for c in sb.calls() if c["argv"][:1] == ["api"]], sb.calls()
+    api = [c["argv"] for c in sb.calls() if c["argv"][:1] == ["api"]]
+    assert any(a[-1] == ".author_association" or ".author_association" in a for a in api), api
+    assert not [a for a in api if any(x.endswith("/files") for x in a)], api
 
 
 @needs_tools
@@ -909,3 +912,25 @@ def test_n2_skill_rechecks_before_opening_a_release_pr() -> None:
     assert "RELEASE IN FLIGHT" in sec
     assert 'gh pr list --state open --search "chore: release v in:title"' in sec
     assert "hold" in sec.lower()
+
+
+# --------------------------------------------------------------------------- r1 N4: same repo
+# Mini's review of #1196: bots and GitHub Apps push branches in this repo with a non-member
+# association. The gate reads the association for EVERY PR; the picker for forks and bots.
+
+
+@needs_tools
+def test_n4_gate_same_repo_non_member_is_external(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path, fork=False)
+    r = sb.run_ext(files=(".github/workflows/ci.yml",), assoc="NONE")
+    assert r.returncode != 0, _out(r)
+    assert "captain-approved" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()
+
+
+def test_n4_picker_bot_pr_in_this_repo_is_external(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, author="app/dependabot")
+    p["isCrossRepository"] = False
+    p["author"]["is_bot"] = True
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE, assoc={1300: "NONE"})
+    assert "REVIEW EXTERNAL PR #1300" in out, out

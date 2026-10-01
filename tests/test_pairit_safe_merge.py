@@ -212,6 +212,12 @@ if args and args[0] == "api" and any("/comments" in a for a in args):
     ])
     sys.exit(0)
 
+if args and args[0] == "api" and any(re.search(r"/pulls/\d+$", a) for a in args):
+    # #1195 r1 N4: the gate reads every PR's author association (a member, by default)
+    record()
+    emit({"author_association": os.environ.get("STUB_GH_ASSOC", "MEMBER")})
+    sys.exit(0)
+
 if args and args[0] == "api" and any(re.search(r"/pulls/\d+/files$", a) for a in args):
     # #1195: REST `pulls/<P>/files` (paginated), which names a rename's previous_filename
     record()

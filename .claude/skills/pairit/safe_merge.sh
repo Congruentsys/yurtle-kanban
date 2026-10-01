@@ -38,24 +38,23 @@ if has_label proposed-reject; then
   echo "NOT MERGING #$PR: it is labelled proposed-reject (the Captain closes it)"; exit 1
 fi
 fork=$(printf '%s' "$pr" | jq -r '.isCrossRepository // false')
-if [ "$fork" = true ]; then
-  # EXTERNAL and ESCALATED as yk_next.py defines them (files from REST, renames included);
-  # the PR JSON read above goes in, so the verdict is about the head pinned here
-  yk_next="$(dirname "$0")/../yk-next/yk_next.py"
-  esc=$(printf '%s' "$pr" | python3 "$yk_next" --escalation "$PR" --pr-json -) || {
-    echo "NOT MERGING #$PR: could not read its escalation (yk_next.py --escalation)"; exit 1; }
-  external=$(printf '%s' "$esc" | jq -r '.external') || {
-    echo "NOT MERGING #$PR: could not parse its escalation"; exit 1; }
-  why=$(printf '%s' "$esc" | jq -r '.why | join("; ")')
-  # the Captain's yes: `captain-approved`, added BY the Captain AFTER the approve verdict at
-  # this head (its REST labeled event), never just the label's presence (r1 B1)
-  approved=$(printf '%s' "$esc" | jq -r '.captain_approved')
-  captain=$(printf '%s' "$esc" | jq -r '.captain')
-  if [ "$external" = true ] && [ -n "$why" ] && [ "$approved" != true ]; then
-    echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not"\
-      "captain-approved at this head ($captain; only the Captain adds it)"
-    exit 1
-  fi
+# EXTERNAL and ESCALATED as yk_next.py defines them (files from REST, renames included). The
+# association is read for EVERY PR (r1 N4): a bot or App pushes branches here as a non-member.
+# The PR JSON read above goes in, so the verdict is about the head pinned here.
+yk_next="$(dirname "$0")/../yk-next/yk_next.py"
+esc=$(printf '%s' "$pr" | python3 "$yk_next" --escalation "$PR" --pr-json -) || {
+  echo "NOT MERGING #$PR: could not read its escalation (yk_next.py --escalation)"; exit 1; }
+external=$(printf '%s' "$esc" | jq -r '.external') || {
+  echo "NOT MERGING #$PR: could not parse its escalation"; exit 1; }
+why=$(printf '%s' "$esc" | jq -r '.why | join("; ")')
+# the Captain's yes: `captain-approved`, added BY the Captain AFTER the approve verdict at
+# this head (its REST labeled event), never just the label's presence (r1 B1)
+approved=$(printf '%s' "$esc" | jq -r '.captain_approved')
+captain=$(printf '%s' "$esc" | jq -r '.captain')
+if [ "$external" = true ] && [ -n "$why" ] && [ "$approved" != true ]; then
+  echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not"\
+    "captain-approved at this head ($captain; only the Captain adds it)"
+  exit 1
 fi
 
 gh pr checks "$PR" --watch >/dev/null 2>&1   # wait only; its exit code decides nothing

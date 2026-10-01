@@ -138,9 +138,11 @@ def association(number: int) -> str:
 
 
 def is_external(pr: dict) -> bool:
-    """A non-member's PR. Only a fork can carry one (a non-member can't push a branch
-    here), so the association is fetched for fork PRs only: one gh call each."""
-    return bool(pr.get("isCrossRepository")) and association(pr["number"]) not in MEMBERS
+    """A non-member's PR: from a fork, or by a bot/App pushing a branch here (r1 N4). The
+    association is fetched for those only, one gh call each; safe_merge.sh's gate reads it
+    for every PR."""
+    maybe = pr.get("isCrossRepository") or (pr.get("author") or {}).get("is_bot")
+    return bool(maybe) and association(pr["number"]) not in MEMBERS
 
 
 def pr_paths(number: int) -> list[str]:
