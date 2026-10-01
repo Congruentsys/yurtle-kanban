@@ -140,6 +140,7 @@ def test_4_references_algorithms_and_test_names_post(yk, prose) -> None:
     "password: $ecret123",                   # not an env-var reference
     "password: sha256hunter2",               # not an algorithm name
     "test_password: Hunter2_secret",         # not an identifier
+    "db_password: summer_2024",              # only test_… keys hold identifier values
 ])
 def test_4_values_under_bare_or_env_keys_are_still_refused(yk, leak) -> None:
     refused(yk, leak)
