@@ -10,6 +10,16 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-01
+
+### Added
+
+- **`scripts/release_notes.py X.Y.Z`** prints GitHub release notes for a version: its full CHANGELOG section when that fits GitHub's 125,000-character release-body cap, otherwise condensed notes (per-section entry counts, every **Breaking** entry, the Removed and Deprecated sections, and a link to the full section). The release skill's step 8 now builds `--notes-file` with it, so an oversized section no longer makes `gh release create` fail and skip the PyPI publish (#1191).
+
+### Fixed
+
+- The PyPI workflow now rejects release tags that do not match the package versions (#1192; contributed by @PandaHUN777 in #1193).
+
 ## [3.0.0] - 2026-09-30
 
 ### Added

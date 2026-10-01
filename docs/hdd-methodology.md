@@ -674,6 +674,6 @@ yurtle-kanban idea create "Does X improve Y?" --type research --push
 *yurtle-kanban is open source under the MIT license. HDD is a methodology, not a product
 — adopt as much or as little as fits your workflow.*
 
-*[yurtle-kanban](https://github.com/hankh95/yurtle-kanban) ·
+*[yurtle-kanban](https://github.com/Congruentsys/yurtle-kanban) ·
 [Yurtle](https://github.com/hankh95/yurtle) ·
 [yurtle-rdflib](https://github.com/hankh95/yurtle-rdflib)*

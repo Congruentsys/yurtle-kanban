@@ -1,14 +1,20 @@
 ---
 name: release
-description: Create a versioned release with git tag and CHANGELOG update
+description: Release an internal repo — version bump, CHANGELOG section, reviewed release PR, annotated tag after merge
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(grep *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Read, Edit, Write
 argument-hint: "[patch|minor|major] [--message 'Description']"
 ---
 
-# Create Release
+# Release an Internal Repo
 
-Create a new version release with semantic versioning, git tag, and CHANGELOG update.
+A versioned release of a repo that is not published to the public: the version bump,
+a CHANGELOG section, a release PR reviewed by someone other than the author, and an
+annotated tag on the merged commit.
+
+For a public (FOSS) repo, use `/release-foss`: it adds the public GitHub release, the
+package publish and the contributor credit that this skill leaves out on purpose. If
+your repo has its own release skill with its specifics, follow that one.
 
 ## Arguments
 
@@ -22,28 +28,29 @@ Create a new version release with semantic versioning, git tag, and CHANGELOG up
 ### 1. Check Current State
 
 ```bash
-# Ensure on main and up to date
 git checkout main
-git pull origin main
-
-# Check for uncommitted changes
-git status
-
-# Get current version (check common locations)
-grep -h "version" pyproject.toml | head -1
-# or
-# ⚠ NOT `*/__init__.py` — that glob is one directory deep and MISSES a src/ layout,
-# which is what this repo uses (src/yurtle_kanban/__init__.py). A detection that
-# cannot see the file is why step 3's "update that too" was skippable for a whole
-# release (v2.1.0 shipped __version__ = "2.0.1"). Search, do not glob:
-grep -rn "__version__" --include="__init__.py" . 2>/dev/null | grep -v "/.git/" | head -2
+git pull --ff-only origin main
+git status                      # must be clean
+git describe --tags --abbrev=0  # the previous release tag
 ```
 
 Fail if there are uncommitted changes. All work must be committed first.
 
-### 2. Calculate New Version
+Find **every** file that carries the version. Search, do not glob:
 
-Parse current version and calculate new version:
+```bash
+grep -n '^version' pyproject.toml Cargo.toml 2>/dev/null
+grep -n '"version"' package.json 2>/dev/null
+# ⚠ NOT `*/__init__.py` — that glob is one directory deep and MISSES a src/ layout
+# (src/<package>/__init__.py). A detection that cannot see the file is how a
+# release skipped "update that too" and shipped v2.1.0 with __version__ = "2.0.1":
+# the built package answered the wrong version for a whole release.
+grep -rn "__version__" --include="__init__.py" . 2>/dev/null | grep -v "/.git/" | head -5
+```
+
+Write down the list. Step 3 updates every file on it, and step 5 stages every one.
+
+### 2. Calculate New Version
 
 | Current | Bump Type | New Version |
 |---------|-----------|-------------|
@@ -53,17 +60,17 @@ Parse current version and calculate new version:
 
 ### 3. Update Version Files
 
-Update version in `pyproject.toml`:
-
-```toml
-version = "X.Y.Z"
-```
-
-If project has `__init__.py` with `__version__`, update that too.
+Set `X.Y.Z` in every file found in step 1 (e.g. `version = "X.Y.Z"` in
+`pyproject.toml`, `__version__ = "X.Y.Z"` in the package's `__init__.py`).
 
 ### 4. Update CHANGELOG.md
 
-Add new entry at top of CHANGELOG.md (create if doesn't exist):
+**If the repo collects changelog fragments** (a fragments directory with an assembler
+script), run the assembler for `X.Y.Z` instead of writing the section by hand. Most
+assemblers delete the fragments they consume; those deletions are part of the release
+commit (step 5).
+
+**Otherwise** add the section at the top of CHANGELOG.md (create it if it doesn't exist):
 
 ```markdown
 ## [X.Y.Z] - YYYY-MM-DD
@@ -78,28 +85,23 @@ Add new entry at top of CHANGELOG.md (create if doesn't exist):
 - [Bug fixes if any]
 ```
 
-If release message was provided, include it.
+If a release message was provided, include it.
 
-### 5. Commit Release on a Branch
+### 5. Commit the Release on a Branch
 
-A release commit is a commit. It goes through a pull request like every other
-one — CLAUDE.md is explicit: "never push directly to main". This is also how
-releases have actually landed here (v2.0.0 via PR #56, v2.1.0 via PR #70).
+A release commit goes through a pull request like every other commit. Never push it
+to main directly.
 
 ```bash
 git checkout -b chore/release-vX.Y.Z
-git add pyproject.toml CHANGELOG.md src/yurtle_kanban/__init__.py
-# ⚠ __init__.py IS staged here on purpose. Step 3 tells you to update it and this
-# line used to omit it, so a release that followed this skill edited the file and
-# then left it uncommitted. That is how v2.1.0 shipped with pyproject at 2.1.0 and
-# __version__ still at 2.0.1 — the published wheel answered the wrong version for a
-# whole release. `git status` before committing: an unstaged __init__.py here is the
-# bug, not noise.
+git add CHANGELOG.md <every version file from step 1>
+git add -A <the fragments directory>   # if step 4 assembled fragments: stages their deletions
+git status                             # an unstaged version file here is the bug, not noise
 git commit -m "chore: release vX.Y.Z
 
 [Release description]
 
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+Co-Authored-By: <your agent's trailer, if an agent made the commit>"
 git push -u origin chore/release-vX.Y.Z
 ```
 
@@ -110,10 +112,12 @@ gh pr create --fill
 gh pr merge --merge --delete-branch       # after someone OTHER than the author approves
 ```
 
+The release PR is reviewed by someone other than the author, like any other PR.
+
 ### 7. Tag the Merged Commit
 
-Tag **after** the merge, so the tag names the commit that is actually on main.
-Tagging before it means re-tagging if review changes anything.
+Tag **after** the merge, so the tag names the commit that is actually on main. Tagging
+before it means re-tagging if review changes anything.
 
 ```bash
 git checkout main
@@ -126,49 +130,26 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-### 8. Publish the GitHub Release — THIS is what triggers PyPI
+### 8. GitHub Release: Only If Your Deploy Needs One
 
-⚠ **A tag push does NOT publish.** `.github/workflows/publish.yml` triggers on:
-
-```yaml
-on:
-  release:
-    types: [published]
-```
-
-A **GitHub Release** — not a tag. Stopping at `git push origin vX.Y.Z` produces a
-tag and **no PyPI publish**, silently: nothing fails, the workflow simply never
-runs. Create the release explicitly:
+The tag is the release. Create a GitHub release
+**only if your deploy is triggered by a release**
+(a workflow with `on: release: types: [published]`; check with
+`grep -rn -A3 "^on:" .github/workflows/`). A release-triggered deploy does nothing on a
+tag push alone, silently. If yours is one:
 
 ```bash
-python scripts/release_notes.py X.Y.Z > /tmp/notes-vX.Y.Z.md   # exit 1 = fix before going on
-gh release create vX.Y.Z --verify-tag --title "vX.Y.Z" --notes-file /tmp/notes-vX.Y.Z.md
-gh run list --workflow=publish.yml --limit 1     # confirm it FIRED
+gh release create vX.Y.Z --verify-tag --title "vX.Y.Z" --notes "Internal release vX.Y.Z. See CHANGELOG.md."
+gh run list --limit 3                     # confirm the deploy workflow FIRED
 ```
 
-⚠ **Never pass the whole CHANGELOG section by hand.** GitHub refuses a release body
-over 125,000 characters, and a refused `gh release create` creates no release, so
-`publish.yml` never runs — the silent PyPI skip again (v3.0.0's section was 137,199).
-`scripts/release_notes.py` prints the section when it fits, else condensed notes (entry
-counts, every `**Breaking` entry, Removed and Deprecated, and a link to the full
-section), and refuses with exit 1 if even those don't fit (#1191).
-
-Verify it actually published before calling the release done — the workflow
-running is not the same as the artifact landing:
-
-```bash
-gh run watch "$(gh run list --workflow=publish.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-pip index versions yurtle-kanban 2>/dev/null | head -2   # or check PyPI directly
-```
-
-### 9. Confirm Release
+### 9. Confirm the Release
 
 Show:
-- New version number
-- Tag created
-- **GitHub Release created, and the publish workflow's conclusion**
-- CHANGELOG entry
-- PyPI version live
+- The new version number
+- The tag, and the commit on main it names
+- The CHANGELOG section
+- The deploy workflow's conclusion, if step 8 applied
 
 ## When to Release
 
@@ -178,4 +159,5 @@ Show:
 
 ## Related Skills
 
+- `/release-foss` - The same flow for a public repo, with the public steps
 - `/done` - Complete work (should consider version bump)
