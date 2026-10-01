@@ -29,7 +29,8 @@ rule still applies. Outside yk-loop, use the plain picker.
    A head carrying the driver's `fixes-at-sha:` comment (pairit's one review round, #987) counts as
    reviewed: it is `ready-to-merge` once CI is green, never `needs-review` again.
 2. **External PRs** (#1195; author not OWNER/MEMBER/COLLABORATOR) follow `.claude/skills/external-pr/SKILL.md`.
-   `MERGE EXTERNAL PR #N`: approve at head, CI green, and not escalated or labelled `captain-approved`.
+   `MERGE EXTERNAL PR #N`: approve at head, CI green, and not escalated, or `captain-approved` by the Captain
+   after that approve verdict (a new head waits for him again).
    `RUN CI EXTERNAL PR #N`: approved, its fork run waits (never for `.github/`).
    `REVIEW EXTERNAL PR #N`: no member verdict at its head. Each prints its next commands. Listed, never picked: `WAIT CAPTAIN #N`
    (escalated: label `captain-approval`, a `class: captain` verdict line, or a release/CI/security path),

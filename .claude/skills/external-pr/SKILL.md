@@ -11,7 +11,11 @@ allowed-tools: Bash(.venv/bin/*), Bash(python3 *), Bash(git *), Bash(gh *), Bash
 **The Captain's ruling (2026-10-01, #1195).** The fleet reviews, merges and releases external PRs,
 within these limits:
 - **Escalate** a breaking change (a major bump) or anything on the release/CI/security path. The Captain
-  approves by adding `captain-approved` to the PR. **The fleet never sets `captain-approved`.**
+  approves by adding `captain-approved` to the PR. **The fleet never sets `captain-approved`.** It counts only
+  when its latest `labeled` event (REST `issues/<P>/events`) is by the Captain (`CAPTAINS` in `yk_next.py`:
+  `hankh95`) and newer than the member `approve` verdict at the CURRENT head, so a new head waits for the
+  Captain again. **Limit:** `hankh95` is also the M5 agent's account, so the actor check can't tell the two
+  apart: a fleet session on M5 must never add `captain-approved`.
 - **Reject** is proposed: label `proposed-reject` plus a reason comment. **Never close an external PR**;
   only the Captain closes.
 - **Publish** right after each external merge: Fixed → patch, Added/Changed → minor. **Never cut a major**;

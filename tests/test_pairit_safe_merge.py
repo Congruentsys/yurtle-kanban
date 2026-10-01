@@ -218,6 +218,12 @@ if args and args[0] == "api" and any(re.search(r"/pulls/\d+/files$", a) for a in
     emit(json.loads(os.environ.get("STUB_GH_FILES", '[{"filename": "feature.txt"}]')))
     sys.exit(0)
 
+if args and args[0] == "api" and any(re.search(r"/issues/\d+/events$", a) for a in args):
+    # #1195 r1 B1: REST issue events (who added a label, and when)
+    record()
+    emit(json.loads(os.environ.get("STUB_GH_EVENTS", "[]")))
+    sys.exit(0)
+
 record({"unsupported": True})
 print("stub gh: unsupported call: " + " ".join(args), file=sys.stderr)
 sys.exit(1)

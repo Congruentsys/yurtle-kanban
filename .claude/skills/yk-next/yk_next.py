@@ -10,8 +10,8 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
                  whose finding needs a decision without wedging the loop. A head with the
                  driver's fixes comment after ONE review round counts as reviewed (#987).
 2. EXTERNAL PR   an open PR by a non-member (#1195; .claude/skills/external-pr/SKILL.md):
-                 MERGE EXTERNAL PR  approve at head + CI green + not escalated (or labelled
-                                    `captain-approved`, which only the Captain sets);
+                 MERGE EXTERNAL PR  approve at head + CI green + not escalated (or
+                                    `captain-approved` by the Captain AFTER that verdict);
                  RUN CI EXTERNAL PR approve at head, its fork run waits for approval (and
                                     it doesn't touch .github/);
                  REVIEW EXTERNAL PR no member verdict at its head.
@@ -58,6 +58,7 @@ import socket
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime
 
 HOSTS = {"m4-mini": "Mini", "mini": "Mini", "m5": "M5", "spark": "DGX"}
 HOLD = {"needs-decision", "question", "wontfix", "duplicate", "invalid", "blocked", "on-hold"}
@@ -90,6 +91,10 @@ ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py", "CLAUDE.md"
                   "AGENT-QUICK-REF.md"}
 CAPTAIN_APPROVAL = "captain-approval"  # escalated: the fleet sets it and waits
 CAPTAIN_APPROVED = "captain-approved"  # the Captain's yes: ONLY the Captain sets it
+# The Captain's GitHub login(s), the ONE definition (the gate asks --escalation). Confirmed by
+# the Captain, 2026-10-01. hankh95 is ALSO the M5 agent's account, so the actor check can't
+# tell them apart: a fleet session on M5 must never add `captain-approved` (a documented limit).
+CAPTAINS = frozenset({"hankh95"})
 PROPOSED_REJECT = "proposed-reject"    # the fleet proposes; only the Captain closes
 CLASS_CAPTAIN = re.compile(r"(?m)^class: captain")  # the reviewer's third verdict line
 RELEASE_TITLE = "chore: release v"
@@ -160,16 +165,60 @@ def escalation(pr: dict, paths: list[str]) -> list[str]:
     return why
 
 
+def gh_time(ts: str) -> datetime:
+    """A GitHub timestamp (`2026-10-01T00:09:03Z`), comparable; Python 3.9 reads no `Z`."""
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def approved_at(pr: dict) -> str | None:
+    """When the latest member `approve` verdict at the PR's CURRENT head was posted."""
+    times = [c.get("createdAt") or "" for c in pr.get("comments") or []
+             if c.get("authorAssociation", "MEMBER") in MEMBERS
+             and (m := VERDICT.fullmatch("\n".join(
+                 line.removesuffix("\r") for line in (c.get("body") or "").split("\n")[:2])))
+             and m.group(1) == pr["headRefOid"] and m.group(2) == "approve"]
+    return times[-1] if times else None
+
+
+def captain_approval(pr: dict) -> tuple[bool, str]:
+    """(approved?, why). `captain-approved` counts only when its LATEST `labeled` event (REST
+    issue events: a server timestamp and actor nobody can forge) is newer than the approve
+    verdict at the current head, and its actor is in CAPTAINS. A new head needs a new
+    verdict, which postdates the label, so the PR waits for the Captain again."""
+    if CAPTAIN_APPROVED not in {lbl["name"] for lbl in pr.get("labels") or []}:
+        return False, f"no {CAPTAIN_APPROVED}"
+    verdict = approved_at(pr)
+    if not verdict:
+        return False, f"{CAPTAIN_APPROVED}, but no member approve verdict at the head"
+    events = gh("api", "--paginate", f"repos/{{owner}}/{{repo}}/issues/{pr['number']}/events",
+                "--jq", f'.[] | select(.event == "labeled" and .label.name == "{CAPTAIN_APPROVED}")'
+                ' | .created_at + " " + .actor.login').split("\n")
+    last = [e.split() for e in events if e.strip()]
+    if not last:
+        return False, f"{CAPTAIN_APPROVED}, but no labeled event for it"
+    when, actor = last[-1][0], last[-1][-1]
+    if actor not in CAPTAINS:
+        return False, f"{CAPTAIN_APPROVED} was added by {actor}, not the Captain"
+    if gh_time(when) <= gh_time(verdict):
+        return False, (f"{CAPTAIN_APPROVED} ({when}) predates the approve verdict at the "
+                       f"current head ({verdict}): the Captain hasn't seen this head")
+    return True, f"{CAPTAIN_APPROVED} by {actor}"
+
+
 def escalation_report(number: int, pr: dict | None = None) -> dict:
     """The gate's question (`--escalation <P>`), answered from the ONE definition above:
-    {"number", "association", "external", "why"}. `pr` is the gate's own `gh pr view`
-    JSON (labels and comments, read once at the head it pinned); else it is read here."""
+    {"number", "association", "external", "why", "captain_approved", "captain"}. `pr` is
+    the gate's own `gh pr view` JSON (labels and comments, read once at the head it
+    pinned); else it is read here."""
     if pr is None:
         pr = gh_json("pr", "view", str(number), "--json", "headRefOid,labels,comments")
+    pr = {**pr, "number": number}
     assoc = association(number)
     external = assoc not in MEMBERS
-    return {"number": number, "association": assoc, "external": external,
-            "why": escalation(pr, pr_paths(number)) if external else []}
+    why = escalation(pr, pr_paths(number)) if external else []
+    ok, captain = captain_approval(pr) if why else (False, "")
+    return {"number": number, "association": assoc, "external": external, "why": why,
+            "captain_approved": ok, "captain": captain}
 
 
 def fragments(ref: str, names: list[str] | None = None) -> dict[str, str]:
@@ -487,10 +536,11 @@ def main() -> None:
             picks.append((1, p, why))
         elif ci != "green":
             state = f"SKIP: approved, CI {ci}"
-        elif why and CAPTAIN_APPROVED not in labels:
+        elif why and not (cap := captain_approval(p))[0]:
             state = "WAIT CAPTAIN"
             print(f"  WAIT CAPTAIN #{p['number']} by {p['author']['login']} — {esc}; "
-                  f"only the Captain adds {CAPTAIN_APPROVED}")
+                  f"{cap[1]}; only the Captain adds {CAPTAIN_APPROVED}, after the review "
+                  "at the current head")
         else:
             state = "ready-to-merge"
             picks.append((0, p, why))

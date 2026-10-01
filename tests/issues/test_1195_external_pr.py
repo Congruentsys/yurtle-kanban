@@ -51,11 +51,26 @@ def rest_file(f: str | tuple[str, str]) -> dict:
     return {"filename": f, "status": "modified"}
 
 
+CAPTAIN = "hankh95"  # the Captain's login (confirmed 2026-10-01); yk_next.CAPTAINS
+
+
+def at(minute: int) -> str:
+    """A GitHub timestamp, `minute` minutes into 2026-10-01T01:00Z."""
+    return f"2026-10-01T01:{minute:02d}:00Z"
+
+
 def ext_pr(number: int, *, files: tuple = ("src/yurtle_kanban/board.py",),
            labels: tuple[str, ...] = (), comments: tuple[str, ...] = (),
-           checks: list | None = None, author: str = EXT) -> dict:
+           checks: list | None = None, author: str = EXT,
+           events: tuple[tuple[str, str, str], ...] = ()) -> dict:
+    """`comments` are posted at minutes 10, 11, …; `events` are REST issue events
+    (label, created_at, actor), served as `labeled` events."""
     p = pr(number, author=author, labels=labels, head=HEAD, checks=checks,
            comments=list(comments))
+    for i, c in enumerate(p["comments"]):
+        c["createdAt"] = at(10 + i)
+    p["_events"] = [{"event": "labeled", "label": {"name": n}, "created_at": t,
+                     "actor": {"login": a}} for n, t, a in events]
     p["title"] = f"fix: an outside contribution {number}"
     p["isCrossRepository"] = True
     # what `gh pr list --json files` shows: the NEW path only, at most 100 (#1195 B2)
@@ -104,6 +119,14 @@ def run_picker(
             rows = known[int(files_arg.group(1))].get("_rest_files", [])
             return "".join(f"{r['filename']}\n" + (f"{r['previous_filename']}\n"
                            if r.get("previous_filename") else "") for r in rows)
+        ev_arg = next((re.search(r"issues/(\d+)/events$", a) for a in args
+                       if re.search(r"issues/(\d+)/events$", a)), None)
+        if args and args[0] == "api" and ev_arg:
+            assert "--paginate" in args, args
+            known = {p["number"]: p for p in prs}
+            return "".join(f"{e['created_at']} {e['actor']['login']}\n"
+                           for e in known[int(ev_arg.group(1))].get("_events", [])
+                           if e["event"] == "labeled" and e["label"]["name"] == "captain-approved")
         if args and args[0] == "api":
             m = next((re.search(r"pulls/(\d+)$", a) for a in args if re.search(r"pulls/(\d+)$", a)),
                      None)
@@ -252,9 +275,11 @@ def test_c_near_miss_paths_are_routine(yk, monkeypatch, capsys, path) -> None:
 
 
 def test_c_captain_approved_unblocks(yk, monkeypatch, capsys) -> None:
+    """The Captain adds `captain-approved` after the approve verdict at the head (r1 B1)."""
     p = ext_pr(1300, files=(".github/workflows/publish.yml",),
                labels=("captain-approval", "captain-approved"),
-               comments=(approve_at_head("class: captain (release path)"),))
+               comments=(approve_at_head("class: captain (release path)"),),
+               events=(("captain-approved", at(30), CAPTAIN),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
     assert "MERGE EXTERNAL PR #1300" in out, out
     assert "WAIT CAPTAIN #1300" not in out, out
@@ -409,8 +434,9 @@ if args[:2] == ["pr", "view"]:
         "headRefOid": os.environ.get("STUB_GH_HEAD_SHA", ""),
         "comments": [
             {"author": {"login": "reviewer"},
-             "authorAssociation": c.get("association", "MEMBER"), "body": c["body"]}
-            for c in json.loads(os.environ.get("STUB_GH_COMMENTS", "[]"))
+             "authorAssociation": c.get("association", "MEMBER"), "body": c["body"],
+             "createdAt": c.get("createdAt", "2026-10-01T01:%02d:00Z" % (10 + i))}
+            for i, c in enumerate(json.loads(os.environ.get("STUB_GH_COMMENTS", "[]")))
         ],
         "labels": [{"name": n} for n in json.loads(os.environ.get("STUB_EXT_LABELS", "[]"))],
         "files": [{"path": p, "additions": 1, "deletions": 0} for p in files],
@@ -446,8 +472,11 @@ class ExtSandbox(base.Sandbox):
             base._git(self.worktree, "push", "-q", "origin", f"HEAD:refs/pull/{base.PR}/head")
 
     def run_ext(self, *, labels: tuple[str, ...] = (), files: tuple = ("feature.txt",),
-                assoc: str = "CONTRIBUTOR", comments: list[dict] | None = None):
+                assoc: str = "CONTRIBUTOR", comments: list[dict] | None = None,
+                events: tuple[tuple[str, str, str], ...] | None = None):
         rows = [rest_file(f) for f in files]
+        if events is None:  # by default the Captain added each captain-* label, after review
+            events = tuple((n, at(30), CAPTAIN) for n in labels if n.startswith("captain-"))
         return self.run(
             base.GREEN, comments,
             # a fork's branch is not on origin
@@ -460,6 +489,9 @@ class ExtSandbox(base.Sandbox):
                 "STUB_EXT_CROSS": "1" if self.fork else "0",
                 "STUB_EXT_ASSOC": assoc,
                 "STUB_EXT_CHANGED": str(len(rows)),
+                "STUB_GH_EVENTS": json.dumps([
+                    {"event": "labeled", "label": {"name": n}, "created_at": t,
+                     "actor": {"login": a}} for n, t, a in events]),
             },
         )
 
@@ -678,3 +710,67 @@ def test_b2_gate_does_not_escalate_on_size(tmp_path: Path) -> None:
     r = sb.run_ext(files=tuple(f"src/m{i}.py" for i in range(150)))
     assert r.returncode == 0, _out(r)
     assert len(sb.merge_calls()) == 1, sb.calls()
+
+
+# --------------------------------------------------------------------------- r1 B1: approval
+# Mini's review of #1196: `captain-approved` counts only when its latest `labeled` event
+# (REST, a server timestamp) is newer than the member approve verdict at the CURRENT head,
+# and that event's actor is the Captain (CAPTAINS, one definition).
+
+GH_PATH = (".github/workflows/publish.yml",)
+
+
+def test_b1_captains_is_one_definition(yk) -> None:
+    assert yk.CAPTAINS == {CAPTAIN}
+    gate = base.SCRIPT.read_text()
+    assert CAPTAIN not in gate, "safe_merge.sh keeps its own copy of the Captain's login"
+
+
+def test_b1_label_then_head_moves_waits_for_the_captain(yk, monkeypatch, capsys) -> None:
+    """The Captain approved head A at minute 5; head B's approve verdict is at minute 10."""
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approval", "captain-approved"),
+               comments=(approve_at_head("class: captain (release path)"),),
+               events=(("captain-approved", at(5), CAPTAIN),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN #1300" in out, out
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+
+
+def test_b1_label_by_a_non_captain_is_not_approval(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approved",),
+               comments=(approve_at_head("class: captain (release path)"),),
+               events=(("captain-approved", at(30), "hanssantiago1995"),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN #1300" in out, out
+    assert "hanssantiago1995" in out, out  # says who added it
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+
+
+def test_b1_the_latest_labeled_event_decides(yk, monkeypatch, capsys) -> None:
+    """Removed and re-added by someone else after the Captain's: not approved."""
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approved",),
+               comments=(approve_at_head(),),
+               events=(("captain-approved", at(30), CAPTAIN),
+                       ("captain-approved", at(40), "hanssantiago1995")))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN #1300" in out, out
+
+
+@needs_tools
+def test_b1_gate_refuses_label_older_than_the_head_verdict(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(labels=("captain-approval", "captain-approved"), files=GH_PATH,
+                   events=(("captain-approved", at(5), CAPTAIN),))
+    assert r.returncode != 0, _out(r)
+    assert "captain-approved" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()
+
+
+@needs_tools
+def test_b1_gate_refuses_label_by_a_non_captain(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(labels=("captain-approved",), files=GH_PATH,
+                   events=(("captain-approved", at(30), "hanssantiago1995"),))
+    assert r.returncode != 0, _out(r)
+    assert "hanssantiago1995" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()

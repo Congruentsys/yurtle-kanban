@@ -47,9 +47,13 @@ if [ "$fork" = true ]; then
   external=$(printf '%s' "$esc" | jq -r '.external') || {
     echo "NOT MERGING #$PR: could not parse its escalation"; exit 1; }
   why=$(printf '%s' "$esc" | jq -r '.why | join("; ")')
-  if [ "$external" = true ] && [ -n "$why" ] && ! has_label captain-approved; then
-    echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not labelled"\
-      "captain-approved (only the Captain adds it)"
+  # the Captain's yes: `captain-approved`, added BY the Captain AFTER the approve verdict at
+  # this head (its REST labeled event), never just the label's presence (r1 B1)
+  approved=$(printf '%s' "$esc" | jq -r '.captain_approved')
+  captain=$(printf '%s' "$esc" | jq -r '.captain')
+  if [ "$external" = true ] && [ -n "$why" ] && [ "$approved" != true ]; then
+    echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not"\
+      "captain-approved at this head ($captain; only the Captain adds it)"
     exit 1
   fi
 fi
