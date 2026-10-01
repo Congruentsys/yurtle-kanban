@@ -306,3 +306,33 @@ def test_r1_followup_skill_names_the_dry_check(yk) -> None:
     sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
     assert yk.CHECK_CMD in sec, sec
     assert sec.index(yk.POST_VERDICT_CMD) < sec.index(yk.CHECK_CMD), sec
+
+
+# --------------------------------------------------------------------------- r2
+
+
+@pytest.mark.parametrize("prose", [
+    "- test_secret_shapes: test_1213_check_verdict_function_name fails",
+    "test_token_limit = test_1213_token_budget_check_v2",
+    "token: test_1213_check_verdict",
+    "password: hashed_pw_v2",
+    "password: <redacted>",
+    "api_key: <your key here>",
+    "see https://github.com/Congruentsys/carclaw/blob/" + "a1" * 20 + "/x.py#L3",
+    "see https://github.com/Congruentsys/yurtle-kanban/blob/" + "0f" * 20 + "/CHANGELOG.md#L10",
+])
+def test_r2_identifier_placeholder_and_permalink_values_are_prose(yk, prose) -> None:
+    """r2 B1/F1/F2: a lower-case snake_case identifier value (a test or function name) or a
+    `<placeholder>` is code, not a credential; a sha-pinned GitHub permalink is not a PEM
+    body."""
+    assert check(yk, prose) is None, (prose, check(yk, prose))
+
+
+@pytest.mark.parametrize("leak", [
+    "mytoken: Ab12Cd34Ef56Gh78Ij90Kl12",          # no letter-boundary escape hatch (r2)
+    "token: Ab12Cd34Ef56Gh78Ij90Kl12_x",          # mixed case: not an identifier
+    "password: Hunter2_secret",                    # upper case: not an identifier
+    "Zm9vYmFyMTIzZm9vYmFyMTIzZm9vYmFyMTIzZm9vYmFyMTIzZm9vYmFyMTIzQUJD",  # a bare PEM-ish run
+])
+def test_r2_real_values_are_still_refused(yk, leak) -> None:
+    assert check(yk, GOOD + leak + "\n") is not None, leak
