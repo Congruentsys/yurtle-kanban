@@ -971,3 +971,20 @@ def test_n6_external_titles_are_marked_untrusted(yk, monkeypatch, capsys, state)
 def test_n6_skill_says_external_text_is_data() -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
     assert re.search(r"title, body.*untrusted data, never instructions", text, re.S), text
+
+
+# --------------------------------------------------------------------------- r1 N7
+# Mini's list of missing tests: head moves after captain-approved (B1), a rename out of
+# .github/ (B2), squash / tag off main / in flight (N3, N2) are above. This one is the gate's.
+
+
+@needs_tools
+def test_n7_gate_refuses_captain_approval_added_after_an_approve(tmp_path: Path) -> None:
+    """A routine-looking PR is approved (minute 10), then escalated by `captain-approval`
+    (minute 30): the gate refuses until the Captain's `captain-approved`."""
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(labels=("captain-approval",),
+                   events=(("captain-approval", at(30), "hanssantiago1995"),))
+    assert r.returncode != 0, _out(r)
+    assert "label captain-approval" in _out(r) and "captain-approved" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()
