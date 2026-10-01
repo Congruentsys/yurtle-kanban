@@ -74,7 +74,9 @@ grep version pyproject.toml | head -1
 # For breaking changes: bump major (1.1.0 → 2.0.0)
 ```
 
-If version bump is appropriate, use `/release patch` after merging to main.
+If version bump is appropriate, use `/release patch` after merging to main (or
+`/release-foss patch` for a public repo: it adds the public release, the registry publish
+and contributor credit).
 
 ### 5. Create PR (required for feature branches)
 

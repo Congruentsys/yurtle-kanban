@@ -71,6 +71,14 @@ yurtle-kanban move EXP-XXX review --agent <your-agent-name>   # the holder moves
 /release major             # Breaking change: 1.1.0 → 2.0.0
 ```
 
+`/release` is for an internal repo. A public (FOSS) repo uses `/release-foss` with the
+same arguments: it adds the public GitHub release, the registry publish and contributor
+credit.
+
+```bash
+/release-foss patch        # Public repo: release + GitHub release + registry + credit
+```
+
 ## Agent Tags
 
 | Tag | Meaning |

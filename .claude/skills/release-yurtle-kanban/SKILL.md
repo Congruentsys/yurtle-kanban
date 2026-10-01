@@ -2,7 +2,7 @@
 name: release-yurtle-kanban
 description: Release yurtle-kanban itself — changelog.d assembly, both version files, sized GitHub release notes, the PyPI publish via publish.yml, and contributor credit. Follows the shipped release-foss skill with this repo's specifics.
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Bash(python *), Bash(pip *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Bash(python *), Bash(pip *), Bash(head *), Bash(sort *), Bash(tr *), Bash(paste *), Read, Edit, Write
 argument-hint: "[patch|minor|major] [--message 'Description']"
 ---
 
@@ -62,8 +62,18 @@ python scripts/assemble_changelog.py X.Y.Z   # --date YYYY-MM-DD to override tod
 It moves every fragment (and anything still under `## [Unreleased]`) into
 `## [X.Y.Z] - <date>`, grouped by section and ordered by issue number, and **deletes the
 fragments it consumed**. With nothing to release it changes nothing. Read the new
-section, and add `thanks @login` to each external contributor's entry (step 4 of
-release-foss shows how to list them).
+section, and add `thanks @login` to each external contributor's entry. External means
+the PR author is not an OWNER, MEMBER or COLLABORATOR; list them among the PRs in this
+release:
+
+```bash
+TAG=$(git describe --tags --abbrev=0)
+IN_RELEASE=$(git log "$TAG"..HEAD --format=%s | grep -oE '#[0-9]+' | tr -d '#' | sort -u | paste -sd'|' -)
+gh search prs --repo Congruentsys/yurtle-kanban --merged-at ">=$(git log -1 --format=%cs "$TAG")" --limit 1000 \
+  --json number,author,authorAssociation \
+  --jq '.[] | select(.authorAssociation as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a) | not) | "#\(.number) @\(.author.login)"' \
+  | grep -wE "^#($IN_RELEASE)"
+```
 
 ### 5. Commit the Release on a Branch
 

@@ -525,6 +525,11 @@ cp -r skills/nautical/* .claude/skills/   # Nautical theme
 cp -r skills/software/* .claude/skills/   # Software theme
 ```
 
+**Upgrading a public repo:** the shipped `/release` is now the internal-repo flow (no
+public release notes, no registry publish, no contributor credit). If your repo is public
+and you re-run `init` (or copy the skills again) to upgrade, switch to `/release-foss`
+for your releases: it is installed alongside `/release`.
+
 ## Agent Instructions (CLAUDE.md Snippet)
 
 Add this to your project's `CLAUDE.md` (or equivalent copilot instructions) so AI agents use yurtle-kanban correctly:
