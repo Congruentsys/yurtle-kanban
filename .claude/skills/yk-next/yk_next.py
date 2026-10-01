@@ -132,6 +132,10 @@ SECRET = re.compile(
     r"-----BEGIN|\bgh[pousr]_[A-Za-z0-9]{16,}|\bgithub_pat_[A-Za-z0-9_]{16,}"
     r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-|\bpypi-[A-Za-z0-9_-]{16,}"
     r"|\bsk-ant-[A-Za-z0-9_-]{16,}|\bsk-proj-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9]{20,}"
+    # SendGrid, Stripe (secret and restricted keys), and a bearer token: the run needs a digit,
+    # so `Bearer <token>`, `Bearer $TOKEN` and `Bearer YOUR_TOKEN_HERE` are prose (#1220)
+    r"|\bSG\.[\w-]{16,}\.[\w-]{16,}|\bsk_(?:live|test)_[A-Za-z0-9]{16,}|\brk_live_[A-Za-z0-9]{16,}"
+    r"|\b(?i:bearer)\s+(?=[A-Za-z0-9._~+/-]*\d)[A-Za-z0-9._~+/-]{20,}=*"
 )
 # a PEM body line without its header: a base64 run of 60+, mixed case and a digit (a hex
 # sha, all lower case, is not one). Its own regex, so skipping a permalink run (SHA_SEGMENT)
@@ -153,17 +157,30 @@ SECRET_VALUE = re.compile(r"(?=[A-Za-z0-9_/+=-]*\d)(?=[A-Za-z0-9_/+=-]*[A-Za-z])
 PATH_VALUE = re.compile(r"::|/.*\.[A-Za-z][A-Za-z0-9]{0,4}$")
 # a value that is code, not a credential (r2): a lower-case snake_case identifier (a test or
 # function name: `test_1213_check_verdict`, `hashed_pw_v2`) or a `<placeholder>`
-# segments are capped: an identifier has short ones, a keyed token (`shpat_<32 hex>`,
-# `sbp_<40 hex>`) one long random one (r3)
-CODE_VALUE = re.compile(r"[a-z][a-z0-9]{0,15}(?:_[a-z0-9]{1,15})+|<[^>]*>?")
+# segments are capped at 15 chars each, the first included (#1220): an identifier has short
+# ones, a keyed token (`shpat_<32 hex>`, `sbp_<40 hex>`) one long random one (r3)
+CODE_VALUE = re.compile(r"[a-z][a-z0-9]{0,14}(?:_[a-z0-9]{1,15})+|<[^>]*>?")
 PLACEHOLDER = re.compile(r"<[^>]*>?")  # the only code a password value may be (r3)
 # a 40-hex sha path segment: a GitHub permalink (`…/blob/<sha>/…`), not a PEM body (r2)
 SHA_SEGMENT = re.compile(r"(?:^|/)[0-9a-f]{40}(?:/|$)")
-# `password: <value>`: a 6+ char value that is not code — a call or subscript (`getpass()`,
-# `Optional[str]`), a dotted name (`self.pw`) or a digit-free identifier (`str`, `SecretStr`,
-# `password`); so an all-letter password passes (the price of postable review prose).
-PASSWORD = re.compile(r"(?i)pass(?:word|wd)['\"]?\s*[:=]\s*['\"]?([^\s'\"`]{6,})")
-PASSWORD_CODE = re.compile(r"[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_]+")
+# `<key>password: <value>`: a 6+ char value that is not code — a call or subscript
+# (`getpass()`, `Optional[str]`) with no digit in it, a dotted name (`self.pw`) or a digit-free
+# identifier (`str`, `SecretStr`, `password`); a dotted or called head is a digit-free
+# identifier and each later part starts with a letter, so `hunter2.v1`, `Summer.2024` and
+# `admin(123)` are values (#1220). An all-letter password passes (the price of postable prose).
+PASSWORD = re.compile(r"(?i)(\w*pass(?:word|wd))['\"]?\s*[:=]\s*['\"]?([^\s'\"`]{6,})")
+PASSWORD_CODE = re.compile(r"[A-Za-z_]+(?:\.[A-Za-z_]\w*)*[(\[][^\d]*"
+                           r"|[A-Za-z_]+(?:\.[A-Za-z_]\w*)+|[A-Za-z_]+")
+# also prose as a password value (#1220): an env-var reference (`$PGPASSWORD`, `${DB_PW}`,
+# `${{ secrets.X }}`; upper case, so `$ecret1` is a value) or a hash-algorithm name
+PASSWORD_PROSE = re.compile(
+    r"\$[A-Z_][A-Z0-9_]*|\$\{.*"
+    r"|(?i:pbkdf2(?:_sha(?:1|256|512))?|argon2(?:id|i|d)?|bcrypt(?:_sha256)?|scrypt"
+    r"|sha(?:1|224|256|384|512)|md5)")
+# a longer lower-case key (`test_password`, `test_reset_password`) is code, so its value may be
+# an identifier (CODE_VALUE) as in the generic rule; a bare `password` or an upper-case env key
+# (`DB_PASSWORD`) still takes a `<placeholder>` only (#1220)
+PASSWORD_CODE_KEY = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*_pass(?:word|wd)")
 CODE_FENCE = re.compile(r"(?ms)^ {0,3}(`{3,}|~{3,}).*?(?:^ {0,3}\1[`~]*[ \t]*$|\Z)")
 # a code span never crosses a blank line: GitHub ends it at the paragraph break (r1)
 CODE_SPAN = re.compile(r"(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)", re.S)
@@ -269,26 +286,40 @@ def check_verdict(text: str, head: str) -> str | None:
         return "line 2 is not `verdict: approve` or `verdict: changes`"
     if len(text) > VERDICT_MAX:
         return f"it is {len(text):,} chars, over the {VERDICT_MAX:,} limit"
+    def secret(m: re.Match) -> str:
+        # the line, never the value: the reason goes into a re-run brief (#1220)
+        line = text.count("\n", 0, m.start()) + 1
+        return f"line {line} contains something secret-shaped: never post it"
+
     if m := SECRET.search(text):
-        return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+        return secret(m)
     for m in PEM_RUN.finditer(text):
         if SHA_SEGMENT.search(m.group(0)):  # a sha-pinned permalink run, not a PEM body
             continue
-        return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+        return secret(m)
     for m in GENERIC.finditer(text):
         value = (m.group(1) or m.group(2)).rstrip("'\"`.,;:)]}")
         if (SECRET_VALUE.match(value) and not PATH_VALUE.search(value)
                 and not CODE_VALUE.fullmatch(value)):
-            return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+            return secret(m)
     for m in PASSWORD.finditer(text):
-        value = m.group(1).rstrip(".,;:)]}")
-        if not (PASSWORD_CODE.fullmatch(value) or PLACEHOLDER.fullmatch(value)):
-            return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+        key, value = m.group(1), m.group(2).rstrip(".,;:)]}")
+        if not (PASSWORD_CODE.fullmatch(value) or PLACEHOLDER.fullmatch(value)
+                or PASSWORD_PROSE.fullmatch(value)
+                or (PASSWORD_CODE_KEY.fullmatch(key) and CODE_VALUE.fullmatch(value))):
+            return secret(m)
     prose = CODE_SPAN.sub("", CODE_FENCE.sub("", text))
     if m := MENTION.search(prose):
         return (f"it has an @-mention outside code ({m.group(0)[:40]}), which notifies people:"
                 " put it in backticks or drop it")
     return None
+
+
+def rerun_note(why: str) -> str:
+    """The refusal as one line the driving session pastes into the re-run brief (#1220)."""
+    fix = ("rewrite that line without the value (describe it, or use a <placeholder>)"
+           if "secret-shaped" in why else "fix that and print the verdict again")
+    return f"RE-RUN NOTE: your last verdict was not posted: {why}; {fix}"
 
 
 def captain_approval(pr: dict) -> tuple[bool, str]:
@@ -614,6 +645,7 @@ def main() -> None:
         why = check_verdict(text, head)
         if why:
             print(f"NOT POSTING the verdict for #{number}: {why}")
+            print(rerun_note(why))
             sys.exit(1)
         if not a.post_verdict:
             print(f"ok: the verdict for #{number} names its head {head[:12]}; post it")

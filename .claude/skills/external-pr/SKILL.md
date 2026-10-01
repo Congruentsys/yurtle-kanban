@@ -102,11 +102,12 @@ python3 .claude/skills/yk-next/yk_next.py --post-verdict <P> <verdict-file>
 It posts the text it checked as a PR comment (over stdin, never by re-reading the file) only when line 1 is exactly
 `reviewed-at-sha: <the PR's current head>`, line 2 is `verdict: approve` or `verdict: changes`, the body
 is at most 60,000 chars, nothing in it looks like a secret (a private key; a GitHub/AWS/Slack/PyPI/Anthropic
-token; a `password`, `secret`, `token` or `api_key` with a value; a bare PEM body line), and it has no
+token; a SendGrid/Stripe key or a `Bearer` token; a `password`, `secret`, `token` or `api_key` with a value; a bare PEM body line), and it has no
 @-mention outside code (it would notify people; `@` in backticks or a fenced block is fine). Never post a
 verdict with a bare `gh pr comment`.
 `python3 .claude/skills/yk-next/yk_next.py --check-verdict <P> <verdict-file>` runs the same check without
-posting. On exit 1, read the reason and re-run the reviewer; never edit the file to make it pass.
+posting. On exit 1, its last line is `RE-RUN NOTE: <reason>; …` (a line number, never the value):
+add that line to the brief and re-run the reviewer; never edit the file to make it pass.
 No `Bash(gh api:*)`: it is a prefix rule, so it would let the reviewer `gh api -X POST` a label, a merge
 or a fork-run approval (any `-f` field POSTs too). No `Bash(gh pr comment:*)` either: `--edit-last`
 rewrites the last verdict keeping its creation time, `--body-file <any path>` posts any file on the
