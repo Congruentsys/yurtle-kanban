@@ -243,3 +243,21 @@ def test_readme_lists_release_foss() -> None:
 def test_contributing_points_maintainers_at_the_local_skill() -> None:
     contributing = (REPO / "CONTRIBUTING.md").read_text()
     assert "/release-yurtle-kanban" in contributing
+
+
+def test_no_shipped_skill_asks_gh_pr_list_for_author_association() -> None:
+    """r1 B1: `gh pr list` has no `authorAssociation` JSON field ("Unknown JSON field"),
+    so a credit step built on it finds no contributors; `gh search prs` has it."""
+    for skill in sorted((REPO / "skills").glob("*/SKILL.md")):
+        for block in re.findall(r"```[a-z]*\n(.*?)```", skill.read_text(), re.S):
+            joined = block.replace("\\\n", " ")  # a `\` line continuation is one command
+            for command in re.findall(r"gh pr list[^\n]*", joined):
+                assert "authorAssociation" not in command, (skill, command)
+
+
+def test_foss_credit_step_keeps_only_prs_in_this_release() -> None:
+    """r1 follow-up: the date search is day-granular, so the credit step filters to the
+    PR numbers in `<tag>..HEAD`, and names who counts as external."""
+    text = (REPO / "skills/release-foss/SKILL.md").read_text()
+    assert "gh search prs" in text and "--limit 1000" in text
+    assert 'git log "$TAG"..HEAD' in text and "COLLABORATOR" in text

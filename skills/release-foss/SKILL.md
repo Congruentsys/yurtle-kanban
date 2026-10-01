@@ -97,12 +97,18 @@ in [Keep a Changelog](https://keepachangelog.com) form:
 ```
 
 Name each external contributor on their entry, by GitHub login: `(#123, thanks @login)`.
-Find them from the merged PRs since the last tag:
+External means the PR author is not an OWNER, MEMBER or COLLABORATOR of the repo. Find
+them among the PRs merged since the last tag (`gh pr list` has no `authorAssociation`
+field, so this uses `gh search prs`; the date search is day-granular, so the `grep` keeps
+only PRs whose numbers appear in `<tag>..HEAD`, not ones the last release already credited):
 
 ```bash
-gh pr list --state merged --search "merged:>=$(git log -1 --format=%cs "$(git describe --tags --abbrev=0)")" \
+TAG=$(git describe --tags --abbrev=0)
+IN_RELEASE=$(git log "$TAG"..HEAD --format=%s | grep -oE '#[0-9]+' | tr -d '#' | sort -u | paste -sd'|' -)
+gh search prs --repo OWNER/REPO --merged-at ">=$(git log -1 --format=%cs "$TAG")" --limit 1000 \
   --json number,author,authorAssociation \
-  --jq '.[] | select(.authorAssociation != "MEMBER" and .authorAssociation != "OWNER") | "#\(.number) @\(.author.login)"'
+  --jq '.[] | select(.authorAssociation as $a | ["OWNER","MEMBER","COLLABORATOR"] | index($a) | not) | "#\(.number) @\(.author.login)"' \
+  | grep -wE "^#($IN_RELEASE)"
 ```
 
 If a release message was provided, include it.
