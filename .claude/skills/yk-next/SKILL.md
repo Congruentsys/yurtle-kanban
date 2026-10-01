@@ -30,7 +30,8 @@ rule still applies. Outside yk-loop, use the plain picker.
    reviewed: it is `ready-to-merge` once CI is green, never `needs-review` again.
 2. **External PRs** (#1195; author not OWNER/MEMBER/COLLABORATOR) follow `.claude/skills/external-pr/SKILL.md`.
    `MERGE EXTERNAL PR #N`: approve at head, CI green, and not escalated or labelled `captain-approved`.
-   `REVIEW EXTERNAL PR #N`: no member verdict at its head. Listed, never picked: `WAIT CAPTAIN #N`
+   `RUN CI EXTERNAL PR #N`: approved, its fork run waits (never for `.github/`).
+   `REVIEW EXTERNAL PR #N`: no member verdict at its head. Each prints its next commands. Listed, never picked: `WAIT CAPTAIN #N`
    (escalated: label `captain-approval`, a `class: captain` verdict line, or a release/CI/security path),
    a `changes` verdict (waiting on the author's new head), `proposed-reject` (the Captain closes it).
    Only the Captain adds `captain-approved`; the fleet never does.
@@ -70,7 +71,7 @@ resume the same PR, and the claim race can't tell them apart.
 | `RESUME PR #N [ready-to-merge]` | pairit step 4 |
 | `RESUME PR #N [wait-ci]` | `gh pr checks N --watch`, then pick again |
 | `REVIEW PR #N` | pairit step 3, as the reviewer for someone else's PR |
-| `REVIEW EXTERNAL PR #N` / `MERGE EXTERNAL PR #N` | `.claude/skills/external-pr/SKILL.md` |
+| `REVIEW EXTERNAL PR #N` / `RUN CI EXTERNAL PR #N` / `MERGE EXTERNAL PR #N` | `.claude/skills/external-pr/SKILL.md`; run the commands it prints |
 | `RELEASE DUE — <bump>` | the Release section of `external-pr/SKILL.md` (patch/minor only) |
 | `RESUME ISSUE #N` / `CLAIMED ISSUE #N` | triage it (yk-loop), then land it with `pairit` |
 | `NOTHING READY` / `ERROR: …` | stop |

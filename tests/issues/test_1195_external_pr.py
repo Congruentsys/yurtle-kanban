@@ -82,6 +82,9 @@ def run_picker(
     def fake_gh(*args: str) -> str:
         if args[:2] == ("api", "user"):
             return ME + "\n"
+        if args and args[0] == "api" and any("actions/runs" in a for a in args):
+            assert any("status=action_required" in a and HEAD in a for a in args), args
+            return "777\n"  # the fork run waiting for approval
         if args and args[0] == "api":
             m = next((re.search(r"pulls/(\d+)$", a) for a in args if re.search(r"pulls/(\d+)$", a)),
                      None)
@@ -510,3 +513,77 @@ def test_gate_member_fork_pr_is_not_escalated(tmp_path: Path) -> None:
     assert r.returncode == 0, _out(r)
     assert len(sb.merge_calls()) == 1, sb.calls()
 
+
+
+# --------------------------------------------------------------------------- actionable picks
+# Captain's additions to #1195: each pick prints the exact next command(s), and the
+# submitter is thanked on merge, after publish, and credited in the changelog.
+
+WAITING_RUN = [{"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"}]
+
+
+def test_merge_pick_prints_the_safe_merge_command(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, comments=(approve_at_head("class: routine"),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "bash .claude/skills/pairit/safe_merge.sh 1300" in out, out
+    assert "gh pr comment 1300" in out, out
+    assert f"Thanks @{EXT} — merged; this ships in v3.0.1." in out, out
+
+
+def test_review_pick_prints_the_diff_and_checkout_commands(yk, monkeypatch, capsys) -> None:
+    out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300)], SPARE)
+    assert "gh pr diff 1300" in out, out
+    assert "pull/1300/head" in out and HEAD in out, out
+
+
+def test_review_pick_prints_the_run_approval_after_the_diff(yk, monkeypatch, capsys) -> None:
+    out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300, checks=WAITING_RUN)], SPARE)
+    assert "REVIEW EXTERNAL PR #1300" in out, out
+    assert "gh api -X POST repos/{owner}/{repo}/actions/runs/777/approve" in out, out
+    assert "only after reading the whole diff" in out, out
+
+
+def test_never_prints_a_run_approval_for_github_changes(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=(".github/workflows/ci.yml",), checks=WAITING_RUN)
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "REVIEW EXTERNAL PR #1300" in out, out
+    assert "/approve" not in out, out
+
+
+def test_approved_pr_with_a_waiting_run_is_picked_to_run_ci(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, comments=(approve_at_head("class: routine"),), checks=WAITING_RUN)
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "RUN CI EXTERNAL PR #1300" in out, out
+    assert "actions/runs/777/approve" in out, out
+    assert "WOULD CLAIM" not in out, out
+
+
+def test_release_due_prints_version_commands_and_thanks(yk, monkeypatch, capsys) -> None:
+    out = _release(yk, monkeypatch, capsys,
+                   {"1192.md": "<!-- section: Fixed -->\n- a fix (#1192)\n"})
+    assert "v3.0.1" in out, out
+    assert "scripts/assemble_changelog.py 3.0.1" in out, out
+    assert "chore: release v3.0.1" in out, out
+    assert "gh pr comment 1193" in out, out
+    assert "Released in v3.0.1 on PyPI — thanks again!" in out, out  # after publish
+
+
+def test_release_due_minor_version(yk, monkeypatch, capsys) -> None:
+    out = _release(yk, monkeypatch, capsys,
+                   {"1194.md": "<!-- section: Added -->\n- a feature (#1194)\n"})
+    assert "v3.1.0" in out, out
+
+
+def test_release_due_flags_a_merged_pr_without_a_fragment(yk, monkeypatch, capsys) -> None:
+    m = merged(1193, TAG_MERGE)
+    m["files"] = [{"path": "src/yurtle_kanban/board.py"}]
+    out = _release(yk, monkeypatch, capsys, {}, merged_prs=[m])
+    assert "changelog.d/" in out and "#1193" in out, out
+    assert "no changelog.d fragment" in out.lower(), out
+    assert f"Thanks @{EXT} (#1193)" in out, out  # the credit to put in it
+
+
+def test_skill_thanks_the_submitter() -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    assert "Thanks @" in text
+    assert "Captain makes the final call" in text

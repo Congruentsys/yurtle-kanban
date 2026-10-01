@@ -32,6 +32,22 @@ The definitions live in `.claude/skills/yk-next/yk_next.py` and `safe_merge.sh` 
             | reject → propose it
 ```
 
+**Thank the submitter at every outcome**, as open-source practice. Keep it short:
+
+| when | comment (`gh pr comment <P> --body "…"`) |
+|---|---|
+| merged | `Thanks @login — merged; this ships in vX.Y.Z.` (the picker prints it, version included) |
+| published | `Released in vX.Y.Z on PyPI — thanks again!` (RELEASE DUE prints it) |
+| changes | `Thanks @login for this! A few things before it can merge:` then the findings |
+| proposed-reject | `Thanks @login for the effort here. <why>. The Captain makes the final call.` |
+
+The changelog credits them too: the fragment's entry ends `Thanks @login (#<P>)`.
+
+**The picker prints the commands.** Each external pick names its next steps: `REVIEW EXTERNAL PR` the diff,
+the checkout and any waiting fork run's approval; `RUN CI EXTERNAL PR` that approval for an approved PR;
+`MERGE EXTERNAL PR` the `safe_merge.sh` call and the thank-you; `RELEASE DUE` the version, the assemble
+command, a missing fragment and the post-publish notes. Run them as printed.
+
 **1. Triage.**
 ```bash
 gh pr view <P> --json number,title,author,labels,files,changedFiles,headRefOid,isCrossRepository,body
@@ -72,7 +88,8 @@ conflicts with a ruling); the verdict line stays `changes`.
 
 **4. Outcomes.**
 - **approve + routine**, CI green → `bash .claude/skills/pairit/safe_merge.sh <P>` (it reads the fork head
-  from `refs/pull/<P>/head` and refuses anything escalated without `captain-approved`), then **Release**.
+  from `refs/pull/<P>/head` and refuses anything escalated without `captain-approved`), the merged thank-you,
+  then **Release**.
 - **approve + captain** (or escalated by label or path) → escalate and move on:
   ```bash
   gh issue create --label captain-approval --title "chore: Captain approval for external PR #<P>" \
@@ -81,20 +98,21 @@ conflicts with a ruling); the verdict line stays `changes`.
   ```
   The picker lists it as `WAIT CAPTAIN` until the Captain adds `captain-approved`; then it picks
   `MERGE EXTERNAL PR` and you merge and release as above.
-- **changes** → ONE comment to the author (@login) listing every finding, politely and concretely. Wait for a
+- **changes** → ONE comment to the author, opening with thanks, then every finding, concretely. Wait for a
   new head; the picker re-offers the PR for review at it. The fleet never pushes to a contributor's branch.
-- **reject** → `gh pr edit <P> --add-label proposed-reject` and one polite comment giving the reason (out of
-  scope / duplicate of #N / conflicts with the ruling in #N). Never close it.
+- **reject** → `gh pr edit <P> --add-label proposed-reject` and one comment that thanks them for the effort,
+  gives the reason (out of scope / duplicate of #N / conflicts with the ruling in #N) and says the Captain
+  makes the final call. Never close it.
 
 **Release** (the picker prints `RELEASE DUE — <bump>` once an external PR has merged since the last tag and
 no `chore: release v…` PR is open). Follow `skills/release/SKILL.md` for a **patch or minor** only:
 - a release PR `chore: release vX.Y.Z`, built with `python scripts/assemble_changelog.py X.Y.Z`. If a merged
   external PR has no `changelog.d/` fragment, the release PR adds one first, crediting the author
-  (`… (#<N>, thanks @login)`); its section decides the bump;
+  (`… Thanks @login (#<P>)`), and an existing one gains that credit; its section decides the bump;
 - reviewed by a distinct `claude -p` session (pairit step 3), merged with `safe_merge.sh`;
 - tag the merge commit, push the tag, `gh release create vX.Y.Z` with notes under GitHub's **125,000-char**
   cap: the version's CHANGELOG section, or, if over, a short summary plus a link to `CHANGELOG.md` (#1191);
-- confirm `publish.yml` ran green and the version is on PyPI.
+- confirm `publish.yml` ran green and the version is on PyPI, then post the published note on each PR.
 
 `RELEASE NEEDS CAPTAIN` (a Removed or breaking fragment: a major) → open a chore issue labelled
 `captain-approval` naming the fragments and the PRs. **Never cut a major.**

@@ -12,7 +12,11 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
 2. EXTERNAL PR   an open PR by a non-member (#1195; .claude/skills/external-pr/SKILL.md):
                  MERGE EXTERNAL PR  approve at head + CI green + not escalated (or labelled
                                     `captain-approved`, which only the Captain sets);
+                 RUN CI EXTERNAL PR approve at head, its fork run waits for approval (and
+                                    it doesn't touch .github/);
                  REVIEW EXTERNAL PR no member verdict at its head.
+                 Each pick prints its next commands: the diff and checkout, the fork-run
+                 approval, safe_merge.sh, the thank-you comment with the version it ships in.
                  Not picked, listed: WAIT CAPTAIN (escalated, no `captain-approved`), a
                  `changes` verdict (waiting on the author), `proposed-reject` (the Captain
                  closes it), a draft or held one, CI pending or red, a conflict.
@@ -146,14 +150,21 @@ def escalation(pr: dict) -> list[str]:
     return why
 
 
-def release_bump() -> tuple[str, str]:
-    """(patch | minor | major, why) from the unreleased changelog.d/ fragments on origin/main."""
-    names = [n.rsplit("/", 1)[-1] for n in git(
-        "ls-tree", "--name-only", "origin/main", "changelog.d/").split()]
+def fragments(ref: str, names: list[str] | None = None) -> dict[str, str]:
+    """{name: text} of the changelog.d/ fragments at `ref` (all of them, or `names`)."""
+    if names is None:
+        names = [n.rsplit("/", 1)[-1] for n in git(
+            "ls-tree", "--name-only", ref, "changelog.d/").split()]
+    return {n: git("show", f"{ref}:changelog.d/{n}")
+            for n in sorted(names) if FRAGMENT_NAME.fullmatch(n)}
+
+
+def release_bump(texts: dict[str, str]) -> tuple[str, str]:
+    """(patch | minor | major, why) from unreleased changelog.d/ fragments {name: text}."""
     sections: dict[str, list[str]] = {}
     major = []
-    for name in sorted(n for n in names if FRAGMENT_NAME.fullmatch(n)):
-        first, _, rest = git("show", f"origin/main:changelog.d/{name}").partition("\n")
+    for name, text in texts.items():
+        first, _, rest = text.partition("\n")
         m = SECTION_LINE.fullmatch(first.strip())
         sec = m.group(1) if m else "?"
         sections.setdefault(sec, []).append(name)
@@ -170,35 +181,86 @@ def release_bump() -> tuple[str, str]:
     return "patch", seen
 
 
+def latest_tag() -> str | None:
+    tags = git("tag", "-l", "v*", "--sort=-v:refname").split()
+    return tags[0] if tags else None
+
+
+def next_version(tag: str, bump: str) -> str:
+    """`v3.0.0` + patch → `3.0.1`, + minor → `3.1.0`, + major → `4.0.0`."""
+    major, minor, patch = (int(x) for x in re.findall(r"\d+", tag)[:3])
+    if bump == "major":
+        return f"{major + 1}.0.0"
+    return f"{major}.{minor + 1}.0" if bump == "minor" else f"{major}.{minor}.{patch + 1}"
+
+
+def waiting_runs(pr: dict) -> list[str]:
+    """Ids of the fork's workflow runs at the head that wait for approval; one gh call,
+    made only when the rollup shows ACTION_REQUIRED."""
+    if not any((c.get("conclusion") or "").upper() == "ACTION_REQUIRED"
+               for c in pr.get("statusCheckRollup") or []):
+        return []
+    return gh("api", f"repos/{{owner}}/{{repo}}/actions/runs?head_sha={pr['headRefOid']}"
+              "&status=action_required", "--jq", ".workflow_runs[].id").split()
+
+
+def touches_github(pr: dict) -> bool:
+    return any(f["path"].startswith(".github/") for f in pr.get("files") or [])
+
+
+def print_run_approval(pr: dict) -> None:
+    """The exact command for each waiting fork run, or why there is none."""
+    for run in waiting_runs(pr):
+        if touches_github(pr):
+            print(f"  fork run {run} waits: do NOT approve it (the PR touches .github/); "
+                  "escalate to the Captain")
+        else:
+            print(f"  fork run {run} waits — only after reading the whole diff; never if "
+                  f"escalated by .github/:\n    gh api -X POST "
+                  f"repos/{{owner}}/{{repo}}/actions/runs/{run}/approve")
+
+
 def release_due(prs: list[dict]) -> bool:
     """Step 4: print RELEASE DUE (and return True) when an external PR merged since the
     latest `v*` tag and no release PR is open. A major prints RELEASE NEEDS CAPTAIN."""
     if any((p.get("title") or "").startswith(RELEASE_TITLE) for p in prs):
         return False
     merged = gh_json("pr", "list", "--state", "merged", "--limit", "100", "--json",
-                     "number,title,author,isCrossRepository,mergeCommit,mergedAt")
+                     "number,title,author,isCrossRepository,mergeCommit,mergedAt,files")
     forks = [m for m in merged if m.get("isCrossRepository") and m.get("mergedAt")
              and (m.get("mergeCommit") or {}).get("oid")]
     if not forks:
         return False
     git("fetch", "-q", "origin", "main", "--tags")
-    tags = git("tag", "-l", "v*", "--sort=-v:refname").split()
-    if not tags:
+    tag = latest_tag()
+    if not tag:
         return False
-    since = set(git("log", "--merges", "--format=%H", f"{tags[0]}..origin/main").split())
+    since = set(git("log", "--merges", "--format=%H", f"{tag}..origin/main").split())
     ext = [m for m in forks
            if m["mergeCommit"]["oid"] in since and association(m["number"]) not in MEMBERS]
     if not ext:
         return False
     names = ", ".join(f"#{m['number']} by {m['author']['login']}" for m in ext)
-    bump, why = release_bump()
+    bump, why = release_bump(fragments("origin/main"))
     if bump == "major":
-        print(f"\n  RELEASE NEEDS CAPTAIN — {names} merged since {tags[0]}; {why}. A major is "
+        print(f"\n  RELEASE NEEDS CAPTAIN — {names} merged since {tag}; {why}. A major is "
               "the Captain's: open a chore issue labelled captain-approval, never cut it.")
         return False
-    print(f"\nRELEASE DUE — {bump} after {tags[0]}: external PRs merged since: {names}"
-          f"\n  fragments: {why}"
-          "\n  follow .claude/skills/external-pr/SKILL.md (Release) and skills/release/SKILL.md")
+    v = next_version(tag, bump)
+    print(f"\nRELEASE DUE — {bump} after {tag} → v{v}: external PRs merged since: {names}"
+          f"\n  fragments: {why}")
+    for m in ext:
+        if m.get("files") is not None and not any(
+                f["path"].startswith("changelog.d/") for f in m["files"]):
+            print(f"  #{m['number']} has no changelog.d fragment: add changelog.d/<issue>.md "
+                  f"to the release PR, ending `Thanks @{m['author']['login']} (#{m['number']})`")
+    print(f"  release PR `{RELEASE_TITLE}{v}`: python scripts/assemble_changelog.py {v}, set "
+          f"{v} in pyproject.toml and src/yurtle_kanban/__init__.py"
+          "\n  follow .claude/skills/external-pr/SKILL.md (Release) and skills/release/SKILL.md"
+          "\n  after PyPI publishes, on each PR:")
+    for m in ext:
+        print(f"    gh pr comment {m['number']} --body "
+              f"\"Released in v{v} on PyPI — thanks again!\"")
     return True
 
 
@@ -277,6 +339,23 @@ def my_pr_state(pr: dict) -> str:
     if verdict is None:
         return "needs-review"
     return "ready-to-merge" if ci == "green" else "wait-ci"
+
+
+def ships_in(pr: dict) -> str:
+    """The release an external PR will ship in: the latest tag bumped by the unreleased
+    fragments on origin/main plus the PR's own (fetched from refs/pull/<N>/head)."""
+    tag = latest_tag()
+    if not tag:
+        return "the next release"
+    own = [f["path"].removeprefix("changelog.d/") for f in pr.get("files") or []
+           if f["path"].startswith("changelog.d/") and "/" not in f["path"][12:]]
+    texts = fragments("origin/main")
+    if own:
+        git("fetch", "-q", "origin", f"pull/{pr['number']}/head")
+        texts.update(fragments("FETCH_HEAD", own))
+    bump, _ = release_bump(texts)
+    return "the next release (a major: the Captain's)" if bump == "major" \
+        else f"v{next_version(tag, bump)}"
 
 
 def main() -> None:
@@ -358,11 +437,16 @@ def main() -> None:
             state = "SKIP: " + "; ".join(skip)
         elif verdict is None:
             state = "needs-review"
-            picks.append((1, p, why))
+            picks.append((2, p, why))
         elif verdict == "changes":
             state = "SKIP: changes requested, waiting on the author's new head"
         elif p.get("mergeable") == "CONFLICTING":
             state = "SKIP: conflict, waiting on the author"
+        elif ci != "green" and any(
+                (c.get("conclusion") or "").upper() == "ACTION_REQUIRED"
+                for c in p.get("statusCheckRollup") or []) and not touches_github(p):
+            state = "approved, fork run waits"
+            picks.append((1, p, why))
         elif ci != "green":
             state = f"SKIP: approved, CI {ci}"
         elif why and CAPTAIN_APPROVED not in labels:
@@ -376,16 +460,27 @@ def main() -> None:
               f"  [{state}]  ({esc})")
     if picks:
         kind, p, why = min(picks, key=lambda t: (t[0], t[1]["number"]))
+        n, login = p["number"], p["author"]["login"]
         esc = "escalated: " + "; ".join(why) if why else "not escalated"
         if kind == 0:
-            print(f"\nMERGE EXTERNAL PR #{p['number']} by {p['author']['login']} — {p['title']}"
-                  f"\n  head: {p['headRefOid'][:12]}  ({esc}"
-                  f"{', captain-approved' if why else ''})"
-                  "\n  follow .claude/skills/external-pr/SKILL.md: safe_merge.sh, then release")
+            print(f"\nMERGE EXTERNAL PR #{n} by {login} — {p['title']}"
+                  f"\n  head: {p['headRefOid'][:12]}  ({esc}{', captain-approved' if why else ''})"
+                  f"\n  bash .claude/skills/pairit/safe_merge.sh {n}"
+                  f"\n  then: gh pr comment {n} --body "
+                  f"\"Thanks @{login} — merged; this ships in {ships_in(p)}.\""
+                  "\n  then pick again (RELEASE DUE); .claude/skills/external-pr/SKILL.md")
+        elif kind == 1:
+            print(f"\nRUN CI EXTERNAL PR #{n} by {login} — approved at its head, its fork run "
+                  f"waits\n  head: {p['headRefOid'][:12]}  ({esc})")
+            print_run_approval(p)
         else:
-            print(f"\nREVIEW EXTERNAL PR #{p['number']} by {p['author']['login']} — {p['title']}"
+            print(f"\nREVIEW EXTERNAL PR #{n} by {login} — {p['title']}"
                   f"\n  head: {p['headRefOid'][:12]}  ({esc})"
-                  "\n  follow .claude/skills/external-pr/SKILL.md (triage, fork CI, review)")
+                  "\n  follow .claude/skills/external-pr/SKILL.md (triage, fork CI, review)"
+                  f"\n  gh pr diff {n}"
+                  f"\n  git fetch -q origin pull/{n}/head && "
+                  f"git worktree add /tmp/yk-rev-{n} {p['headRefOid']}")
+            print_run_approval(p)
         return
     external_nums = {p["number"] for p in external}
 
