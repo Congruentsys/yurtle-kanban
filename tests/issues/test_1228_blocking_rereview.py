@@ -6,7 +6,7 @@
   `fixes-at-sha: <head>` / `for-review-at: <R>` comment after `changes` no longer makes
   the head mergeable.
 - `verdict: approve` at R with non-blocking `(follow-up)` findings: the driver may fix
-  them and post the fixes comment; that tip merges (R a proper ancestor of the head, as in #987).
+  them and post the fixes comment; that tip merges (R an ancestor of the head, as in #987).
 - Which verdict counts (r1 B1): the LAST decisive comment before the fixes comment, at
   any sha (other fixes comments aside), must be an unedited `reviewed-at-sha: R` /
   `verdict: approve`. A `changes` anywhere after the approve, an edited comment or a

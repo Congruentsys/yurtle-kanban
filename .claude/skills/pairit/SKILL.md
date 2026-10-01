@@ -92,7 +92,8 @@ The brief tells the reviewer to:
   check, push, and post ONE PR comment whose first two lines are `fixes-at-sha: <FIX-SHA>` and
   `for-review-at: <REVIEWED-SHA>` (both full 40-hex shas, exactly as the verdict names it; the fixed tip must
   be a later commit), then one line per finding → its fix commit. `safe_merge.sh` merges that tip once CI is
-  green (the reviewed sha must be an ancestor of it, and its latest verdict must be `approve`); the picker
+  green (the reviewed sha must be an ancestor of it, and the last verdict before the fixes comment, at any
+  sha, must be that unedited `approve`: a `changes` after it means a fresh approve at the head); the picker
   counts it as reviewed. Follow-ups not fixed now are filed as issues.
 - `verdict: changes` → its findings are BLOCKING. Hand EVERY finding to the implementer (a fresh Opus sub-agent,
   or the one that wrote the code) in one message; a finding about a test goes to the test partner as a ruled

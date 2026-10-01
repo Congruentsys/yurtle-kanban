@@ -5,9 +5,10 @@ After an `approve` verdict at R with non-blocking `(follow-up)` findings, the dr
 may fix them and post a comment whose first two lines are `fixes-at-sha: <FIX-SHA>` /
 `for-review-at: <R>`. That fixed tip merges without a second review:
 
-- `safe_merge.sh` merges on an approve at the head, OR on a member's `approve` at R
-  (the latest unedited `reviewed-at-sha: R` comment, #1228) plus a later member fixes
-  comment at the head for R, where R is a proper ancestor of the head. Every other gate
+- `safe_merge.sh` merges on an approve at the head, OR on a member's `approve` at R (the
+  last decisive comment before the fixes comment, at any sha, must be that unedited
+  approve, #1228) plus a later member fixes comment at the head for R, where R is an
+  ancestor of the head. Every other gate
   (checks, head, conflicts, worktree) is unchanged.
 - `yk_next.py` counts a head with such a fixes comment as reviewed.
 
