@@ -186,6 +186,12 @@ def run_picker(
 SPARE = [issue(50)]  # something to claim once every PR step passes
 
 
+def escalated(out: str, n: int = 1300) -> bool:
+    """Escalated either way: picked to be escalated (no `captain-approval` yet, r2 N-b) or
+    already waiting for the Captain."""
+    return f"ESCALATE EXTERNAL PR #{n}" in out or f"WAIT CAPTAIN #{n}" in out
+
+
 # --------------------------------------------------------------------------- a. review
 
 
@@ -258,10 +264,12 @@ def test_c_approved_but_ci_pending_is_not_merged(yk, monkeypatch, capsys) -> Non
 
 @pytest.mark.parametrize("why", ["path", "label", "class"])
 def test_b_escalated_waits_for_the_captain(yk, monkeypatch, capsys, why) -> None:
+    """Escalated and labelled `captain-approval` (the fleet escalated it): it waits. An
+    escalated PR WITHOUT the label is picked to be escalated (r2 N-b, below)."""
     files = ("pyproject.toml",) if why == "path" else ("src/yurtle_kanban/board.py",)
-    labels = ("captain-approval",) if why == "label" else ()
     extra = "class: captain (changes the --json shape)" if why == "class" else "class: routine"
-    p = ext_pr(1300, files=files, labels=labels, comments=(approve_at_head(extra),))
+    p = ext_pr(1300, files=files, labels=("captain-approval",),
+               comments=(approve_at_head(extra),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
     assert "WAIT CAPTAIN #1300" in out, out
     assert "MERGE EXTERNAL PR #1300" not in out, out
@@ -280,7 +288,7 @@ def test_b_escalated_waits_for_the_captain(yk, monkeypatch, capsys, why) -> None
 def test_b_every_escalation_path(yk, monkeypatch, capsys, path) -> None:
     p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
-    assert "WAIT CAPTAIN #1300" in out, out
+    assert escalated(out), out
 
 
 @pytest.mark.parametrize("path", ["docs/skills/x.md", "src/yurtle_kanban/cli.py",
@@ -697,14 +705,14 @@ RENAMED_OUT = ("docs/old-publish.yml", ".github/workflows/publish.yml")
 def test_b2_new_paths_escalate(yk, monkeypatch, capsys, path) -> None:
     p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
-    assert "WAIT CAPTAIN #1300" in out, out
+    assert escalated(out), out
     assert "MERGE EXTERNAL PR #1300" not in out, out
 
 
 def test_b2_rename_out_of_github_escalates(yk, monkeypatch, capsys) -> None:
     p = ext_pr(1300, files=(RENAMED_OUT,), comments=(approve_at_head(),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
-    assert "WAIT CAPTAIN #1300" in out, out
+    assert escalated(out), out
     assert ".github/workflows/publish.yml" in out, out
 
 
@@ -776,7 +784,7 @@ def test_b1_label_then_head_moves_waits_for_the_captain(yk, monkeypatch, capsys)
 
 
 def test_b1_label_by_a_non_captain_is_not_approval(yk, monkeypatch, capsys) -> None:
-    p = ext_pr(1300, files=GH_PATH, labels=("captain-approved",),
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approval", "captain-approved"),
                comments=(approve_at_head("class: captain (release path)"),),
                events=(("captain-approved", at(30), "hanssantiago1995"),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
@@ -787,7 +795,7 @@ def test_b1_label_by_a_non_captain_is_not_approval(yk, monkeypatch, capsys) -> N
 
 def test_b1_the_latest_labeled_event_decides(yk, monkeypatch, capsys) -> None:
     """Removed and re-added by someone else after the Captain's: not approved."""
-    p = ext_pr(1300, files=GH_PATH, labels=("captain-approved",),
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approval", "captain-approved"),
                comments=(approve_at_head(),),
                events=(("captain-approved", at(30), CAPTAIN),
                        ("captain-approved", at(40), "hanssantiago1995")))
@@ -948,7 +956,7 @@ def test_n_a_basenames_are_one_definition(yk) -> None:
 def test_n_a_agent_files_escalate_at_any_depth(yk, monkeypatch, capsys, path) -> None:
     p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
-    assert "WAIT CAPTAIN #1300" in out, out
+    assert escalated(out), out
     assert "MERGE EXTERNAL PR #1300" not in out, out
 
 
@@ -967,6 +975,55 @@ def test_n_a_gate_refuses_nested_agent_files(tmp_path: Path, path: str) -> None:
     assert r.returncode != 0, _out(r)
     assert "captain-approved" in _out(r), _out(r)
     assert sb.merge_calls() == [], sb.calls()
+
+
+# --------------------------------------------------------------------------- r2 N-b
+# Mini's round 2: a reviewer posts `class: captain` (or a path escalates the PR) and the session
+# dies before step 4: no `captain-approval` label, no chore issue, a silent WAIT CAPTAIN. The
+# picker picks it as ESCALATE EXTERNAL PR and prints the exact commands.
+
+
+@pytest.mark.parametrize("why", ["path", "class"])
+def test_n_b_unlabelled_escalation_is_picked_to_escalate(yk, monkeypatch, capsys, why) -> None:
+    files = ("pyproject.toml",) if why == "path" else ("src/yurtle_kanban/board.py",)
+    extra = "class: captain (changes the --json shape)" if why == "class" else "class: routine"
+    p = ext_pr(1300, files=files, comments=(approve_at_head(extra),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "ESCALATE EXTERNAL PR #1300" in out, out
+    assert "gh pr edit 1300 --add-label captain-approval" in out, out
+    assert 'gh issue create --label captain-approval --title ' \
+           '"chore: Captain approval for external PR #1300"' in out, out
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+    assert "WOULD CLAIM" not in out, out  # a pick: the picker stops here
+    assert "--add-label captain-approved" not in out, out  # the fleet never sets it
+
+
+def test_n_b_labelled_escalation_waits_silently(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=("pyproject.toml",), labels=("captain-approval",),
+               comments=(approve_at_head(),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "ESCALATE EXTERNAL PR" not in out, out
+    assert "WAIT CAPTAIN #1300" in out and "WOULD CLAIM ISSUE #50" in out, out
+
+
+def test_n_b_github_pr_with_a_waiting_run_is_escalated_not_approved(
+        yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=(".github/workflows/ci.yml",), checks=WAITING_RUN,
+               comments=(approve_at_head("class: captain (CI path)"),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "ESCALATE EXTERNAL PR #1300" in out, out
+    assert "/approve" not in out, out
+
+
+def test_n_b_routine_pr_is_not_escalated(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, comments=(approve_at_head("class: routine"),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "ESCALATE EXTERNAL PR" not in out and "MERGE EXTERNAL PR #1300" in out, out
+
+
+def test_n_b_skill_names_the_escalate_pick() -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    assert "ESCALATE EXTERNAL PR" in text
 
 # --------------------------------------------------------------------------- r1 N1: fidelity
 
@@ -1067,6 +1124,7 @@ def test_n4_picker_bot_pr_in_this_repo_is_external(yk, monkeypatch, capsys) -> N
 def test_n5_approved_github_pr_with_a_waiting_run_waits_for_the_captain(
         yk, monkeypatch, capsys) -> None:
     p = ext_pr(1300, files=(".github/workflows/ci.yml",), checks=WAITING_RUN,
+               labels=("captain-approval",),
                comments=(approve_at_head("class: captain (CI path)"),))
     out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
     assert "WAIT CAPTAIN (fork run needs the Captain)" in out, out

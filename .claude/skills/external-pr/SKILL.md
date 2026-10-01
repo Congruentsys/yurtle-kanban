@@ -54,7 +54,9 @@ The definitions live ONCE, in `.claude/skills/yk-next/yk_next.py`; `safe_merge.s
 The changelog credits them too: the fragment's entry ends `Thanks @login (#<P>)`.
 
 **The picker prints the commands.** Each external pick names its next steps: `REVIEW EXTERNAL PR` the diff,
-the read-only reviewer command and any waiting fork run's approval; `RUN CI EXTERNAL PR` that approval for an approved PR;
+the read-only reviewer command and any waiting fork run's approval; `ESCALATE EXTERNAL PR` the chore issue
+and the `captain-approval` label for an approved, escalated PR not yet labelled; `RUN CI EXTERNAL PR` that
+approval for an approved PR;
 `MERGE EXTERNAL PR` the `safe_merge.sh` call and the thank-you; `RELEASE DUE` the version, the assemble
 command, a missing fragment and the post-publish notes. Run them as printed.
 
@@ -131,7 +133,9 @@ conflicts with a ruling); the verdict line stays `changes`.
   gh pr edit <P> --add-label captain-approval
   ```
   The picker lists it as `WAIT CAPTAIN` until the Captain adds `captain-approved`; then it picks
-  `MERGE EXTERNAL PR` and you merge and release as above.
+  `MERGE EXTERNAL PR` and you merge and release as above. If a session dies before this step, the
+  picker picks the PR as `ESCALATE EXTERNAL PR` (escalated, no `captain-approval` label) and prints
+  these commands, so an escalation is never silent; check `gh issue list` for the chore issue first.
 - **changes** → ONE comment to the author, opening with thanks, then every finding, concretely. Wait for a
   new head; the picker re-offers the PR for review at it. The fleet never pushes to a contributor's branch.
 - **reject** → `gh pr edit <P> --add-label proposed-reject` and one comment that thanks them for the effort,

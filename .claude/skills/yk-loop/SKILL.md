@@ -68,7 +68,8 @@ rules keep it safe:
 **External PRs (#1195).** A PR whose author is not OWNER/MEMBER/COLLABORATOR follows
 `.claude/skills/external-pr/SKILL.md`: the fleet reviews it, merges it with `safe_merge.sh` and cuts the
 patch/minor release right after, within the Captain's limits. The picker hands out `REVIEW EXTERNAL PR #N`,
-`MERGE EXTERNAL PR #N` and `RELEASE DUE`; it only lists `WAIT CAPTAIN #N` (escalated, no `captain-approved`)
+`ESCALATE EXTERNAL PR #N`, `MERGE EXTERNAL PR #N` and `RELEASE DUE`; it only lists `WAIT CAPTAIN #N`
+(escalated and labelled `captain-approval`, no `captain-approved`)
 and `RELEASE NEEDS CAPTAIN` (a major), and skips a `proposed-reject` PR and one waiting on its author.
 
 **Boundaries.** Never push to `main`, since everything lands by PR (project CLAUDE.md). Never merge another

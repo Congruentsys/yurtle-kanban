@@ -12,12 +12,15 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
 2. EXTERNAL PR   an open PR by a non-member (#1195; .claude/skills/external-pr/SKILL.md):
                  MERGE EXTERNAL PR  approve at head + CI green + not escalated (or
                                     `captain-approved` by the Captain AFTER that verdict);
+                 ESCALATE EXTERNAL PR approve at head + escalated, but no `captain-approval`
+                                    label (r2 N-b: a session died before step 4);
                  RUN CI EXTERNAL PR approve at head, its fork run waits for approval (and
                                     it doesn't touch .github/);
                  REVIEW EXTERNAL PR no member verdict at its head.
                  Each pick prints its next commands: the diff, the READ-ONLY reviewer, the fork-run
                  approval, safe_merge.sh, the thank-you comment with the version it ships in.
-                 Not picked, listed: WAIT CAPTAIN (escalated, no `captain-approved`), a
+                 Not picked, listed: WAIT CAPTAIN (escalated and labelled
+                 `captain-approval`, no `captain-approved`), a
                  `changes` verdict (waiting on the author), `proposed-reject` (the Captain
                  closes it), a draft or held one, CI pending or red, a conflict.
 3. REVIEW PR     another FLEET author's open PR with no verdict (or fixes comment) at its
@@ -575,9 +578,14 @@ def main() -> None:
             state = "SKIP: " + "; ".join(skip)
         elif verdict is None:
             state = "needs-review"
-            picks.append((2, p, why))
+            picks.append((3, p, why))
         elif verdict == "changes":
             state = "SKIP: changes requested, waiting on the author's new head"
+        elif why and CAPTAIN_APPROVAL not in labels and not captain_approval(p)[0]:
+            # escalated but never labelled (r2 N-b): a session died before step 4; without
+            # this pick it would sit in a silent WAIT CAPTAIN the Captain never hears about
+            state = "escalate"
+            picks.append((1, p, why))
         elif p.get("mergeable") == "CONFLICTING":
             state = "SKIP: conflict, waiting on the author"
         elif ci != "green" and any(
@@ -590,7 +598,7 @@ def main() -> None:
                       "waits for the Captain's approval")
             else:
                 state = "approved, fork run waits"
-                picks.append((1, p, why))
+                picks.append((2, p, why))
         elif ci != "green":
             state = f"SKIP: approved, CI {ci}"
         elif why and not (cap := captain_approval(p))[0]:
@@ -615,6 +623,19 @@ def main() -> None:
                   f"\"Thanks @{login} — merged; this ships in {ships_in(p)}.\""
                   "\n  then pick again (RELEASE DUE); .claude/skills/external-pr/SKILL.md")
         elif kind == 1:
+            print(f"\nESCALATE EXTERNAL PR #{n} by {login} — {untrusted(p)}"
+                  f"\n  head: {p['headRefOid'][:12]}  ({esc}); no {CAPTAIN_APPROVAL} label yet,"
+                  " so the Captain hasn't been asked"
+                  "\n  first, if no such issue is open yet (a retry after a dead session):"
+                  f"\n    gh issue list --state open --search \"Captain approval for external PR"
+                  f" #{n} in:title\""
+                  f"\n  gh issue create --label {CAPTAIN_APPROVAL} --title "
+                  f"\"chore: Captain approval for external PR #{n}\" --body \"<what it changes; "
+                  "why escalated; the verdict comment's link; recommended answer>\""
+                  f"\n  gh pr edit {n} --add-label {CAPTAIN_APPROVAL}"
+                  f"\n  then pick again: it waits (WAIT CAPTAIN) until the Captain adds "
+                  f"{CAPTAIN_APPROVED}; .claude/skills/external-pr/SKILL.md step 4")
+        elif kind == 2:
             print(f"\nRUN CI EXTERNAL PR #{n} by {login} — approved at its head, its fork run "
                   f"waits\n  head: {p['headRefOid'][:12]}  ({esc})")
             print_run_approval(p)
