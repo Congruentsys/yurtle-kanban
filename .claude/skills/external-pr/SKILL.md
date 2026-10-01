@@ -130,6 +130,7 @@ The brief tells the reviewer to:
   release/CI/security path. Size and new features are routine: `class: routine`.
 
 Never edit a verdict comment; post a new one (approval timing reads the comment's creation time).
+An edited verdict never counts: the picker and the gate both treat it as no verdict.
 
 A `reject` is the reviewer's recommendation in the findings (out of scope, a duplicate, or a design that
 conflicts with a ruling); the verdict line stays `changes`.

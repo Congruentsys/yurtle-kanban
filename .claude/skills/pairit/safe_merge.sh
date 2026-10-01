@@ -103,12 +103,15 @@ esac
 # review round, with the driver's fixes comment at the head (#987): its first lines are
 # `fixes-at-sha: <head>` / `for-review-at: <R>`, a verdict at R came before it, and R is
 # an ancestor of the head. The latest verdict or fixes comment decides; a later
-# `changes` overrides. Only the repo's own people count: on a public repo anyone can comment
+# `changes` overrides. Only the repo's own people count: on a public repo anyone can comment.
+# An EDITED decisive comment (includesCreatedEdit, #1195 r3) still decides but is no verdict:
+# editing keeps createdAt, so it never approves, nor names a reviewed sha (yk_next agrees, #991)
 decisive=$(printf '%s' "$pr" | jq -r '[.comments[]?
   | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER"
       or .authorAssociation == "COLLABORATOR")
-  | .body | select(startswith("reviewed-at-sha:") or startswith("fixes-at-sha:"))
-  | split("\n") | .[0:2] | map(sub("\r$"; "")) | join("\n")]')
+  | select(.body | startswith("reviewed-at-sha:") or startswith("fixes-at-sha:"))
+  | if .includesCreatedEdit then "(edited: no verdict)"
+    else .body | split("\n") | .[0:2] | map(sub("\r$"; "")) | join("\n") end]')
 verdict=$(printf '%s' "$decisive" | jq -r 'last // ""')
 ok=""
 if [ "$verdict" = "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then

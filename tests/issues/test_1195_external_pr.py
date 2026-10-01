@@ -479,7 +479,8 @@ if args[:2] == ["pr", "view"]:
         "comments": [
             {"author": {"login": "reviewer"},
              "authorAssociation": c.get("association", "MEMBER"), "body": c["body"],
-             "createdAt": c.get("createdAt", "2026-10-01T01:%02d:00Z" % (10 + i))}
+             "createdAt": c.get("createdAt", "2026-10-01T01:%02d:00Z" % (10 + i)),
+             "includesCreatedEdit": c.get("edited", False)}
             for i, c in enumerate(json.loads(os.environ.get("STUB_GH_COMMENTS", "[]")))
         ],
         "labels": [{"name": n} for n in json.loads(os.environ.get("STUB_EXT_LABELS", "[]"))],
@@ -1336,3 +1337,99 @@ def test_r3_1a_check_verdict_cli(yk, monkeypatch, capsys, tmp_path) -> None:
         yk.main()
     assert e.value.code == 1
     assert "reviewed-at-sha" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- r3 R3-1b
+# Mini's round 3, defence in depth for B1: an edited comment keeps its createdAt, so an edited
+# verdict never counts. It is still decisive (the latest one decides), but as no verdict: it
+# leaves the head unreviewed, so editing a later `changes` can't revive an earlier approve.
+# Picker (approved_at, verdict_at_head) and gate (`decisive`) agree (#991). A comment without
+# `includesCreatedEdit` (older fixtures) is not edited.
+
+
+def edited(c: dict) -> dict:
+    return {**c, "includesCreatedEdit": True}
+
+
+def test_r3_1b_edited_approve_is_no_approval(yk) -> None:
+    p = ext_pr(1300, files=GH_PATH, comments=(approve_at_head(),))
+    assert yk.approved_at(p) == at(10)  # unedited: counts
+    p["comments"] = [edited(c) for c in p["comments"]]
+    assert yk.approved_at(p) is None
+    assert yk.verdict_at_head(p) is None
+
+
+def test_r3_1b_edited_approve_predating_the_label_is_not_captain_approved(
+        yk, monkeypatch) -> None:
+    """Mini's probe: an approve edited to name the new head (createdAt 01:10) plus the
+    Captain's label at 01:30 returned (True, …) at d6eb58f."""
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approval", "captain-approved"),
+               comments=(approve_at_head("class: captain (release path)"),))
+    p["comments"] = [edited(c) for c in p["comments"]]
+    monkeypatch.setattr(yk, "gh", lambda *a: f"{at(30)} {CAPTAIN}\n")
+    ok, why = yk.captain_approval(p)
+    assert not ok, why
+
+
+def test_r3_1b_picker_never_merges_on_an_edited_approve(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=GH_PATH, labels=("captain-approval", "captain-approved"),
+               comments=(approve_at_head("class: captain (release path)"),),
+               events=(("captain-approved", at(30), CAPTAIN),))
+    p["comments"] = [edited(c) for c in p["comments"]]
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+    assert "REVIEW EXTERNAL PR #1300" in out, out  # an edited approve isn't a verdict
+
+
+def test_r3_1b_edited_later_changes_does_not_revive_an_approve(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, comments=(approve_at_head(), f"reviewed-at-sha: {HEAD}\nverdict: changes"))
+    p["comments"][1] = edited(p["comments"][1])
+    assert yk.verdict_at_head(p) is None
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+
+
+def test_r3_1b_fleet_pr_edited_approve_is_not_a_verdict(yk, monkeypatch, capsys) -> None:
+    p = pr(1400, author=PEER, comments=[picker_verdict("a" * 40, "approve")])
+    p["comments"] = [edited(c) for c in p["comments"]]
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "REVIEW PR #1400" in out, out
+
+
+@needs_tools
+def test_r3_1b_gate_refuses_an_edited_approve_predating_the_label(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path)
+    comments = [{**base.verdict(sb.head_sha, "approve"), "edited": True}]
+    r = sb.run_ext(labels=("captain-approval", "captain-approved"), files=GH_PATH,
+                   comments=comments)
+    assert r.returncode != 0, _out(r)
+    assert sb.merge_calls() == [], sb.calls()
+
+
+@needs_tools
+@pytest.mark.parametrize("fork", [True, False])
+def test_r3_1b_gate_refuses_an_edited_approve(tmp_path: Path, fork: bool) -> None:
+    sb = ExtSandbox(tmp_path, fork=fork)
+    comments = [{**base.verdict(sb.head_sha, "approve"), "edited": True}]
+    r = sb.run_ext(comments=comments, assoc="CONTRIBUTOR" if fork else "MEMBER")
+    assert r.returncode != 0, _out(r)
+    assert "no approve verdict" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()
+
+
+@needs_tools
+def test_r3_1b_gate_edited_later_changes_does_not_revive_an_approve(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path, fork=False)
+    comments = [base.verdict(sb.head_sha, "approve"),
+                {**base.verdict(sb.head_sha, "changes"), "edited": True}]
+    r = sb.run_ext(comments=comments, assoc="MEMBER")
+    assert r.returncode != 0, _out(r)
+    assert sb.merge_calls() == [], sb.calls()
+
+
+@needs_tools
+def test_r3_1b_gate_unedited_approve_still_merges(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(comments=[{**base.verdict(sb.head_sha, "approve"), "edited": False}])
+    assert r.returncode == 0, _out(r)
+    assert len(sb.merge_calls()) == 1, sb.calls()

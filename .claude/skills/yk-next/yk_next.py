@@ -205,9 +205,12 @@ def gh_time(ts: str) -> datetime:
 
 
 def approved_at(pr: dict) -> str | None:
-    """When the latest member `approve` verdict at the PR's CURRENT head was posted."""
+    """When the latest member `approve` verdict at the PR's CURRENT head was posted. An
+    edited comment never counts (r3 R3-1b): editing keeps its createdAt, so an old approve
+    edited to name a new head would predate the Captain's label."""
     times = [c.get("createdAt") or "" for c in pr.get("comments") or []
              if c.get("authorAssociation", "MEMBER") in MEMBERS
+             and not c.get("includesCreatedEdit")
              and (m := VERDICT.fullmatch("\n".join(
                  line.removesuffix("\r") for line in (c.get("body") or "").split("\n")[:2])))
              and m.group(1) == pr["headRefOid"] and m.group(2) == "approve"]
@@ -429,7 +432,10 @@ def verdict_at_head(pr: dict) -> str | None:
     head (`fixed`, #987). Any other decisive comment (a stale, prefix, uppercase or
     malformed one) leaves the head unreviewed, as the gate refuses it. The gate's other
     check, that the reviewed sha is an ancestor of the head, needs git and is left to it.
-    (A comment without `authorAssociation`, as in tests, counts.)"""
+    An EDITED decisive comment (`includesCreatedEdit`, r3 R3-1b) is no verdict: it still
+    decides, as the latest, but leaves the head unreviewed, so editing a later `changes`
+    can't revive an earlier approve. (A comment without `authorAssociation`, as in tests,
+    counts; one without `includesCreatedEdit` is not edited.)"""
     head = pr["headRefOid"]
     reviewed: set[str] = set()
     found = None
@@ -439,10 +445,12 @@ def verdict_at_head(pr: dict) -> str | None:
             ("reviewed-at-sha:", "fixes-at-sha:")
         ):
             continue
+        found = None
+        if c.get("includesCreatedEdit"):
+            continue
         lines = [line.removesuffix("\r") for line in body.split("\n")[:2]]
         if lines[0].startswith("reviewed-at-sha: "):
             reviewed.add(lines[0].removeprefix("reviewed-at-sha: "))
-        found = None
         if m := VERDICT.fullmatch("\n".join(lines)):
             found = m.group(2) if m.group(1) == head else None
         elif (f := FIXES.fullmatch("\n".join(lines))) and (

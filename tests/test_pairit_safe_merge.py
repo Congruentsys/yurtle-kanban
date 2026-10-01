@@ -187,7 +187,7 @@ if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
             {"author": {"login": c.get("login", "reviewer")},
              "authorAssociation": c.get("association", "MEMBER"),
              "body": c["body"], "createdAt": "2026-09-24T00:00:%02dZ" % i,
-             "id": "IC_%d" % i, "includesEditsToPreviousComment": False,
+             "id": "IC_%d" % i, "includesCreatedEdit": c.get("edited", False),
              "isMinimized": False, "minimizedReason": "", "reactionGroups": [],
              "url": "https://example.invalid/c/%d" % i, "viewerDidAuthor": False}
             for i, c in enumerate(comments)
