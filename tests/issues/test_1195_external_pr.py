@@ -1074,6 +1074,17 @@ def test_n_c_association_is_read_once_per_author(yk, monkeypatch, capsys) -> Non
     assert len(assoc.calls) == 2, assoc.calls
     assert 1100 not in assoc.calls, assoc.calls
 
+
+# --------------------------------------------------------------------------- r2 N-d
+
+
+def test_n_d_skill_forbids_editing_a_verdict() -> None:
+    """approved_at() reads a verdict comment's createdAt: an edited old approve naming a new
+    sha would predate the Captain's label."""
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    assert ("Never edit a verdict comment; post a new one (approval timing reads the "
+            "comment's creation time).") in text
+
 # --------------------------------------------------------------------------- r1 N1: fidelity
 
 

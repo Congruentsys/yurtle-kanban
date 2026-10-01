@@ -119,6 +119,8 @@ The brief tells the reviewer to:
   then the findings with `file:line`. `class: captain` for exactly two things: a breaking change, or the
   release/CI/security path. Size and new features are routine: `class: routine`.
 
+Never edit a verdict comment; post a new one (approval timing reads the comment's creation time).
+
 A `reject` is the reviewer's recommendation in the findings (out of scope, a duplicate, or a design that
 conflicts with a ruling); the verdict line stays `changes`.
 
