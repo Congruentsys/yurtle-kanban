@@ -244,3 +244,19 @@ def test_4_skill_step_3_uses_the_one_command(yk) -> None:
     assert sec.index(yk.REVIEW_CMD) < sec.index(yk.POST_VERDICT_CMD)
     assert "gh pr comment <P> --body-file" not in sec, sec
     assert "@-mention" in sec and "60,000" in sec, sec
+
+
+# --------------------------------------------------------------------------- r1 B1: prose
+
+
+@pytest.mark.parametrize("prose", [
+    "- test_secret_shapes: tests/issues/test_1213_check_verdict.py::test_2 fails",
+    "tokenizer: src/yurtle_kanban/tokenizer_v2_module.py",
+    "mytoken = tests/issues/test_1213_check_verdict.py",
+    "secret_store: .claude/skills/yk-next/yk_next_v2.md",
+    "token = tests/test_yk_next_picker.py::test_picker_2_ready",
+])
+def test_r1_b1_identifiers_and_paths_are_prose(yk, prose) -> None:
+    """r1 B1: a name that merely CONTAINS secret/token (`test_secret_shapes`, `tokenizer`),
+    or a value that is a path (`a/b.py`, `x.py::test`), is review prose, not a credential."""
+    assert check(yk, prose) is None, (prose, check(yk, prose))
