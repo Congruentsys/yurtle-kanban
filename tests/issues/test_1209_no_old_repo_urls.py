@@ -8,9 +8,12 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 OLD = "hankh95" + "/yurtle-kanban"  # split so this file never matches itself
-NEEDLES = ("github.com/" + OLD, OLD + "/.github")
+# any form: https URL, `uses: OLD@v1` / `OLD/.github/…`, and `git@github.com:OLD` (r1)
+NEEDLES = (OLD,)
 
 
 def _is_history(path: str) -> bool:
@@ -18,6 +21,8 @@ def _is_history(path: str) -> bool:
 
 
 def test_no_live_file_names_the_old_repo() -> None:
+    if not (ROOT / ".git").exists():  # an unpacked sdist has no git index (r1)
+        pytest.skip("not a git checkout")
     files = (
         subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True)
         .stdout.decode()

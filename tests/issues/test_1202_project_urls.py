@@ -1,4 +1,4 @@
-"""Issue #1202: PyPI's project links named the old hankh95/yurtle-kanban repository.
+"""Issue #1202: PyPI's project links named the old repository under the hankh95 account.
 Every `[project.urls]` value names Congruentsys/yurtle-kanban, where the repo,
 releases and trusted publishing live."""
 
