@@ -1252,9 +1252,10 @@ def test_r3_1a_reviewer_cannot_comment(yk) -> None:
 
 def test_r3_1a_skill_commands_equal_the_pickers(yk) -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
-    for cmd in (yk.REVIEW_CMD, yk.CHECK_CMD, yk.POST_CMD):
+    # #1213: one command checks, then posts (`--post-verdict`), so the order is structural
+    for cmd in (yk.REVIEW_CMD, yk.POST_VERDICT_CMD):
         assert cmd in text, cmd
-    assert text.index(yk.REVIEW_CMD) < text.index(yk.CHECK_CMD) < text.index(yk.POST_CMD)
+    assert text.index(yk.REVIEW_CMD) < text.index(yk.POST_VERDICT_CMD)
     sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
     assert "can't post a file from elsewhere" not in sec, sec
     assert "keep no secrets in the checkout the reviewer runs in" in sec.lower(), sec
@@ -1264,11 +1265,10 @@ def test_r3_1a_skill_commands_equal_the_pickers(yk) -> None:
 def test_r3_1a_review_pick_runs_check_then_posts(yk, monkeypatch, capsys) -> None:
     out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300)], SPARE)
     review = yk.REVIEW_CMD
-    check = yk.CHECK_CMD.replace("<P>", "1300")
-    post = yk.POST_CMD.replace("<P>", "1300")
-    for cmd in (review, check, post):
+    post = yk.POST_VERDICT_CMD.replace("<P>", "1300")  # #1213: checks, then posts
+    for cmd in (review, post):
         assert cmd in out, (cmd, out)
-    assert out.index(review) < out.index(check) < out.index(post), out
+    assert out.index(review) < out.index(post), out
 
 
 def test_r3_1a_checker_accepts_a_valid_verdict(yk) -> None:
