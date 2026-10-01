@@ -147,8 +147,9 @@ Added/Changed → minor); **a major is the Captain's**. `skills/release/SKILL.md
   (`… Thanks @login (#<P>)`), and an existing one gains that credit; its section decides the bump;
 - it is reviewed by a distinct `claude -p` session (pairit step 3) and merged with
   `.claude/skills/pairit/safe_merge.sh`;
-- tag the merge commit, push the tag, `gh release create vX.Y.Z` with notes under GitHub's **125,000-char**
-  cap: the version's CHANGELOG section, or, if over, a short summary plus a link to `CHANGELOG.md` (#1191);
+- tag the merge commit, push the tag, then publish with notes from `scripts/release_notes.py X.Y.Z`
+  exactly as `skills/release/SKILL.md` step 8 does: it keeps them under GitHub's **125,000-char** cap and
+  exits 1 when it can't (#1191);
 - confirm `publish.yml` ran green and the version is on PyPI, then post the published note on each PR.
 
 `RELEASE NEEDS CAPTAIN` (a Removed or breaking fragment: a major) → open a chore issue labelled
