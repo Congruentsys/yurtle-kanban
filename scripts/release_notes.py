@@ -53,9 +53,12 @@ def _subsections(body: str) -> dict[str, list[str]]:
 
 
 def _anchor(heading: str) -> str:
-    """GitHub's anchor for a markdown heading: `## [3.0.0] - 2026-09-30` -> `300---2026-09-30`."""
+    """GitHub's anchor for a markdown heading: `## [3.0.0] - 2026-09-30` -> `300---2026-09-30`.
+
+    GitHub's rule: lowercase; drop anything but letters (any script), digits, spaces,
+    `_` and `-`; spaces become `-`."""
     title = heading.lstrip("#").strip().lower()
-    return re.sub(r"[^a-z0-9 -]", "", title).replace(" ", "-")
+    return re.sub(r"[^\w -]", "", title).replace(" ", "-")
 
 
 def release_notes(changelog_text: str, version: str, *, limit: int = LIMIT) -> str:
@@ -74,8 +77,9 @@ def release_notes(changelog_text: str, version: str, *, limit: int = LIMIT) -> s
     if breaking:
         parts.append("## Breaking changes\n\n" + "\n".join(breaking))
     for name in ("Removed", "Deprecated"):
-        if sections.get(name):
-            parts.append(f"## {name}\n\n" + "\n".join(sections[name]))
+        rest = [e for e in sections.get(name, []) if "**Breaking" not in e]  # listed above
+        if rest:
+            parts.append(f"## {name}\n\n" + "\n".join(rest))
     link = CHANGELOG_URL.format(version=version) + "#" + _anchor(heading)
     parts.append(f"Full changelog: [CHANGELOG.md, {version}]({link})")
     notes = "\n\n".join(parts)
