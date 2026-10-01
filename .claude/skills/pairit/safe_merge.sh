@@ -99,10 +99,11 @@ case $rc in
   *) echo "NOT MERGING #$PR: git merge-tree failed (exit $rc; needs git 2.38+)"; exit 1 ;;
 esac
 
-# pairit's rule: merge with an `approve` verdict at the CURRENT head, or, after ONE
-# review round, with the driver's fixes comment at the head (#987): its first lines are
-# `fixes-at-sha: <head>` / `for-review-at: <R>`, a verdict at R came before it, and R is
-# an ancestor of the head. The latest verdict or fixes comment decides; a later
+# pairit's rule: merge with an `approve` verdict at the CURRENT head, or with the driver's
+# fixes comment at the head for an APPROVE round's follow-ups (#987, #1228): its first lines
+# are `fixes-at-sha: <head>` / `for-review-at: <R>`, the latest unedited verdict at R came
+# before it and is `approve`, and R is an ancestor of the head. After `changes` (blocking
+# findings) a fixes comment carries nothing: the fixed head needs a fresh approve (#1228). The latest verdict or fixes comment decides; a later
 # `changes` overrides. Only the repo's own people count: on a public repo anyone can comment.
 # An EDITED decisive comment (includesCreatedEdit, #1195 r3) still decides but is no verdict:
 # editing keeps createdAt, so it never approves, nor names a reviewed sha (yk_next agrees, #991)
@@ -117,11 +118,14 @@ ok=""
 if [ "$verdict" = "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then
   ok=approve
 elif [ "${verdict%%$'\n'*}" = "fixes-at-sha: $head" ]; then
-  # R: the full 40-hex sha, with a verdict at exactly R before it, and a PROPER ancestor
-  # of the head: `changes` at the head itself is never "fixed" by a comment alone
+  # R: the full 40-hex sha, whose LATEST unedited verdict (before this comment) is
+  # `approve` (#1228), and a PROPER ancestor of the head: `changes` at the head itself is
+  # never "fixed" by a comment alone. Edited comments read "(edited: no verdict)", so they
+  # never name R
   r=$(printf '%s' "${verdict#*$'\n'}" | sed -n 's/^for-review-at: *\([0-9a-f]\{40\}\) *$/\1/p')
   if [ -n "$r" ] && [ "$r" != "$head" ] && printf '%s' "$decisive" | jq -e --arg r "$r" '
-      map(select(split("\n")[0] == "reviewed-at-sha: \($r)")) | length > 0' >/dev/null &&
+      map(select(split("\n")[0] == "reviewed-at-sha: \($r)")) | last
+      == "reviewed-at-sha: \($r)\nverdict: approve"' >/dev/null &&
     git merge-base --is-ancestor "$r" "$head" 2>/dev/null; then
     ok=fixed
   fi

@@ -8,7 +8,7 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
                  CI still running is WAIT. A PR that is a draft, or carries a hold label (on
                  itself or on the issue it fixes), is SKIPPED — that is how pairit parks a PR
                  whose finding needs a decision without wedging the loop. A head with the
-                 driver's fixes comment after ONE review round counts as reviewed (#987).
+                 driver's fixes comment for an approve round counts as reviewed (#987/#1228).
 2. EXTERNAL PR   an open PR by a non-member (#1195; .claude/skills/external-pr/SKILL.md):
                  MERGE EXTERNAL PR  approve at head + CI green + not escalated (or
                                     `captain-approved` by the Captain AFTER that verdict);
@@ -71,7 +71,8 @@ HOLD = {"needs-decision", "question", "wontfix", "duplicate", "invalid", "blocke
 # read exactly as safe_merge.sh reads them (#991): the first two lines of the body, a
 # trailing \r dropped, full lowercase 40-hex shas, nothing else on the line
 VERDICT = re.compile(r"reviewed-at-sha: ([0-9a-f]{40})\nverdict: (approve|changes)")
-# pairit's one review round (#987): the driver's comment after fixing a `changes` verdict's findings
+# the driver's comment after fixing an APPROVE round's follow-ups (#987); after `changes` it
+# carries nothing, and the fixed head needs a fresh approve (#1228)
 FIXES = re.compile(r"fixes-at-sha: ([0-9a-f]{40})\nfor-review-at: ([0-9a-f]{40})")
 MEMBERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 CI_FAILED = {"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
@@ -565,16 +566,18 @@ def verdict_at_head(pr: dict) -> str | None:
     """The PR head's verdict as safe_merge.sh judges it (#991), or None. Every member
     comment whose body starts `reviewed-at-sha:` or `fixes-at-sha:` is decisive, and the
     LATEST one decides: an `approve`/`changes` naming the head exactly, or the driver's
-    fixes comment at the head for an earlier `reviewed-at-sha:` line's sha that isn't the
-    head (`fixed`, #987). Any other decisive comment (a stale, prefix, uppercase or
-    malformed one) leaves the head unreviewed, as the gate refuses it. The gate's other
-    check, that the reviewed sha is an ancestor of the head, needs git and is left to it.
+    fixes comment at the head for an earlier sha R that isn't the head, whose latest
+    unedited `reviewed-at-sha: R` comment is an `approve` (`fixed`, #987; after `changes`
+    the fixed head needs a fresh approve, #1228). Any other decisive comment (a stale,
+    prefix, uppercase or malformed one) leaves the head unreviewed, as the gate refuses it.
+    The gate's other check, that the reviewed sha is an ancestor of the head, needs git and
+    is left to it.
     An EDITED decisive comment (`includesCreatedEdit`, r3 R3-1b) is no verdict: it still
     decides, as the latest, but leaves the head unreviewed, so editing a later `changes`
     can't revive an earlier approve. (A comment without `authorAssociation`, as in tests,
     counts; one without `includesCreatedEdit` is not edited.)"""
     head = pr["headRefOid"]
-    reviewed: set[str] = set()
+    reviewed: dict[str, str | None] = {}  # sha -> its latest verdict (None: malformed)
     found = None
     for c in pr.get("comments") or []:
         body = c.get("body") or ""
@@ -586,12 +589,13 @@ def verdict_at_head(pr: dict) -> str | None:
         if c.get("includesCreatedEdit"):
             continue
         lines = [line.removesuffix("\r") for line in body.split("\n")[:2]]
+        m = VERDICT.fullmatch("\n".join(lines))
         if lines[0].startswith("reviewed-at-sha: "):
-            reviewed.add(lines[0].removeprefix("reviewed-at-sha: "))
-        if m := VERDICT.fullmatch("\n".join(lines)):
+            reviewed[lines[0].removeprefix("reviewed-at-sha: ")] = m.group(2) if m else None
+        if m:
             found = m.group(2) if m.group(1) == head else None
         elif (f := FIXES.fullmatch("\n".join(lines))) and (
-            f.group(1) == head and f.group(2) != head and f.group(2) in reviewed
+            f.group(1) == head and f.group(2) != head and reviewed.get(f.group(2)) == "approve"
         ):
             found = "fixed"
     return found
