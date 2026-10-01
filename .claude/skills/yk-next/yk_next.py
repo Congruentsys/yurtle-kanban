@@ -86,8 +86,9 @@ PR_FIELDS = (
 # --- the external-PR process (#1195, Captain 2026-10-01) ---
 # The ONE definition: safe_merge.sh asks `yk_next.py --escalation <P>` rather than keep a copy.
 # The release/CI/security path, and whatever runs on fleet machines or in the release: an
-# external PR touching it (by its new OR its previous name) waits for the Captain.
-ESCALATE_DIRS = (".github/", ".claude/", ".kanban/", "scripts/", "skills/release/")
+# external PR touching it (by its new OR its previous name) waits for the Captain. All of
+# skills/ (r2 R2-2): `yurtle-kanban init` copies every skills/* dir into consumer repos.
+ESCALATE_DIRS = (".github/", ".claude/", ".kanban/", "scripts/", "skills/")
 ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py", "CLAUDE.md",
                   "AGENT-QUICK-REF.md"}
 CAPTAIN_APPROVAL = "captain-approval"  # escalated: the fleet sets it and waits

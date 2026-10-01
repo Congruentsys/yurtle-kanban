@@ -6,7 +6,7 @@ The fleet reviews, merges and releases it, within limits:
 
 - ESCALATED: label `captain-approval`, OR the latest member verdict carries a line
   `class: captain…`, OR the PR touches (new or previous name) `.github/**`, `.claude/**`,
-  `.kanban/**`, `scripts/**`, `skills/release/**`, `pyproject.toml`,
+  `.kanban/**`, `scripts/**`, `skills/**` (r2 R2-2), `pyproject.toml`,
   `src/yurtle_kanban/__init__.py`, `CLAUDE.md` or `AGENT-QUICK-REF.md` (r1 B2). An
   escalated PR waits for the Captain's `captain-approved`.
 - PROPOSED-REJECT: label `proposed-reject`; the picker skips it, the gate refuses it.
@@ -271,6 +271,8 @@ def test_b_escalated_waits_for_the_captain(yk, monkeypatch, capsys, why) -> None
     ".github/workflows/ci.yml", "skills/release/SKILL.md", "pyproject.toml",
     "src/yurtle_kanban/__init__.py", "scripts/check_release_version.py",
     ".claude/skills/pairit/safe_merge.sh",
+    # r2 R2-2: `yurtle-kanban init` copies EVERY skills/* dir into each consumer repo
+    "skills/status/SKILL.md", "skills/sync/SKILL.md", "skills/software/feature/SKILL.md",
 ])
 def test_b_every_escalation_path(yk, monkeypatch, capsys, path) -> None:
     p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
@@ -278,7 +280,7 @@ def test_b_every_escalation_path(yk, monkeypatch, capsys, path) -> None:
     assert "WAIT CAPTAIN #1300" in out, out
 
 
-@pytest.mark.parametrize("path", ["skills/other/SKILL.md", "src/yurtle_kanban/cli.py",
+@pytest.mark.parametrize("path", ["docs/skills/x.md", "src/yurtle_kanban/cli.py",
                                   "docs/github/x.md", "pyproject.toml.bak"])
 def test_c_near_miss_paths_are_routine(yk, monkeypatch, capsys, path) -> None:
     p = ext_pr(1300, files=(path,), comments=(approve_at_head(),))
@@ -875,6 +877,17 @@ def test_r2_1_reviewer_reads_files_and_renames_without_gh_api() -> None:
     sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
     assert "gh pr view <P> --json files" in sec, sec
     assert "rename" in sec.lower() and "diff header" in sec.lower(), sec
+
+
+# --------------------------------------------------------------------------- r2 R2-2
+
+
+def test_r2_2_all_of_skills_escalates(yk) -> None:
+    """`yurtle-kanban init` installs every skills/* dir into consumer repos' .claude/skills/."""
+    assert "skills/" in yk.ESCALATE_DIRS
+    assert "skills/release/" not in yk.ESCALATE_DIRS  # subsumed, not a narrower copy
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    assert "`skills/**`" in text and "`skills/release/**`" not in text
 
 # --------------------------------------------------------------------------- r1 N1: fidelity
 
