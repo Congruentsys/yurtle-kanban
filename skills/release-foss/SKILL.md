@@ -2,7 +2,7 @@
 name: release-foss
 description: Release a public (FOSS) repo — version bump, CHANGELOG, reviewed release PR, tag after merge, a public GitHub release with notes cut to fit, the registry publish confirmed live, and credit to external contributors
 disable-model-invocation: true
-allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Read, Edit, Write
+allowed-tools: Bash(git *), Bash(grep *), Bash(gh *), Bash(wc *), Bash(head *), Bash(sort *), Bash(tr *), Bash(paste *), Bash(pip index *), Bash(npm view *), Bash(cargo search *), Read, Edit, Write
 argument-hint: "[patch|minor|major] [--message 'Description']"
 ---
 
