@@ -828,7 +828,8 @@ def test_b1_gate_refuses_label_by_a_non_captain(tmp_path: Path) -> None:
 # review is read-only (an explicit tool allow-list, never --dangerously-skip-permissions);
 # tests run only in fork CI; everything in the PR is untrusted data.
 
-READ_ONLY_TOOLS = '"Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read(./**)"'
+# r3 R3-1a: no `gh pr comment` either; the driving session posts the checked verdict
+READ_ONLY_TOOLS = '"Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)"'
 
 
 def test_b3_review_pick_prints_a_read_only_reviewer(yk, monkeypatch, capsys) -> None:
@@ -1231,3 +1232,107 @@ def test_n7_gate_refuses_captain_approval_added_after_an_approve(tmp_path: Path)
     assert r.returncode != 0, _out(r)
     assert "label captain-approval" in _out(r) and "captain-approved" in _out(r), _out(r)
     assert sb.merge_calls() == [], sb.calls()
+
+
+# --------------------------------------------------------------------------- r3 R3-1a
+# Mini's round 3: `Bash(gh pr comment:*)` is a prefix rule. `--edit-last` rewrites the last
+# verdict keeping its createdAt (reopens B1), `--body-file <any path>` posts a file from
+# anywhere (gh reads it, not Read), `-R`/`--delete-last` reach other repos and comments. The
+# reviewer stops posting: it PRINTS its verdict; the driving session saves it to a file,
+# checks it (`yk_next.py --check-verdict <P> <file>`), then posts it with --body-file.
+
+GOOD_VERDICT = f"reviewed-at-sha: {HEAD}\nverdict: approve\nclass: routine\n\nfine, file.py:3\n"
+
+
+def test_r3_1a_reviewer_cannot_comment(yk) -> None:
+    assert "gh pr comment" not in yk.REVIEW_TOOLS, yk.REVIEW_TOOLS
+    assert yk.REVIEW_TOOLS == "Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)"
+
+
+def test_r3_1a_skill_commands_equal_the_pickers(yk) -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    for cmd in (yk.REVIEW_CMD, yk.CHECK_CMD, yk.POST_CMD):
+        assert cmd in text, cmd
+    assert text.index(yk.REVIEW_CMD) < text.index(yk.CHECK_CMD) < text.index(yk.POST_CMD)
+    sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
+    assert "can't post a file from elsewhere" not in sec, sec
+    assert "keep no secrets in the checkout the reviewer runs in" in sec.lower(), sec
+    assert "post ONE PR comment" not in sec, sec  # the reviewer prints; it never posts
+
+
+def test_r3_1a_review_pick_runs_check_then_posts(yk, monkeypatch, capsys) -> None:
+    out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300)], SPARE)
+    review = yk.REVIEW_CMD
+    check = yk.CHECK_CMD.replace("<P>", "1300")
+    post = yk.POST_CMD.replace("<P>", "1300")
+    for cmd in (review, check, post):
+        assert cmd in out, (cmd, out)
+    assert out.index(review) < out.index(check) < out.index(post), out
+
+
+def test_r3_1a_checker_accepts_a_valid_verdict(yk) -> None:
+    assert yk.check_verdict(GOOD_VERDICT, HEAD) is None
+    assert yk.check_verdict(GOOD_VERDICT.replace("approve", "changes"), HEAD) is None
+    assert yk.check_verdict(f"reviewed-at-sha: {HEAD}\r\nverdict: approve\r\n", HEAD) is None
+
+
+@pytest.mark.parametrize("body", [
+    f"reviewed-at-sha: {'b' * 40}\nverdict: approve\n",            # not the PR's head
+    f"reviewed-at-sha: {HEAD[:12]}\nverdict: approve\n",           # a prefix
+    f"\nreviewed-at-sha: {HEAD}\nverdict: approve\n",              # line 1 isn't it
+    f"Here is my review.\nreviewed-at-sha: {HEAD}\nverdict: approve\n",
+    "",
+])
+def test_r3_1a_checker_rejects_a_wrong_sha(yk, body) -> None:
+    assert yk.check_verdict(body, HEAD), body
+
+
+@pytest.mark.parametrize("line2", ["verdict: Approve", "verdict: approved", "verdict: reject",
+                                   "verdict: approve ", "class: routine", ""])
+def test_r3_1a_checker_rejects_a_bad_line_2(yk, line2) -> None:
+    assert yk.check_verdict(f"reviewed-at-sha: {HEAD}\n{line2}\nnotes\n", HEAD), line2
+
+
+@pytest.mark.parametrize("secret", [
+    "-----BEGIN OPENSSH PRIVATE KEY-----",
+    "ghp_" + "A1b2C3d4E5" * 4,
+    "gho_" + "A1b2C3d4E5" * 4,
+    "github_pat_11ABCDEFG0" + "x" * 40,
+    "AKIA" + "ABCDEFGHIJ234567",
+    "xoxb-1234-5678-abcdef",
+    "pypi-AgEIcHlwaS5vcmc" + "x" * 40,
+    "password = hunter2",
+    "PASSWORD: hunter2",
+])
+def test_r3_1a_checker_rejects_a_secret_shaped_body(yk, secret) -> None:
+    why = yk.check_verdict(f"{GOOD_VERDICT}\nsee: {secret}\n", HEAD)
+    assert why and "secret" in why, why
+
+
+@pytest.mark.parametrize("benign", ["uses pypa/gh-action-pypi-publish", "a password prompt",
+                                    "the AKIA prefix"])
+def test_r3_1a_checker_allows_benign_text(yk, benign) -> None:
+    assert yk.check_verdict(f"{GOOD_VERDICT}\n{benign}\n", HEAD) is None
+
+
+def test_r3_1a_check_verdict_cli(yk, monkeypatch, capsys, tmp_path) -> None:
+    """`--check-verdict <P> <file>` reads the PR's CURRENT head via gh: 0 ok, 1 + reason."""
+    calls = []
+
+    def fake_gh(*args: str) -> str:
+        calls.append(args)
+        assert args[:3] == ("pr", "view", "1300") and "headRefOid" in args, args
+        return HEAD + "\n"
+
+    monkeypatch.setattr(yk, "gh", fake_gh)
+    good, bad = tmp_path / "good.txt", tmp_path / "bad.txt"
+    good.write_text(GOOD_VERDICT)
+    bad.write_text(GOOD_VERDICT.replace(HEAD, "b" * 40))
+    monkeypatch.setattr(sys, "argv", ["x", "--check-verdict", "1300", str(good)])
+    yk.main()  # returns: exit 0
+    assert calls, "the head was not read"
+    monkeypatch.setattr(sys, "argv", ["x", "--check-verdict", "1300", str(bad)])
+    with pytest.raises(SystemExit) as e:
+        yk.main()
+    assert e.value.code == 1
+    assert "reviewed-at-sha" in capsys.readouterr().out
