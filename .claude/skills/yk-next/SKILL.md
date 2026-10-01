@@ -26,8 +26,9 @@ rule still applies. Outside yk-loop, use the plain picker.
    `changes-requested`, `ci-red`, `conflict`, `needs-review`, `ready-to-merge` or `wait-ci`. A draft,
    or a PR with a hold label on itself or on the issue it fixes, is **parked** (`SKIP`), never resumed.
    That's how pairit sets a PR aside when a finding needs a decision, without the loop getting stuck.
-   A head carrying the driver's `fixes-at-sha:` comment (pairit's one review round, #987) counts as
-   reviewed: it is `ready-to-merge` once CI is green, never `needs-review` again.
+   A head carrying the driver's `fixes-at-sha:` comment for an `approve` round (its follow-ups fixed,
+   #987/#1228) counts as reviewed: it is `ready-to-merge` once CI is green. After `changes` (blocking
+   findings) a fixes comment does not: the fixed head needs a fresh approve (#1228).
 2. **External PRs** (#1195; author not OWNER/MEMBER/COLLABORATOR) follow `.claude/skills/external-pr/SKILL.md`.
    `MERGE EXTERNAL PR #N`: approve at head, CI green, and not escalated, or `captain-approved` by the Captain
    after that approve verdict (a new head waits for him again).
@@ -61,7 +62,8 @@ rule still applies. Outside yk-loop, use the plain picker.
 **A verdict** is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
 `verdict: approve|changes`. It counts only at the PR's current head, so pushing a new commit resets it,
 except for the driver's fixes comment (`fixes-at-sha: <head>` / `for-review-at: <reviewed sha>`), which
-carries one round's review to its fixed tip (#987). The picker reads these exactly as `safe_merge.sh` does (#991): the full
+carries an `approve` round's review to its fixed tip (#987); after `changes` it carries nothing, and the
+fixed head needs a fresh approve (#1228). The picker reads these exactly as `safe_merge.sh` does (#991): the full
 lowercase sha, the latest decisive member comment deciding, so a late verdict of an old sha unreviews
 the head. One check stays the gate's alone: that a fixes comment's reviewed sha is an ancestor of the
 head (it needs git); a fixes comment naming an unrelated sha reads `ready-to-merge` and `safe_merge.sh` refuses it.
