@@ -73,7 +73,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install yurtle-kanban
-        run: pip install git+https://github.com/hankh95/yurtle-kanban.git
+        run: pip install git+https://github.com/Congruentsys/yurtle-kanban.git
 
       - name: Generate board markdown
         run: |
@@ -184,7 +184,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install yurtle-kanban
-        run: pip install git+https://github.com/hankh95/yurtle-kanban.git
+        run: pip install git+https://github.com/Congruentsys/yurtle-kanban.git
 
       - name: Generate board
         run: |
@@ -301,7 +301,7 @@ Preview the board without pushing:
 
 ```bash
 # Install
-pip install git+https://github.com/hankh95/yurtle-kanban.git
+pip install git+https://github.com/Congruentsys/yurtle-kanban.git
 
 # Terminal board
 yurtle-kanban board
