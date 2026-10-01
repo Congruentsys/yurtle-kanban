@@ -141,6 +141,9 @@ def test_4_references_algorithms_and_test_names_post(yk, prose) -> None:
     "password: sha256hunter2",               # not an algorithm name
     "test_password: Hunter2_secret",         # not an identifier
     "db_password: summer_2024",              # only test_… keys hold identifier values
+    "password=${DB_PW:-Hunter2secret}",      # r1: a shell default is a real password
+    "password: ${PGPASS}x9Kq2",              # r1: a reference with a value glued on
+    "password: Welcome.Home2024",            # r1: a dotted tail with digits
 ])
 def test_4_values_under_bare_or_env_keys_are_still_refused(yk, leak) -> None:
     refused(yk, leak)
@@ -202,3 +205,9 @@ def test_5_skill_step_3_passes_the_note_into_the_re_run(yk) -> None:
     text = SKILL.read_text()
     sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
     assert "RE-RUN NOTE" in sec and "brief" in sec[sec.index("RE-RUN NOTE"):], sec
+
+
+
+def test_r1_integer_index_is_code(yk) -> None:
+    """r1: `pw_hash[0]`-style indexing is review prose (it posted before #1220)."""
+    assert yk.check_verdict(GOOD + "password: pw_hash[0]\n", HEAD) is None
