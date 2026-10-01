@@ -566,10 +566,11 @@ def verdict_at_head(pr: dict) -> str | None:
     """The PR head's verdict as safe_merge.sh judges it (#991), or None. Every member
     comment whose body starts `reviewed-at-sha:` or `fixes-at-sha:` is decisive, and the
     LATEST one decides: an `approve`/`changes` naming the head exactly, or the driver's
-    fixes comment at the head for an earlier sha R that isn't the head, whose latest
-    unedited `reviewed-at-sha: R` comment is an `approve` (`fixed`, #987; after `changes`
-    the fixed head needs a fresh approve, #1228). Any other decisive comment (a stale,
-    prefix, uppercase or malformed one) leaves the head unreviewed, as the gate refuses it.
+    fixes comment at the head for a sha R when the last decisive comment before it (at any
+    sha, other fixes comments aside) is an unedited `approve` at R (`fixed`, #987); a
+    `changes` anywhere after that approve means a fresh approve at the head (#1228). Any
+    other decisive comment (a stale, prefix, uppercase or malformed one) leaves the head
+    unreviewed, as the gate refuses it.
     The gate's other check, that the reviewed sha is an ancestor of the head, needs git and
     is left to it.
     An EDITED decisive comment (`includesCreatedEdit`, r3 R3-1b) is no verdict: it still
@@ -577,7 +578,8 @@ def verdict_at_head(pr: dict) -> str | None:
     can't revive an earlier approve. (A comment without `authorAssociation`, as in tests,
     counts; one without `includesCreatedEdit` is not edited.)"""
     head = pr["headRefOid"]
-    reviewed: dict[str, str | None] = {}  # sha -> its latest verdict (None: malformed)
+    # the last decisive non-fixes comment as (sha, verdict); None: edited or malformed
+    last: tuple[str, str] | None = None
     found = None
     for c in pr.get("comments") or []:
         body = c.get("body") or ""
@@ -587,17 +589,17 @@ def verdict_at_head(pr: dict) -> str | None:
             continue
         found = None
         if c.get("includesCreatedEdit"):
+            last = None  # the gate reads it as "(edited: no verdict)", not a fixes comment
             continue
         lines = [line.removesuffix("\r") for line in body.split("\n")[:2]]
-        m = VERDICT.fullmatch("\n".join(lines))
-        if lines[0].startswith("reviewed-at-sha: "):
-            reviewed[lines[0].removeprefix("reviewed-at-sha: ")] = m.group(2) if m else None
-        if m:
+        if m := VERDICT.fullmatch("\n".join(lines)):
             found = m.group(2) if m.group(1) == head else None
-        elif (f := FIXES.fullmatch("\n".join(lines))) and (
-            f.group(1) == head and f.group(2) != head and reviewed.get(f.group(2)) == "approve"
-        ):
-            found = "fixed"
+            last = (m.group(1), m.group(2))
+        elif (f := FIXES.fullmatch("\n".join(lines))) and f.group(1) == head:
+            if last == (f.group(2), "approve"):
+                found = "fixed"
+        elif not body.startswith("fixes-at-sha:"):
+            last = None  # a malformed `reviewed-at-sha:` comment
     return found
 
 

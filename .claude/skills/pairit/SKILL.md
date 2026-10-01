@@ -22,10 +22,10 @@ pytest's `pythonpath = ["src"]` means a worktree's tests import that worktree's 
 0. BRANCH  a worktree + branch from origin/main
 1. TESTS   the test partner (a fresh Agent sub-agent) writes pytest tests from the issue → commit T, proven RED
 2. CODE    the driver writes code to GREEN without editing T's tests, adds a changelog.d/ fragment, runs the check
-3. REVIEW  push, open the PR, and a DISTINCT `claude -p` session posts a verdict comment (ONE round; findings
-           are fixed at once, no re-review)
-4. MERGE   approve at head, or the fixed tip of the one round, + CI green → `safe_merge.sh <P>`; the issue
-           closes through `Fixes #N`
+3. REVIEW  push, open the PR, and a DISTINCT reviewer session posts a verdict comment; after `changes`
+           (blocking findings) the fixes go back to it for a fresh approve at the fixed head (#1228)
+4. MERGE   approve at head, or an approve round's fixed tip (`fixes-at-sha:`), + CI green →
+           `safe_merge.sh <P>`; the issue closes through `Fixes #N`
 ```
 
 **0. Branch.** Use `fix/` for a bug, `feat/` for a feature and `chore/` for anything else.

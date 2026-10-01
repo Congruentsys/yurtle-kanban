@@ -8,7 +8,7 @@
 # SUCCESS or SKIPPED (no checks at all is not green either), unless origin/<branch>
 # is the PR head, the head merges cleanly with origin/main, and the latest
 # `reviewed-at-sha:` verdict is `approve` at that head (#186), or the head is the
-# fixed tip of one review round (#987). Only then does it
+# fixed tip of an approve round's follow-ups (#987, #1228). Only then does it
 # remove the PR's worktree (found by branch, wherever it lives) and merge, with
 # --match-head-commit so GitHub refuses if the head moved in between.
 #
@@ -101,9 +101,10 @@ esac
 
 # pairit's rule: merge with an `approve` verdict at the CURRENT head, or with the driver's
 # fixes comment at the head for an APPROVE round's follow-ups (#987, #1228): its first lines
-# are `fixes-at-sha: <head>` / `for-review-at: <R>`, the latest unedited verdict at R came
-# before it and is `approve`, and R is an ancestor of the head. After `changes` (blocking
-# findings) a fixes comment carries nothing: the fixed head needs a fresh approve (#1228). The latest verdict or fixes comment decides; a later
+# are `fixes-at-sha: <head>` / `for-review-at: <R>`, the last decisive comment before it (at
+# any sha, other fixes comments aside) is an unedited `approve` at R, and R is an ancestor of
+# the head. A `changes` anywhere after that approve (blocking findings) means the fixed head
+# needs a fresh approve (#1228). The latest verdict or fixes comment decides; a later
 # `changes` overrides. Only the repo's own people count: on a public repo anyone can comment.
 # An EDITED decisive comment (includesCreatedEdit, #1195 r3) still decides but is no verdict:
 # editing keeps createdAt, so it never approves, nor names a reviewed sha (yk_next agrees, #991)
@@ -118,13 +119,13 @@ ok=""
 if [ "$verdict" = "reviewed-at-sha: $head"$'\n'"verdict: approve" ]; then
   ok=approve
 elif [ "${verdict%%$'\n'*}" = "fixes-at-sha: $head" ]; then
-  # R: the full 40-hex sha, whose LATEST unedited verdict (before this comment) is
-  # `approve` (#1228), and a PROPER ancestor of the head: `changes` at the head itself is
-  # never "fixed" by a comment alone. Edited comments read "(edited: no verdict)", so they
-  # never name R
-  r=$(printf '%s' "${verdict#*$'\n'}" | sed -n 's/^for-review-at: *\([0-9a-f]\{40\}\) *$/\1/p')
-  if [ -n "$r" ] && [ "$r" != "$head" ] && printf '%s' "$decisive" | jq -e --arg r "$r" '
-      map(select(split("\n")[0] == "reviewed-at-sha: \($r)")) | last
+  # R: exactly `for-review-at: <full 40-hex sha>`, as the picker reads it (#1228 r1 B2), and
+  # the LAST decisive comment before this one, fixes comments aside, is an approve at R: a
+  # `changes` at any sha after it, or an edited or malformed comment ("(edited: no
+  # verdict)"), refuses (#1228 r1 B1)
+  r=$(printf '%s' "${verdict#*$'\n'}" | sed -n 's/^for-review-at: \([0-9a-f]\{40\}\)$/\1/p')
+  if [ -n "$r" ] && printf '%s' "$decisive" | jq -e --arg r "$r" '
+      .[0:-1] | map(select(startswith("fixes-at-sha:") | not)) | last
       == "reviewed-at-sha: \($r)\nverdict: approve"' >/dev/null &&
     git merge-base --is-ancestor "$r" "$head" 2>/dev/null; then
     ok=fixed
