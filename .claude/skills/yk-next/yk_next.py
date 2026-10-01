@@ -177,10 +177,10 @@ PASSWORD_PROSE = re.compile(
     r"\$[A-Z_][A-Z0-9_]*|\$\{.*"
     r"|(?i:pbkdf2(?:_sha(?:1|256|512))?|argon2(?:id|i|d)?|bcrypt(?:_sha256)?|scrypt"
     r"|sha(?:1|224|256|384|512)|md5)")
-# a longer lower-case key (`test_password`, `test_reset_password`) is code, so its value may be
-# an identifier (CODE_VALUE) as in the generic rule; a bare `password` or an upper-case env key
-# (`DB_PASSWORD`) still takes a `<placeholder>` only (#1220)
-PASSWORD_CODE_KEY = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*_pass(?:word|wd)")
+# a test's key (`test_password`, `test_reset_password`) is code, so its value may be an
+# identifier (CODE_VALUE) as in the generic rule; any other key (`password`, `db_password`,
+# `DB_PASSWORD`) still takes a `<placeholder>` only: refusing beats leaking (#1220)
+PASSWORD_CODE_KEY = re.compile(r"test_(?:[a-z0-9]+_)*pass(?:word|wd)")
 CODE_FENCE = re.compile(r"(?ms)^ {0,3}(`{3,}|~{3,}).*?(?:^ {0,3}\1[`~]*[ \t]*$|\Z)")
 # a code span never crosses a blank line: GitHub ends it at the paragraph break (r1)
 CODE_SPAN = re.compile(r"(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)", re.S)
