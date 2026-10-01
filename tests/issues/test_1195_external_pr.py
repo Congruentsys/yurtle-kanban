@@ -98,12 +98,17 @@ def run_picker(
     assoc: dict[int, str] | None = None,
     merged_prs: list[dict] = (),
     tags: str = "v3.0.0\nv2.2.0\n",
+    tags_merged: str | None = None,
     merges_since_tag: tuple[str, ...] = (),
+    log_since_tag: tuple[tuple[str, str, bool], ...] | None = None,
     fragments: dict[str, str] | None = None,
 ) -> str:
     """Run the picker in --dry-run with gh AND git stubbed; nothing touches a network."""
     assoc = assoc or {}
     fragments = fragments or {}
+    if log_since_tag is None:  # (sha, subject, is a merge commit)
+        log_since_tag = tuple((sha, "Merge pull request #1 from someone/branch", True)
+                              for sha in merges_since_tag)
 
     def fake_gh(*args: str) -> str:
         if args[:2] == ("api", "user"):
@@ -152,9 +157,13 @@ def run_picker(
         if args[0] == "fetch":
             return ""
         if args[0] == "tag":
-            return tags
+            # `--merged origin/main`: only the tags on main (a tag off main is not)
+            return tags_merged if "--merged" in args and tags_merged is not None else tags
         if args[0] == "log":
-            return "".join(f"{s}\n" for s in merges_since_tag)
+            rows = [r for r in log_since_tag if r[2] or "--merges" not in args]
+            with_subject = any("%s" in a for a in args)
+            return "".join(f"{sha} {subj}\n" if with_subject else f"{sha}\n"
+                           for sha, subj, _ in rows)
         if args[0] == "ls-tree":
             return "changelog.d/README.md\n" + "".join(f"changelog.d/{n}\n" for n in fragments)
         if args[0] == "show":
@@ -837,3 +846,31 @@ def test_n1_class_captain_names_only_the_two_criteria() -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
     assert "anything else that needs the Captain" not in text
     assert "size and new features are routine" in text.lower()
+
+
+# --------------------------------------------------------------------------- r1 N3: RELEASE DUE
+# Mini's review of #1196: a squash- or rebase-merged external PR counts (no `--merges`), and
+# the latest tag is the latest one MERGED into main (`git tag --merged origin/main`).
+
+SQUASH = "f" * 40
+FIX = {"1192.md": "<!-- section: Fixed -->\n- a fix (#1192)\n"}
+
+
+@pytest.mark.parametrize("oid,subject", [
+    (SQUASH, "fix: release version check (#1193)"),  # the squash commit is the merge commit
+    ("9" * 40, "fix: release version check (#1193)"),  # rebase-merged: found by its number
+], ids=["squash-by-oid", "by-pr-number"])
+def test_n3_squash_merged_external_pr_is_released(yk, monkeypatch, capsys, oid, subject) -> None:
+    out = _release(yk, monkeypatch, capsys, FIX, merged_prs=[merged(1193, SQUASH)],
+                   log_since_tag=((oid, subject, False),))
+    assert "RELEASE DUE" in out, out
+    assert "#1193" in out, out
+
+
+def test_n3_a_tag_off_main_is_ignored(yk, monkeypatch, capsys) -> None:
+    """v3.1.0 exists but isn't on main: the release follows v3.0.0, the tag on main."""
+    out = _release(yk, monkeypatch, capsys, FIX, tags="v3.1.0\nv3.0.0\n",
+                   tags_merged="v3.0.0\n")
+    assert "RELEASE DUE" in out, out
+    assert "v3.0.1" in out, out
+    assert "v3.1.1" not in out, out

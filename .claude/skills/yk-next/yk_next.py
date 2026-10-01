@@ -22,7 +22,8 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
                  closes it), a draft or held one, CI pending or red, a conflict.
 3. REVIEW PR     another FLEET author's open PR with no verdict (or fixes comment) at its
                  head sha (reviewer != author). Review only: its author merges it.
-4. RELEASE DUE   an external PR merged since the latest `v*` tag and no open PR titled
+4. RELEASE DUE   an external PR merged (merge, squash or rebase) since the latest `v*` tag
+                 on main, and no open PR titled
                  `chore: release v…`: patch if the unreleased changelog.d fragments are only
                  Fixed/Security, minor if any Added/Changed/Deprecated. A Removed or
                  breaking fragment prints RELEASE NEEDS CAPTAIN instead and picks nothing.
@@ -98,6 +99,8 @@ CAPTAINS = frozenset({"hankh95"})
 PROPOSED_REJECT = "proposed-reject"    # the fleet proposes; only the Captain closes
 CLASS_CAPTAIN = re.compile(r"(?m)^class: captain")  # the reviewer's third verdict line
 RELEASE_TITLE = "chore: release v"
+# a PR's number in a commit subject on main: "Merge pull request #N from …" or "title (#N)"
+PR_IN_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)$")
 # An external PR's review is READ-ONLY (r1 B3): no checkout, no pytest/ruff/pip of the fork's
 # tree on a fleet machine, never --dangerously-skip-permissions. Its tests run in fork CI.
 REVIEW_TOOLS = ("Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh api:*),"
@@ -258,7 +261,8 @@ def release_bump(texts: dict[str, str]) -> tuple[str, str]:
 
 
 def latest_tag() -> str | None:
-    tags = git("tag", "-l", "v*", "--sort=-v:refname").split()
+    """The highest `v*` tag MERGED into origin/main: a tag off main is not a release of it."""
+    tags = git("tag", "--merged", "origin/main", "-l", "v*", "--sort=-v:refname").split()
     return tags[0] if tags else None
 
 
@@ -312,9 +316,16 @@ def release_due(prs: list[dict]) -> bool:
     tag = latest_tag()
     if not tag:
         return False
-    since = set(git("log", "--merges", "--format=%H", f"{tag}..origin/main").split())
+    # every commit since the tag, not just merge commits: a squash merge is a plain commit
+    # (its sha is the PR's mergeCommit), and a rebase-merged PR is found by its number
+    shas, nums = set(), set()
+    for line in git("log", "--format=%H %s", f"{tag}..origin/main").splitlines():
+        sha, _, subject = line.partition(" ")
+        shas.add(sha)
+        nums.update(int(a or b) for a, b in PR_IN_SUBJECT.findall(subject))
     ext = [m for m in forks
-           if m["mergeCommit"]["oid"] in since and association(m["number"]) not in MEMBERS]
+           if (m["mergeCommit"]["oid"] in shas or m["number"] in nums)
+           and association(m["number"]) not in MEMBERS]
     if not ext:
         return False
     names = ", ".join(f"#{m['number']} by {m['author']['login']}" for m in ext)

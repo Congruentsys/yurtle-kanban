@@ -38,7 +38,7 @@ rule still applies. Outside yk-loop, use the plain picker.
    Only the Captain adds `captain-approved`; the fleet never does.
 3. **Review the fleet's work.** Next is another FLEET author's open PR with no verdict at its current head.
    You may review it, because reviewer ≠ author. The author merges it, not you.
-4. **Release.** An external PR merged since the latest `v*` tag, and no open `chore: release v…` PR:
+4. **Release.** An external PR merged (merge, squash or rebase) since the latest `v*` tag on main, and no open `chore: release v…` PR:
    `RELEASE DUE — patch|minor` from the unreleased `changelog.d/` fragments (Fixed/Security only → patch,
    any Added/Changed → minor). A Removed or breaking fragment prints `RELEASE NEEDS CAPTAIN` and picks
    nothing: a major is the Captain's.
