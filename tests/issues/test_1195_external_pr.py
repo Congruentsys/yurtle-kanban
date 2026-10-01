@@ -5,9 +5,10 @@ An EXTERNAL PR is one whose author's association is not OWNER/MEMBER/COLLABORATO
 The fleet reviews, merges and releases it, within limits:
 
 - ESCALATED: label `captain-approval`, OR the latest member verdict carries a line
-  `class: captain…`, OR the PR touches `.github/**`, `skills/release/**`,
-  `pyproject.toml`, `src/yurtle_kanban/__init__.py`, `scripts/check_release_version.py`
-  or `.claude/skills/**`. An escalated PR waits for the Captain's `captain-approved`.
+  `class: captain…`, OR the PR touches (new or previous name) `.github/**`, `.claude/**`,
+  `.kanban/**`, `scripts/**`, `skills/release/**`, `pyproject.toml`,
+  `src/yurtle_kanban/__init__.py`, `CLAUDE.md` or `AGENT-QUICK-REF.md` (r1 B2). An
+  escalated PR waits for the Captain's `captain-approved`.
 - PROPOSED-REJECT: label `proposed-reject`; the picker skips it, the gate refuses it.
 
 Picker (`yk_next.py`), after RESUME PR: REVIEW EXTERNAL PR (no verdict at head),
@@ -43,15 +44,25 @@ OLD_MERGE = "e" * 40  # a merge commit before the tag
 # --------------------------------------------------------------------------- picker harness
 
 
-def ext_pr(number: int, *, files: tuple[str, ...] = ("src/yurtle_kanban/board.py",),
+def rest_file(f: str | tuple[str, str]) -> dict:
+    """A REST `pulls/<P>/files` entry; `(new, old)` is a rename from `old`."""
+    if isinstance(f, tuple):
+        return {"filename": f[0], "previous_filename": f[1], "status": "renamed"}
+    return {"filename": f, "status": "modified"}
+
+
+def ext_pr(number: int, *, files: tuple = ("src/yurtle_kanban/board.py",),
            labels: tuple[str, ...] = (), comments: tuple[str, ...] = (),
            checks: list | None = None, author: str = EXT) -> dict:
     p = pr(number, author=author, labels=labels, head=HEAD, checks=checks,
            comments=list(comments))
     p["title"] = f"fix: an outside contribution {number}"
     p["isCrossRepository"] = True
-    p["files"] = [{"path": f, "additions": 1, "deletions": 0} for f in files]
+    # what `gh pr list --json files` shows: the NEW path only, at most 100 (#1195 B2)
+    p["files"] = [{"path": rest_file(f)["filename"], "additions": 1, "deletions": 0}
+                  for f in files][:100]
     p["changedFiles"] = len(files)
+    p["_rest_files"] = [rest_file(f) for f in files]  # what REST serves (the picker's source)
     return p
 
 
@@ -85,6 +96,14 @@ def run_picker(
         if args and args[0] == "api" and any("actions/runs" in a for a in args):
             assert any("status=action_required" in a and HEAD in a for a in args), args
             return "777\n"  # the fork run waiting for approval
+        files_arg = next((re.search(r"pulls/(\d+)/files$", a) for a in args
+                          if re.search(r"pulls/(\d+)/files$", a)), None)
+        if args and args[0] == "api" and files_arg:
+            assert "--paginate" in args, args  # REST lifts the 100-file cap only paginated
+            known = {p["number"]: p for p in prs}
+            rows = known[int(files_arg.group(1))].get("_rest_files", [])
+            return "".join(f"{r['filename']}\n" + (f"{r['previous_filename']}\n"
+                           if r.get("previous_filename") else "") for r in rows)
         if args and args[0] == "api":
             m = next((re.search(r"pulls/(\d+)$", a) for a in args if re.search(r"pulls/(\d+)$", a)),
                      None)
@@ -395,7 +414,7 @@ if args[:2] == ["pr", "view"]:
         ],
         "labels": [{"name": n} for n in json.loads(os.environ.get("STUB_EXT_LABELS", "[]"))],
         "files": [{"path": p, "additions": 1, "deletions": 0} for p in files],
-        "changedFiles": len(files),
+        "changedFiles": int(os.environ.get("STUB_EXT_CHANGED", len(files))),
         "isCrossRepository": os.environ.get("STUB_EXT_CROSS") == "1",
     }
     want = (opt("--json") or "").split(",")
@@ -426,17 +445,21 @@ class ExtSandbox(base.Sandbox):
             # GitHub keeps a fork PR's head at refs/pull/<N>/head on the base repo
             base._git(self.worktree, "push", "-q", "origin", f"HEAD:refs/pull/{base.PR}/head")
 
-    def run_ext(self, *, labels: tuple[str, ...] = (), files: tuple[str, ...] = ("feature.txt",),
+    def run_ext(self, *, labels: tuple[str, ...] = (), files: tuple = ("feature.txt",),
                 assoc: str = "CONTRIBUTOR", comments: list[dict] | None = None):
+        rows = [rest_file(f) for f in files]
         return self.run(
             base.GREEN, comments,
             # a fork's branch is not on origin
             branch="panda/feature" if self.fork else base.BRANCH,
             extra_env={
                 "STUB_EXT_LABELS": json.dumps(list(labels)),
-                "STUB_EXT_FILES": json.dumps(list(files)),
+                # `pr view --json files`: the new path only, at most 100
+                "STUB_EXT_FILES": json.dumps([r["filename"] for r in rows][:100]),
+                "STUB_GH_FILES": json.dumps(rows),  # REST, paginated: every file, renames
                 "STUB_EXT_CROSS": "1" if self.fork else "0",
                 "STUB_EXT_ASSOC": assoc,
+                "STUB_EXT_CHANGED": str(len(rows)),
             },
         )
 
@@ -587,3 +610,71 @@ def test_skill_thanks_the_submitter() -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
     assert "Thanks @" in text
     assert "Captain makes the final call" in text
+
+
+# --------------------------------------------------------------------------- r1 B2: paths
+# Mini's review of #1196: files come from REST `pulls/<P>/files` (paginated), both the
+# new and the previous name count, size never escalates, and the list covers every path
+# that runs on fleet machines or in the release. ONE definition: the gate asks yk_next.py.
+
+NEW_PATHS = [".claude/settings.json", ".kanban/hooks/kanban-hooks.yurtle.md",
+             "scripts/assemble_changelog.py", "CLAUDE.md", "AGENT-QUICK-REF.md"]
+RENAMED_OUT = ("docs/old-publish.yml", ".github/workflows/publish.yml")
+
+
+@pytest.mark.parametrize("path", NEW_PATHS)
+def test_b2_new_paths_escalate(yk, monkeypatch, capsys, path) -> None:
+    p = ext_pr(1300, files=("tests/test_x.py", path), comments=(approve_at_head(),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN #1300" in out, out
+    assert "MERGE EXTERNAL PR #1300" not in out, out
+
+
+def test_b2_rename_out_of_github_escalates(yk, monkeypatch, capsys) -> None:
+    p = ext_pr(1300, files=(RENAMED_OUT,), comments=(approve_at_head(),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "WAIT CAPTAIN #1300" in out, out
+    assert ".github/workflows/publish.yml" in out, out
+
+
+def test_b2_size_alone_does_not_escalate(yk, monkeypatch, capsys) -> None:
+    """150 routine files: `gh pr list` lists 100, REST all; the Captain chose not to
+    escalate on size."""
+    files = tuple(f"src/yurtle_kanban/m{i}.py" for i in range(150))
+    p = ext_pr(1300, files=files, comments=(approve_at_head(),))
+    out = run_picker(yk, monkeypatch, capsys, [p], SPARE)
+    assert "MERGE EXTERNAL PR #1300" in out, out
+
+
+def test_b2_escalation_paths_have_one_definition(yk) -> None:
+    """The gate holds no copy of the path list: it asks yk_next.py --escalation."""
+    gate = base.SCRIPT.read_text()
+    assert "--escalation" in gate and "yk_next.py" in gate, "the gate doesn't ask yk_next.py"
+    for d in [*yk.ESCALATE_DIRS, *yk.ESCALATE_FILES]:
+        assert f'"{d}"' not in gate, f"safe_merge.sh keeps its own copy of {d}"
+    assert "changedFiles" not in gate
+
+
+def test_b2_skill_names_every_escalation_path(yk) -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    for d in [*yk.ESCALATE_DIRS, *yk.ESCALATE_FILES]:
+        assert f"`{d}" in text, d
+
+
+@needs_tools
+@pytest.mark.parametrize("files", [(RENAMED_OUT,), *[(p,) for p in NEW_PATHS]],
+                         ids=["rename-out-of-github", *NEW_PATHS])
+def test_b2_gate_refuses_new_paths_and_renames(tmp_path: Path, files: tuple) -> None:
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(files=files)
+    assert r.returncode != 0, _out(r)
+    assert "captain-approved" in _out(r), _out(r)
+    assert sb.merge_calls() == [], sb.calls()
+
+
+@needs_tools
+def test_b2_gate_does_not_escalate_on_size(tmp_path: Path) -> None:
+    sb = ExtSandbox(tmp_path)
+    r = sb.run_ext(files=tuple(f"src/m{i}.py" for i in range(150)))
+    assert r.returncode == 0, _out(r)
+    assert len(sb.merge_calls()) == 1, sb.calls()

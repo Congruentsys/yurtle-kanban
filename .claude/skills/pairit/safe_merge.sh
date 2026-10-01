@@ -12,9 +12,10 @@
 # remove the PR's worktree (found by branch, wherever it lives) and merge, with
 # --match-head-commit so GitHub refuses if the head moved in between.
 #
-# The external-PR process (#1195, .claude/skills/external-pr/SKILL.md) adds two refusals,
-# defined as yk_next.py defines them: a `proposed-reject` PR (only the Captain closes it),
-# and an EXTERNAL PR that is ESCALATED without the Captain's `captain-approved` label.
+# The external-PR process (#1195, .claude/skills/external-pr/SKILL.md) adds two refusals:
+# a `proposed-reject` PR (only the Captain closes it), and an EXTERNAL PR that is ESCALATED
+# without the Captain's `captain-approved` label. "External" and "escalated" have ONE
+# definition, in yk_next.py: the gate asks `yk_next.py --escalation <PR>` and keeps no copy.
 # A fork PR's head is read from refs/pull/<PR>/head, and its branch is never deleted.
 #
 # Usage (from the main checkout):  bash .claude/skills/pairit/safe_merge.sh <PR>
@@ -25,7 +26,7 @@ PR=${1:?usage: safe_merge.sh <PR>}
 # the checks; every later check and the merge itself are tied to that head
 # (--match-head-commit), so a commit pushed meanwhile can't be merged unchecked or
 # unreviewed (#186)
-pr=$(gh pr view "$PR" --json headRefName,headRefOid,comments,labels,files,changedFiles,isCrossRepository) || {
+pr=$(gh pr view "$PR" --json headRefName,headRefOid,comments,labels,isCrossRepository) || {
   echo "NOT MERGING #$PR: could not read the PR"; exit 1; }
 branch=$(printf '%s' "$pr" | jq -r '.headRefName // ""')
 head=$(printf '%s' "$pr" | jq -r '.headRefOid // ""')
@@ -38,36 +39,19 @@ if has_label proposed-reject; then
 fi
 fork=$(printf '%s' "$pr" | jq -r '.isCrossRepository // false')
 if [ "$fork" = true ]; then
-  # EXTERNAL: the author is not OWNER/MEMBER/COLLABORATOR. Only a fork can carry such a
-  # PR (a non-member can't push a branch here), so it is read for forks only
-  assoc=$(gh api "repos/{owner}/{repo}/pulls/$PR" --jq .author_association) || {
-    echo "NOT MERGING #$PR: could not read its author's association"; exit 1; }
-  case $assoc in
-    OWNER|MEMBER|COLLABORATOR) ;;
-    *)
-      # ESCALATED: the label, a `class: captain` line in the latest member verdict, or
-      # the release/CI/security path (yk_next.py's ESCALATE_*)
-      why=$(printf '%s' "$pr" | jq -r '[
-        (if any(.labels[]?; .name == "captain-approval") then "label captain-approval"
-         else empty end),
-        ([.comments[]? | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER"
-            or .authorAssociation == "COLLABORATOR") | .body
-          | select(startswith("reviewed-at-sha:"))] | last // ""
-          | if split("\n") | map(sub("\r$"; "")) | any(startswith("class: captain"))
-            then "verdict class: captain" else empty end),
-        ([.files[]?.path | select(startswith(".github/") or startswith("skills/release/")
-            or startswith(".claude/skills/") or . == "pyproject.toml"
-            or . == "src/yurtle_kanban/__init__.py" or . == "scripts/check_release_version.py")]
-          | if length > 0 then "touches " + join(", ") else empty end),
-        (if (.changedFiles // 0) > ([.files[]?] | length)
-         then "more changed files than listed" else empty end)
-      ] | join("; ")') || { echo "NOT MERGING #$PR: could not parse the PR"; exit 1; }
-      if [ -n "$why" ] && ! has_label captain-approved; then
-        echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not labelled"\
-          "captain-approved (only the Captain adds it)"
-        exit 1
-      fi ;;
-  esac
+  # EXTERNAL and ESCALATED as yk_next.py defines them (files from REST, renames included);
+  # the PR JSON read above goes in, so the verdict is about the head pinned here
+  yk_next="$(dirname "$0")/../yk-next/yk_next.py"
+  esc=$(printf '%s' "$pr" | python3 "$yk_next" --escalation "$PR" --pr-json -) || {
+    echo "NOT MERGING #$PR: could not read its escalation (yk_next.py --escalation)"; exit 1; }
+  external=$(printf '%s' "$esc" | jq -r '.external') || {
+    echo "NOT MERGING #$PR: could not parse its escalation"; exit 1; }
+  why=$(printf '%s' "$esc" | jq -r '.why | join("; ")')
+  if [ "$external" = true ] && [ -n "$why" ] && ! has_label captain-approved; then
+    echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not labelled"\
+      "captain-approved (only the Captain adds it)"
+    exit 1
+  fi
 fi
 
 gh pr checks "$PR" --watch >/dev/null 2>&1   # wait only; its exit code decides nothing

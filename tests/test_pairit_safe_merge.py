@@ -49,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 
 STUB_GH = r'''#!__PYTHON__
 """Stub `gh` for #167 tests. Logs every call as one JSON line; never touches a network."""
-import json, os, shutil, subprocess, sys
+import json, os, re, shutil, subprocess, sys
 
 args = sys.argv[1:]
 log = os.environ["STUB_GH_LOG"]
@@ -210,6 +210,12 @@ if args and args[0] == "api" and any("/comments" in a for a in args):
          "html_url": "https://example.invalid/c/%d" % i}
         for i, c in enumerate(comments)
     ])
+    sys.exit(0)
+
+if args and args[0] == "api" and any(re.search(r"/pulls/\d+/files$", a) for a in args):
+    # #1195: REST `pulls/<P>/files` (paginated), which names a rename's previous_filename
+    record()
+    emit(json.loads(os.environ.get("STUB_GH_FILES", '[{"filename": "feature.txt"}]')))
     sys.exit(0)
 
 record({"unsupported": True})

@@ -17,12 +17,16 @@ within these limits:
 - **Publish** right after each external merge: Fixed → patch, Added/Changed → minor. **Never cut a major**;
   it waits for the Captain.
 
-The definitions live in `.claude/skills/yk-next/yk_next.py` and `safe_merge.sh` applies the same ones:
+The definitions live ONCE, in `.claude/skills/yk-next/yk_next.py`; `safe_merge.sh` asks it
+(`yk_next.py --escalation <P>`) and keeps no copy:
 - **external**: `gh api repos/{owner}/{repo}/pulls/<P> --jq .author_association` is not OWNER, MEMBER or
   COLLABORATOR.
 - **escalated**: label `captain-approval`, OR the latest member verdict has a line `class: captain…`, OR the
-  PR touches `.github/**`, `skills/release/**`, `.claude/skills/**`, `pyproject.toml`,
-  `src/yurtle_kanban/__init__.py` or `scripts/check_release_version.py`.
+  PR touches, by its new or its previous name (`gh api --paginate repos/{owner}/{repo}/pulls/<P>/files`:
+  `filename` and `previous_filename`), any of `.github/**`, `.claude/**`, `.kanban/**`, `scripts/**`,
+  `skills/release/**`, `pyproject.toml`, `src/yurtle_kanban/__init__.py`, `CLAUDE.md` or
+  `AGENT-QUICK-REF.md`: the release/CI/security path and whatever runs on fleet machines. Size never
+  escalates.
 
 ```text
 1. TRIAGE   external? escalated, and why? (the picker prints both)
@@ -50,8 +54,9 @@ command, a missing fragment and the post-publish notes. Run them as printed.
 
 **1. Triage.**
 ```bash
-gh pr view <P> --json number,title,author,labels,files,changedFiles,headRefOid,isCrossRepository,body
+gh pr view <P> --json number,title,author,labels,headRefOid,isCrossRepository,body
 gh api repos/{owner}/{repo}/pulls/<P> --jq .author_association
+gh api --paginate repos/{owner}/{repo}/pulls/<P>/files --jq '.[] | .filename, (.previous_filename // empty)'
 gh pr diff <P>
 ```
 Note which escalation rule applies, if any. A PR labelled `proposed-reject` is the Captain's: skip it.

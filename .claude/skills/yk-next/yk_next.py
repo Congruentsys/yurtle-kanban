@@ -37,8 +37,9 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
 
 An EXTERNAL PR's author association is not OWNER/MEMBER/COLLABORATOR. It is ESCALATED
 (waits for the Captain) when labelled `captain-approval`, when the latest member verdict has
-a line `class: captain…`, or when it touches the release/CI/security path (ESCALATE_*).
-safe_merge.sh applies the same definitions as its gate.
+a line `class: captain…`, or when it touches the release/CI/security path (ESCALATE_*, by
+its new or previous name, from REST `pulls/<P>/files`). safe_merge.sh's gate asks
+`yk_next.py --escalation <P>`, so these definitions exist once.
 
 A review verdict is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
 `verdict: approve|changes` (pairit step 3). It only counts at the PR's CURRENT head.
@@ -77,14 +78,16 @@ DEPENDS = re.compile(
 )
 PR_FIELDS = (
     "number,title,author,labels,headRefName,headRefOid,isDraft,mergeable,"
-    "statusCheckRollup,comments,closingIssuesReferences,isCrossRepository,files,changedFiles"
+    "statusCheckRollup,comments,closingIssuesReferences,isCrossRepository"
 )
 
-# --- the external-PR process (#1195, Captain 2026-10-01); safe_merge.sh mirrors these ---
-# the release/CI/security path: an external PR touching it waits for the Captain
-ESCALATE_DIRS = (".github/", "skills/release/", ".claude/skills/")
-ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py",
-                  "scripts/check_release_version.py"}
+# --- the external-PR process (#1195, Captain 2026-10-01) ---
+# The ONE definition: safe_merge.sh asks `yk_next.py --escalation <P>` rather than keep a copy.
+# The release/CI/security path, and whatever runs on fleet machines or in the release: an
+# external PR touching it (by its new OR its previous name) waits for the Captain.
+ESCALATE_DIRS = (".github/", ".claude/", ".kanban/", "scripts/", "skills/release/")
+ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py", "CLAUDE.md",
+                  "AGENT-QUICK-REF.md"}
 CAPTAIN_APPROVAL = "captain-approval"  # escalated: the fleet sets it and waits
 CAPTAIN_APPROVED = "captain-approved"  # the Captain's yes: ONLY the Captain sets it
 PROPOSED_REJECT = "proposed-reject"    # the fleet proposes; only the Captain closes
@@ -126,6 +129,14 @@ def is_external(pr: dict) -> bool:
     return bool(pr.get("isCrossRepository")) and association(pr["number"]) not in MEMBERS
 
 
+def pr_paths(number: int) -> list[str]:
+    """Every path the PR touches, from REST `pulls/<P>/files` (paginated, so no 100-file
+    cap): each file's `filename` and, for a rename, its `previous_filename` too."""
+    out = gh("api", "--paginate", f"repos/{{owner}}/{{repo}}/pulls/{number}/files",
+             "--jq", ".[] | .filename, (.previous_filename // empty)")
+    return [line for line in out.splitlines() if line]
+
+
 def latest_verdict(pr: dict) -> str:
     """The body of the latest member comment starting `reviewed-at-sha:`, or ''."""
     bodies = [c.get("body") or "" for c in pr.get("comments") or []
@@ -133,21 +144,32 @@ def latest_verdict(pr: dict) -> str:
     return next((b for b in reversed(bodies) if b.startswith("reviewed-at-sha:")), "")
 
 
-def escalation(pr: dict) -> list[str]:
-    """Why an external PR waits for the Captain; empty when it is routine."""
+def escalation(pr: dict, paths: list[str]) -> list[str]:
+    """Why an external PR waits for the Captain; empty when it is routine. `paths` is
+    pr_paths(): size alone never escalates (the Captain's choice)."""
     labels = {lbl["name"] for lbl in pr.get("labels") or []}
-    files = [f["path"] for f in pr.get("files") or []]
     why = []
     if CAPTAIN_APPROVAL in labels:
         why.append(f"label {CAPTAIN_APPROVAL}")
     if CLASS_CAPTAIN.search(latest_verdict(pr).replace("\r", "")):
         why.append("verdict class: captain")
-    hits = [f for f in files if f in ESCALATE_FILES or f.startswith(ESCALATE_DIRS)]
+    hits = list(dict.fromkeys(f for f in paths
+                              if f in ESCALATE_FILES or f.startswith(ESCALATE_DIRS)))
     if hits:
         why.append("touches " + ", ".join(hits[:5]) + (" …" if len(hits) > 5 else ""))
-    if (pr.get("changedFiles") or 0) > len(files):
-        why.append(f"{pr['changedFiles']} changed files, only {len(files)} listed")
     return why
+
+
+def escalation_report(number: int, pr: dict | None = None) -> dict:
+    """The gate's question (`--escalation <P>`), answered from the ONE definition above:
+    {"number", "association", "external", "why"}. `pr` is the gate's own `gh pr view`
+    JSON (labels and comments, read once at the head it pinned); else it is read here."""
+    if pr is None:
+        pr = gh_json("pr", "view", str(number), "--json", "headRefOid,labels,comments")
+    assoc = association(number)
+    external = assoc not in MEMBERS
+    return {"number": number, "association": assoc, "external": external,
+            "why": escalation(pr, pr_paths(number)) if external else []}
 
 
 def fragments(ref: str, names: list[str] | None = None) -> dict[str, str]:
@@ -205,7 +227,7 @@ def waiting_runs(pr: dict) -> list[str]:
 
 
 def touches_github(pr: dict) -> bool:
-    return any(f["path"].startswith(".github/") for f in pr.get("files") or [])
+    return any(f.startswith(".github/") for f in pr.get("paths") or [])
 
 
 def print_run_approval(pr: dict) -> None:
@@ -347,8 +369,8 @@ def ships_in(pr: dict) -> str:
     tag = latest_tag()
     if not tag:
         return "the next release"
-    own = [f["path"].removeprefix("changelog.d/") for f in pr.get("files") or []
-           if f["path"].startswith("changelog.d/") and "/" not in f["path"][12:]]
+    own = [f.removeprefix("changelog.d/") for f in pr.get("paths") or []
+           if f.startswith("changelog.d/") and "/" not in f[12:]]
     texts = fragments("origin/main")
     if own:
         git("fetch", "-q", "origin", f"pull/{pr['number']}/head")
@@ -366,7 +388,22 @@ def main() -> None:
         help="go straight to claiming a new issue (pipelining while a PR is in review); "
         "every claim rule still applies",
     )
+    ap.add_argument("--escalation", type=int, metavar="PR",
+                    help="print the gate's escalation verdict for PR as JSON and exit "
+                    "(safe_merge.sh's one source of the definitions)")
+    ap.add_argument("--pr-json", metavar="FILE",
+                    help="with --escalation: the PR's `gh pr view` JSON ('-' for stdin)")
     a = ap.parse_args()
+
+    if a.escalation is not None:
+        given = None
+        if a.pr_json == "-":
+            given = json.load(sys.stdin)
+        elif a.pr_json:
+            with open(a.pr_json) as fh:
+                given = json.load(fh)
+        print(json.dumps(escalation_report(a.escalation, given)))
+        return
 
     me = gh("api", "user", "--jq", ".login").strip()
     print(f"AGENT: {agent_name()}  (gh: {me})")
@@ -427,8 +464,9 @@ def main() -> None:
     external = [p for p in prs if p["author"]["login"] != me and is_external(p)]
     picks: list[tuple[int, dict, list[str]]] = []
     for p in external:
+        p["paths"] = pr_paths(p["number"])
         labels = {lbl["name"] for lbl in p.get("labels") or []}
-        verdict, ci, why = verdict_at_head(p), ci_state(p), escalation(p)
+        verdict, ci, why = verdict_at_head(p), ci_state(p), escalation(p, p["paths"])
         esc = "escalated: " + "; ".join(why) if why else "not escalated"
         skip = held(labels) + (["draft"] if p.get("isDraft") else [])
         if PROPOSED_REJECT in labels:
