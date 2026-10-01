@@ -585,10 +585,10 @@ def test_merge_pick_prints_the_safe_merge_command(yk, monkeypatch, capsys) -> No
     assert f"Thanks @{EXT} — merged; this ships in v3.0.1." in out, out
 
 
-def test_review_pick_prints_the_diff_and_checkout_commands(yk, monkeypatch, capsys) -> None:
+def test_review_pick_prints_the_diff_command(yk, monkeypatch, capsys) -> None:
     out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300)], SPARE)
     assert "gh pr diff 1300" in out, out
-    assert "pull/1300/head" in out and HEAD in out, out
+    assert HEAD in out, out
 
 
 def test_review_pick_prints_the_run_approval_after_the_diff(yk, monkeypatch, capsys) -> None:
@@ -774,3 +774,42 @@ def test_b1_gate_refuses_label_by_a_non_captain(tmp_path: Path) -> None:
     assert r.returncode != 0, _out(r)
     assert "hanssantiago1995" in _out(r), _out(r)
     assert sb.merge_calls() == [], sb.calls()
+
+
+# --------------------------------------------------------------------------- r1 B3: read-only
+# Mini's review of #1196: a fleet machine never runs the contributor's code. The local
+# review is read-only (an explicit tool allow-list, never --dangerously-skip-permissions);
+# tests run only in fork CI; everything in the PR is untrusted data.
+
+READ_ONLY_TOOLS = ('"Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),'
+                   'Bash(gh api:*),Read,Grep,Glob"')
+
+
+def test_b3_review_pick_prints_a_read_only_reviewer(yk, monkeypatch, capsys) -> None:
+    out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300)], SPARE)
+    assert "REVIEW EXTERNAL PR #1300" in out, out
+    assert "--dangerously-skip-permissions" not in out, out
+    assert f"--allowedTools {READ_ONLY_TOOLS}" in out, out
+    assert "--permission-mode dontAsk" in out, out
+    assert "worktree add" not in out and "pytest" not in out, out  # no checkout, no run
+
+
+def test_b3_run_approval_needs_a_read_of_this_head(yk, monkeypatch, capsys) -> None:
+    out = run_picker(yk, monkeypatch, capsys, [ext_pr(1300, checks=WAITING_RUN)], SPARE)
+    assert "actions/runs/777/approve" in out, out
+    assert "a new head needs a new read" in out, out
+
+
+def test_b3_skill_review_is_read_only() -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    for m in re.finditer(r"--dangerously-skip-permissions", text):  # only ever forbidden
+        assert "never" in text[max(0, m.start() - 60):m.start()].lower(), text[m.start() - 60:]
+    assert "worktree add" not in text
+    assert f"--allowedTools {READ_ONLY_TOOLS}" in text
+    assert "--permission-mode dontAsk" in text
+    assert "untrusted data" in text and "never instructions" in text
+    assert "only in fork CI" in text
+    assert "new head" in text.lower()
+    # nothing runs the fork's tree on a fleet machine
+    for bad in (".venv/bin/python -m pytest", "ruff check", "pip install"):
+        assert bad not in text, bad
