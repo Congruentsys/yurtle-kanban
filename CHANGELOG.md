@@ -10,6 +10,67 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-01
+
+### Added
+
+- **The external-PR process** (Captain's ruling, #1195): the fleet reviews, merges and
+  releases PRs from non-members. `yk_next.py` picks `REVIEW EXTERNAL PR`, `MERGE EXTERNAL PR`
+  and `RELEASE DUE` (patch/minor from the unreleased fragments), lists `WAIT CAPTAIN` and
+  `RELEASE NEEDS CAPTAIN`, and skips `proposed-reject`; `safe_merge.sh` refuses a
+  `proposed-reject` PR and an escalated external PR without `captain-approved`, and merges a
+  fork PR from `refs/pull/<N>/head`. New skill `.claude/skills/external-pr/SKILL.md`, which
+  carries the fleet's patch/minor release steps (the release skill stays user-invoked).
+
+### Changed
+
+- **The release skill is split in two** (#1201). `yurtle-kanban init` now also installs
+  `/release-foss`, for a public repo: version bump, CHANGELOG (via the repo's fragment
+  assembler if it has one), a release PR reviewed by a non-author, a tag after the merge,
+  a public GitHub release with notes cut to fit GitHub's 125,000-character cap, the
+  publish workflow and the package confirmed live on its registry, and external
+  contributors credited by @login. `/release` keeps its name and is now the internal-repo
+  release: the same flow without the public parts (a GitHub release only if your deploy
+  is triggered by one). Neither names a path from this repo any more: the old step 8 told
+  consumers to run `scripts/release_notes.py`, which they don't have. Both stay
+  Captain-only (`disable-model-invocation: true`).
+
+### Fixed
+
+- **PyPI's project links pointed at the old `hankh95/yurtle-kanban` repository.** Homepage,
+  Documentation, Repository and Issues now name `Congruentsys/yurtle-kanban`, as do the
+  install lines in the docs (#1202).
+- **`scripts/release_notes.py` condensed notes** include the Removed and Deprecated sections except Breaking entries, listed once under Breaking changes (#1203), and the full-changelog link's anchor follows GitHub's slugger by Unicode category: combining marks and connector punctuation are kept, other numbers such as `²` are dropped (#1207).
+- **The reusable auto-close workflow's documented path and its install line named the old
+  `hankh95/yurtle-kanban` repository.** The `uses:` line (in the workflow and README), the
+  workflow's `pip install` and the board page's docs link now name `Congruentsys/yurtle-kanban`.
+  Callers still on the old path keep working through GitHub's redirect (#1209).
+- **`/release-foss` prompted for commands its own steps run.** Its `allowed-tools` now grant
+  `wc`, `pip`, the registry checks (`npm view`, `cargo search`) and the credit pipeline's
+  helpers. AGENT-QUICK-REF and the `done` skills point public repos at `/release-foss`, and
+  the README notes that a public repo re-running `init` should switch to it: the shipped
+  `/release` is now the internal flow (#1211).
+- **The external-PR verdict check refused review prose and missed some secrets** (#1213).
+  `password` needs a value, not a type (`password: str` posts; `password=hunter2secret`
+  doesn't); it now also catches `sk-ant-…`, `aws_secret_access_key`, `secret`/`token`/`api_key`
+  values, `GITHUB_TOKEN=<value>` and a bare PEM body line; it refuses a body over 60,000 chars
+  and an @-mention outside code. New `yk_next.py --post-verdict <P> <file>` checks, then posts
+  only on a pass; the picker and the external-pr skill use it.
+
+### Security
+
+- **The external-PR reviewer no longer has any gh access** (#1212). `gh pr view` / `gh pr diff`
+  take `-R`, so a reviewer steered by a PR could quote a private repo's PR into its public
+  verdict. New `yk_next.py --prefetch <P> .yk-review/pr-<P>` writes the diff, the view JSON and
+  the REST file list (with renames) into an ignored dir in the checkout, refusing a non-empty
+  one; the reviewer's only grant is `Read(./**)`. The picker and the external-pr skill print
+  prefetch → reviewer → `--post-verdict` → cleanup. It also denies Bash and writes outright
+  (`--disallowedTools`), and refuses a PR whose head moves during the prefetch.
+- **The external reviewer's verdict check is tighter** (#1220). Dotted or called password values
+  need a digit-free identifier, SendGrid/Stripe/`Bearer` tokens are refused, and an env-var
+  reference exempts only itself (`${VAR:-default}` or a value glued onto `${{…}}` is refused);
+  a refusal names the line, never the value, and ends with a `RE-RUN NOTE:` for the re-run.
+
 ## [3.1.0] - 2026-10-01
 
 ### Added
