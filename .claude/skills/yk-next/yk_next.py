@@ -104,8 +104,11 @@ PYPROJECT_VERSION = re.compile(r'(?m)^version\s*=\s*"([^"]+)"')
 PR_IN_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)$")
 # An external PR's review is READ-ONLY (r1 B3): no checkout, no pytest/ruff/pip of the fork's
 # tree on a fleet machine, never --dangerously-skip-permissions. Its tests run in fork CI.
-REVIEW_TOOLS = ("Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh api:*),"
-                "Read,Grep,Glob")
+# No `Bash(gh api:*)` (r2 R2-1): it is a prefix rule, so it grants `gh api -X POST …` and every
+# `-f` POST (label, merge, approve a fork run). Reads stay in the repo: Claude Code consults path
+# rules for Read only (and applies them to Grep/Glob); `dontAsk` denies a read outside the cwd.
+# The reviewer gets files from `gh pr view <P> --json files`, renames from the diff headers.
+REVIEW_TOOLS = "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read(./**)"
 REVIEW_CMD = f'claude -p --permission-mode dontAsk --allowedTools "{REVIEW_TOOLS}" < <brief>'
 FRAGMENT_NAME = re.compile(r"(\d+)(?:-.*)?\.md")      # as scripts/assemble_changelog.py
 SECTION_LINE = re.compile(r"<!-- section: (\w+) -->")

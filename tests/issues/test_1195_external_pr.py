@@ -809,8 +809,7 @@ def test_b1_gate_refuses_label_by_a_non_captain(tmp_path: Path) -> None:
 # review is read-only (an explicit tool allow-list, never --dangerously-skip-permissions);
 # tests run only in fork CI; everything in the PR is untrusted data.
 
-READ_ONLY_TOOLS = ('"Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),'
-                   'Bash(gh api:*),Read,Grep,Glob"')
+READ_ONLY_TOOLS = '"Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Read(./**)"'
 
 
 def test_b3_review_pick_prints_a_read_only_reviewer(yk, monkeypatch, capsys) -> None:
@@ -842,6 +841,40 @@ def test_b3_skill_review_is_read_only() -> None:
     for bad in (".venv/bin/python -m pytest", "ruff check", "pip install"):
         assert bad not in text, bad
 
+
+
+# --------------------------------------------------------------------------- r2 R2-1
+# Mini's round 2: `Bash(gh api:*)` is a prefix rule, so it grants `gh api -X POST …` (label,
+# merge, approve a fork run) and every `-f` POST. An unscoped Read/Grep/Glob plus
+# `gh pr comment` could post any file on the machine to a public PR. Reads stay in the repo:
+# Claude Code consults path rules for Read (and applies them to Grep/Glob) only, and
+# `dontAsk` already denies a read outside the working directory.
+
+
+def test_r2_1_no_gh_api_grant(yk) -> None:
+    tools = yk.REVIEW_TOOLS.split(",")
+    assert not any(t.startswith("Bash(gh api") for t in tools), tools
+    assert "gh api" not in yk.REVIEW_TOOLS, yk.REVIEW_TOOLS
+
+
+def test_r2_1_no_unscoped_read_grep_glob(yk) -> None:
+    for t in yk.REVIEW_TOOLS.split(","):
+        name = t.split("(", 1)[0]
+        if name in ("Read", "Grep", "Glob"):
+            assert t == f"{name}(./**)", f"unscoped or out-of-repo read grant: {t}"
+
+
+def test_r2_1_skill_reviewer_command_matches_the_picker(yk) -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    allowed = re.findall(r'--allowedTools "([^"]*)"', text)
+    assert allowed == [yk.REVIEW_TOOLS], allowed  # so no `gh api` grant in the skill either
+
+
+def test_r2_1_reviewer_reads_files_and_renames_without_gh_api() -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    sec = text[text.index("**3. Review"):text.index("**4. Outcomes")]
+    assert "gh pr view <P> --json files" in sec, sec
+    assert "rename" in sec.lower() and "diff header" in sec.lower(), sec
 
 # --------------------------------------------------------------------------- r1 N1: fidelity
 
