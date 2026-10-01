@@ -118,25 +118,65 @@ PR_IN_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)$")
 # No `Bash(gh pr comment:*)` (r3 R3-1a): a prefix rule, so it grants `--edit-last` (rewrites the
 # last verdict, keeping its createdAt: B1 again), `--body-file <any path>` (gh reads the file,
 # not Read) and `-R`/`--delete-last`. The reviewer PRINTS its verdict; the driving session saves
-# it, checks it (check_verdict) and posts it.
+# it, then checks and posts it in one step (--post-verdict, #1213).
 REVIEW_TOOLS = "Bash(gh pr view:*),Bash(gh pr diff:*),Read(./**)"
 REVIEW_CMD = (f'claude -p --permission-mode dontAsk --allowedTools "{REVIEW_TOOLS}"'
               " < <brief> > <verdict-file>")
+# A dry check only; --post-verdict checks, then posts (#1213), so the order is structural.
 CHECK_CMD = "python3 .claude/skills/yk-next/yk_next.py --check-verdict <P> <verdict-file>"
-POST_CMD = "gh pr comment <P> --body-file <verdict-file>"
-# What a credential looks like; a verdict containing one is never posted (r3 R3-1a).
+POST_VERDICT_CMD = "python3 .claude/skills/yk-next/yk_next.py --post-verdict <P> <verdict-file>"
+VERDICT_MAX = 60_000  # GitHub refuses a comment body of 65,536+ chars
+# What a credential looks like; a verdict containing one is never posted (r3 R3-1a, #1213).
+# Each needs a VALUE shape, so review prose about the same fields (`token: str`) still posts.
 SECRET = re.compile(
     r"-----BEGIN|\bgh[pousr]_[A-Za-z0-9]{16,}|\bgithub_pat_[A-Za-z0-9_]{16,}"
-    r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-|\bpypi-[A-Za-z0-9_-]{16,}|(?i:password\s*[:=])"
+    r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-|\bpypi-[A-Za-z0-9_-]{16,}"
+    r"|\bsk-ant-[A-Za-z0-9_-]{16,}|\bsk-proj-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9]{20,}"
 )
+# a PEM body line without its header: a base64 run of 60+, mixed case and a digit (a hex
+# sha, all lower case, is not one). Its own regex, so skipping a permalink run (SHA_SEGMENT)
+# never hides a token prefix that SECRET would find inside it (r3).
+PEM_RUN = re.compile(
+    r"(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*\d)"
+    r"[A-Za-z0-9+/]{60,}"
+)
+# secret / token / api_key / aws_secret_access_key / GITHUB_TOKEN = <value>, or a JSON
+# `"token": "<value>"`, or an upper-case env name and a space (`GITHUB_TOKEN <value>`). The
+# value is a secret when it starts with a 20+ run with a digit and a letter (SECRET_VALUE) and
+# is neither a path (`a/b.py`, `x.py::test`) nor code (CODE_VALUE: an identifier, a
+# placeholder). A keyword inside a longer name (`mytoken:`) still counts: the safe side (r2).
+GENERIC = re.compile(
+    r"(?i:(?:aws_)?(?:secret|token|api_?key)(?:_[A-Za-z]+)*)['\"]?\s*[:=]\s*['\"]?(\S+)"
+    r"|(?<![A-Za-z])(?:[A-Z]+_)*(?:SECRET|TOKEN|API_?KEY)(?:_[A-Z]+)*[ \t]+['\"]?(\S+)")
+SECRET_VALUE = re.compile(r"(?=[A-Za-z0-9_/+=-]*\d)(?=[A-Za-z0-9_/+=-]*[A-Za-z])"
+                          r"[A-Za-z0-9_/+=-]{20,}")
+PATH_VALUE = re.compile(r"::|/.*\.[A-Za-z][A-Za-z0-9]{0,4}$")
+# a value that is code, not a credential (r2): a lower-case snake_case identifier (a test or
+# function name: `test_1213_check_verdict`, `hashed_pw_v2`) or a `<placeholder>`
+# segments are capped: an identifier has short ones, a keyed token (`shpat_<32 hex>`,
+# `sbp_<40 hex>`) one long random one (r3)
+CODE_VALUE = re.compile(r"[a-z][a-z0-9]{0,15}(?:_[a-z0-9]{1,15})+|<[^>]*>?")
+PLACEHOLDER = re.compile(r"<[^>]*>?")  # the only code a password value may be (r3)
+# a 40-hex sha path segment: a GitHub permalink (`…/blob/<sha>/…`), not a PEM body (r2)
+SHA_SEGMENT = re.compile(r"(?:^|/)[0-9a-f]{40}(?:/|$)")
+# `password: <value>`: a 6+ char value that is not code — a call or subscript (`getpass()`,
+# `Optional[str]`), a dotted name (`self.pw`) or a digit-free identifier (`str`, `SecretStr`,
+# `password`); so an all-letter password passes (the price of postable review prose).
+PASSWORD = re.compile(r"(?i)pass(?:word|wd)['\"]?\s*[:=]\s*['\"]?([^\s'\"`]{6,})")
+PASSWORD_CODE = re.compile(r"[A-Za-z_][\w.]*[(\[].*|[A-Za-z_]\w*(?:\.\w+)+|[A-Za-z_]+")
+CODE_FENCE = re.compile(r"(?ms)^ {0,3}(`{3,}|~{3,}).*?(?:^ {0,3}\1[`~]*[ \t]*$|\Z)")
+# a code span never crosses a blank line: GitHub ends it at the paragraph break (r1)
+CODE_SPAN = re.compile(r"(`+)(?!`)(?:(?!\n[ \t]*\n).)*?(?<!`)\1(?!`)", re.S)
+# an @-mention (a user, a team, @everyone) GitHub would notify: not inside code, not an email
+MENTION = re.compile(r"(?<![\w.+/`-])@[A-Za-z0-9][A-Za-z0-9-]*(?:/[A-Za-z0-9_.-]+)?")
 FRAGMENT_NAME = re.compile(r"(\d+)(?:-.*)?\.md")      # as scripts/assemble_changelog.py
 SECTION_LINE = re.compile(r"<!-- section: (\w+) -->")
 MINOR_SECTIONS = {"Added", "Changed", "Deprecated"}  # Fixed/Security alone: a patch
 BREAKING = re.compile(r"(?<![-\w])breaking\b", re.I)  # "non-breaking" isn't
 
 
-def gh(*args: str) -> str:
-    r = subprocess.run(["gh", *args], capture_output=True, text=True)
+def gh(*args: str, stdin: str | None = None) -> str:
+    r = subprocess.run(["gh", *args], capture_output=True, text=True, input=stdin)
     if r.returncode != 0:
         sys.exit(f"ERROR: gh {' '.join(args)}: {(r.stderr or r.stdout).strip()[:300]}")
     return r.stdout
@@ -220,14 +260,34 @@ def approved_at(pr: dict) -> str | None:
 def check_verdict(text: str, head: str) -> str | None:
     """Why the reviewer's printed verdict must not be posted, or None (r3 R3-1a): line 1 is
     exactly `reviewed-at-sha: <head>` (the PR's CURRENT head), line 2 is `verdict: approve`
-    or `verdict: changes`, and nothing in it looks like a secret."""
+    or `verdict: changes`, it is at most VERDICT_MAX chars, nothing in it looks like a secret,
+    and it @-mentions no one outside code (#1213)."""
     lines = [line.removesuffix("\r") for line in text.split("\n")]
     if lines[0] != f"reviewed-at-sha: {head}":
         return f"line 1 is not `reviewed-at-sha: {head}` (the PR's head): {lines[0][:80]!r}"
     if len(lines) < 2 or lines[1] not in ("verdict: approve", "verdict: changes"):
         return "line 2 is not `verdict: approve` or `verdict: changes`"
+    if len(text) > VERDICT_MAX:
+        return f"it is {len(text):,} chars, over the {VERDICT_MAX:,} limit"
     if m := SECRET.search(text):
         return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+    for m in PEM_RUN.finditer(text):
+        if SHA_SEGMENT.search(m.group(0)):  # a sha-pinned permalink run, not a PEM body
+            continue
+        return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+    for m in GENERIC.finditer(text):
+        value = (m.group(1) or m.group(2)).rstrip("'\"`.,;:)]}")
+        if (SECRET_VALUE.match(value) and not PATH_VALUE.search(value)
+                and not CODE_VALUE.fullmatch(value)):
+            return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+    for m in PASSWORD.finditer(text):
+        value = m.group(1).rstrip(".,;:)]}")
+        if not (PASSWORD_CODE.fullmatch(value) or PLACEHOLDER.fullmatch(value)):
+            return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+    prose = CODE_SPAN.sub("", CODE_FENCE.sub("", text))
+    if m := MENTION.search(prose):
+        return (f"it has an @-mention outside code ({m.group(0)[:40]}), which notifies people:"
+                " put it in backticks or drop it")
     return None
 
 
@@ -540,18 +600,28 @@ def main() -> None:
     ap.add_argument("--check-verdict", nargs=2, metavar=("PR", "FILE"),
                     help="check a reviewer's printed verdict before the driving session posts "
                     "it: exit 0 ok, 1 with the reason")
+    ap.add_argument("--post-verdict", nargs=2, metavar=("PR", "FILE"),
+                    help="the same check, then posts the checked text (`gh pr comment PR "
+                    "--body-file -`) only if it passes; exit 1 with the reason otherwise")
     a = ap.parse_args()
 
-    if a.check_verdict:
-        number, path = a.check_verdict
-        head = gh("pr", "view", str(int(number)), "--json", "headRefOid",
-                  "--jq", ".headRefOid").strip()
+    if a.check_verdict or a.post_verdict:
+        number, path = a.post_verdict or a.check_verdict
+        number = str(int(number))
+        head = gh("pr", "view", number, "--json", "headRefOid", "--jq", ".headRefOid").strip()
         with open(path, encoding="utf-8", errors="replace") as fh:
-            why = check_verdict(fh.read(), head)
+            text = fh.read()
+        why = check_verdict(text, head)
         if why:
             print(f"NOT POSTING the verdict for #{number}: {why}")
             sys.exit(1)
-        print(f"ok: the verdict for #{number} names its head {head[:12]}; post it")
+        if not a.post_verdict:
+            print(f"ok: the verdict for #{number} names its head {head[:12]}; post it")
+            return
+        # post the text that was checked, over stdin: gh re-reading the file could post
+        # something the check never saw
+        url = gh("pr", "comment", number, "--body-file", "-", stdin=text).strip()
+        print(f"posted the verdict for #{number} at {head[:12]}: {url}")
         return
 
     if a.escalation is not None:
@@ -705,10 +775,10 @@ def main() -> None:
                   f"\n  reviewer (a distinct session; the brief names #{n} and the head;"
                   " it PRINTS its verdict, never posts):"
                   f"\n    {REVIEW_CMD}"
-                  "\n  then check it (the PR's current head, line 2, nothing secret-shaped):"
-                  f"\n    {CHECK_CMD.replace('<P>', str(n))}"
-                  "\n  and only if that exits 0, post it:"
-                  f"\n    {POST_CMD.replace('<P>', str(n))}")
+                  "\n  then check and post it in one step (it posts only if the check passes:"
+                  " the PR's current head, line 2, nothing secret-shaped, no @-mention"
+                  " outside code, at most 60,000 chars):"
+                  f"\n    {POST_VERDICT_CMD.replace('<P>', str(n))}")
             print_run_approval(p)
         return
     external_nums = {p["number"] for p in external}
