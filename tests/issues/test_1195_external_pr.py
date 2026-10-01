@@ -102,6 +102,7 @@ def run_picker(
     merges_since_tag: tuple[str, ...] = (),
     log_since_tag: tuple[tuple[str, str, bool], ...] | None = None,
     fragments: dict[str, str] | None = None,
+    main_version: str = "3.0.0",
 ) -> str:
     """Run the picker in --dry-run with gh AND git stubbed; nothing touches a network."""
     assoc = assoc or {}
@@ -166,6 +167,8 @@ def run_picker(
                            for sha, subj, _ in rows)
         if args[0] == "ls-tree":
             return "changelog.d/README.md\n" + "".join(f"changelog.d/{n}\n" for n in fragments)
+        if args[0] == "show" and args[-1].endswith(":pyproject.toml"):
+            return f'[project]\nname = "yurtle-kanban"\nversion = "{main_version}"\n'
         if args[0] == "show":
             name = args[-1].rsplit("/", 1)[-1]
             return fragments[name]
@@ -874,3 +877,35 @@ def test_n3_a_tag_off_main_is_ignored(yk, monkeypatch, capsys) -> None:
     assert "RELEASE DUE" in out, out
     assert "v3.0.1" in out, out
     assert "v3.1.1" not in out, out
+
+
+# --------------------------------------------------------------------------- r1 N2: in flight
+# Mini's review of #1196: no double release. Between the release PR merging and its tag,
+# pyproject.toml on main is ahead of the latest tag on main; and an open `chore: release v`
+# PR means another session is cutting it. Either prints RELEASE IN FLIGHT and picks nothing.
+
+
+def test_n2_version_ahead_of_the_tag_is_in_flight(yk, monkeypatch, capsys) -> None:
+    out = _release(yk, monkeypatch, capsys, FIX, main_version="3.0.1")
+    assert "RELEASE IN FLIGHT" in out, out
+    assert "3.0.1" in out, out
+    assert "RELEASE DUE" not in out, out
+    assert "WOULD CLAIM ISSUE #50" in out, out  # not a pick
+
+
+def test_n2_an_open_release_pr_is_in_flight(yk, monkeypatch, capsys) -> None:
+    rel = pr(1201, author=PEER, comments=[picker_verdict("a" * 40, "approve")])
+    rel["title"] = "chore: release v3.1.0"
+    out = _release(yk, monkeypatch, capsys, FIX, prs=[rel])
+    assert "RELEASE IN FLIGHT" in out and "#1201" in out, out
+    assert "RELEASE DUE" not in out, out
+
+
+def test_n2_skill_rechecks_before_opening_a_release_pr() -> None:
+    text = (SKILLS / "external-pr" / "SKILL.md").read_text()
+    m = re.search(r"\n## Fleet releases\b(.*?)(?=\n## |\Z)", text, re.S)
+    assert m, "no Fleet releases section"
+    sec = m.group(1)
+    assert "RELEASE IN FLIGHT" in sec
+    assert 'gh pr list --state open --search "chore: release v in:title"' in sec
+    assert "hold" in sec.lower()

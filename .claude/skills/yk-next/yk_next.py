@@ -99,6 +99,7 @@ CAPTAINS = frozenset({"hankh95"})
 PROPOSED_REJECT = "proposed-reject"    # the fleet proposes; only the Captain closes
 CLASS_CAPTAIN = re.compile(r"(?m)^class: captain")  # the reviewer's third verdict line
 RELEASE_TITLE = "chore: release v"
+PYPROJECT_VERSION = re.compile(r'(?m)^version\s*=\s*"([^"]+)"')
 # a PR's number in a commit subject on main: "Merge pull request #N from …" or "title (#N)"
 PR_IN_SUBJECT = re.compile(r"^Merge pull request #(\d+)\b|\(#(\d+)\)$")
 # An external PR's review is READ-ONLY (r1 B3): no checkout, no pytest/ruff/pip of the fork's
@@ -266,6 +267,11 @@ def latest_tag() -> str | None:
     return tags[0] if tags else None
 
 
+def version_key(v: str) -> tuple[int, ...]:
+    """`v3.0.1` / `3.0.1` → (3, 0, 1), for comparing versions."""
+    return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+
+
 def next_version(tag: str, bump: str) -> str:
     """`v3.0.0` + patch → `3.0.1`, + minor → `3.1.0`, + major → `4.0.0`."""
     major, minor, patch = (int(x) for x in re.findall(r"\d+", tag)[:3])
@@ -303,8 +309,13 @@ def print_run_approval(pr: dict) -> None:
 
 def release_due(prs: list[dict]) -> bool:
     """Step 4: print RELEASE DUE (and return True) when an external PR merged since the
-    latest `v*` tag and no release PR is open. A major prints RELEASE NEEDS CAPTAIN."""
-    if any((p.get("title") or "").startswith(RELEASE_TITLE) for p in prs):
+    latest `v*` tag and no release PR is open. A major prints RELEASE NEEDS CAPTAIN. A
+    release already under way prints RELEASE IN FLIGHT (r1 N2): an open release PR, or
+    pyproject.toml on main ahead of the latest tag (merged, not yet tagged)."""
+    rel = [p for p in prs if (p.get("title") or "").startswith(RELEASE_TITLE)]
+    if rel:
+        print(f"\n  RELEASE IN FLIGHT — release PR #{rel[0]['number']} is open "
+              f"({rel[0]['title'][:40]}): don't start another")
         return False
     merged = gh_json("pr", "list", "--state", "merged", "--limit", "100", "--json",
                      "number,title,author,isCrossRepository,mergeCommit,mergedAt,files")
@@ -329,6 +340,12 @@ def release_due(prs: list[dict]) -> bool:
     if not ext:
         return False
     names = ", ".join(f"#{m['number']} by {m['author']['login']}" for m in ext)
+    on_main = PYPROJECT_VERSION.search(git("show", "origin/main:pyproject.toml"))
+    if on_main and version_key(on_main.group(1)) > version_key(tag):
+        print(f"\n  RELEASE IN FLIGHT — pyproject.toml on main is {on_main.group(1)}, the latest "
+              f"tag on main is {tag}: its release PR merged and the tag/GitHub release is "
+              "pending; don't start another")
+        return False
     bump, why = release_bump(fragments("origin/main"))
     if bump == "major":
         print(f"\n  RELEASE NEEDS CAPTAIN — {names} merged since {tag}; {why}. A major is "

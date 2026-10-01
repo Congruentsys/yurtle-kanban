@@ -41,7 +41,8 @@ rule still applies. Outside yk-loop, use the plain picker.
 4. **Release.** An external PR merged (merge, squash or rebase) since the latest `v*` tag on main, and no open `chore: release v…` PR:
    `RELEASE DUE — patch|minor` from the unreleased `changelog.d/` fragments (Fixed/Security only → patch,
    any Added/Changed → minor). A Removed or breaking fragment prints `RELEASE NEEDS CAPTAIN` and picks
-   nothing: a major is the Captain's.
+   nothing: a major is the Captain's. An open release PR, or `pyproject.toml` on main ahead of the latest
+   tag (merged, not yet tagged), prints `RELEASE IN FLIGHT` and picks nothing.
 5. **Resume before you pick.** An open issue assigned to you that no open PR fixes yet, unless it has
    since been held or depends on an issue that's still open.
 6. **Claim.** Take the first open issue that is unassigned, has no open PR fixing it (GitHub's

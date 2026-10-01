@@ -136,6 +136,11 @@ The picker prints `RELEASE DUE — <bump>` once an external PR has merged since 
 Added/Changed → minor); **a major is the Captain's**. `skills/release/SKILL.md` is user-invoked only
 (`disable-model-invocation: true`, and `yurtle-kanban init` installs it into every consumer repo), so
 **Read `skills/release/SKILL.md` and follow its steps** rather than invoking it, with these additions:
+- **right before opening the release PR, re-check**: `gh pr list --state open --search "chore: release v in:title"`
+  must be empty, and no comment from Mini or anyone else (on the merged PRs, the release issues, or the
+  latest open PRs) may ask to hold the release. If either fails, stop: the release is in flight (the
+  picker prints `RELEASE IN FLIGHT` for an open release PR, or for `pyproject.toml` on main ahead of the
+  latest tag, which means a release PR has merged and is not yet tagged);
 - the release PR is `chore: release vX.Y.Z`, built with `python scripts/assemble_changelog.py X.Y.Z`. If a
   merged external PR has no `changelog.d/` fragment, the release PR adds one first, crediting the author
   (`… Thanks @login (#<P>)`), and an existing one gains that credit; its section decides the bump;
