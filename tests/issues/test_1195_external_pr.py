@@ -1025,6 +1025,55 @@ def test_n_b_skill_names_the_escalate_pick() -> None:
     text = (SKILLS / "external-pr" / "SKILL.md").read_text()
     assert "ESCALATE EXTERNAL PR" in text
 
+
+# --------------------------------------------------------------------------- r2 N-c
+# Mini's round 2: under N4 a bot/App PR pushed to a branch of THIS repo is external too, so a
+# merged one triggers RELEASE DUE like a fork's. The association is read once per author.
+
+
+class CountingAssoc(dict):
+    """`assoc` for run_picker that counts the association lookups (one per gh call)."""
+
+    def __init__(self, *a) -> None:
+        super().__init__(*a)
+        self.calls: list[int] = []
+
+    def get(self, n, default=None):
+        self.calls.append(n)
+        return super().get(n, default)
+
+
+def same_repo(m: dict) -> dict:
+    return {**m, "isCrossRepository": False}
+
+
+def test_n_c_merged_same_repo_bot_pr_is_released(yk, monkeypatch, capsys) -> None:
+    bot = same_repo(merged(1193, TAG_MERGE, author="app/dependabot"))
+    out = _release(yk, monkeypatch, capsys, FIX, merged_prs=[bot], assoc={1193: "NONE"})
+    assert "RELEASE DUE" in out, out
+    assert "#1193 by app/dependabot" in out, out
+
+
+def test_n_c_merged_same_repo_fleet_pr_is_not_released(yk, monkeypatch, capsys) -> None:
+    fleet = same_repo(merged(1191, TAG_MERGE, author=PEER))
+    out = _release(yk, monkeypatch, capsys, FIX, merged_prs=[fleet], assoc={1191: "MEMBER"})
+    assert "RELEASE DUE" not in out, out
+
+
+def test_n_c_association_is_read_once_per_author(yk, monkeypatch, capsys) -> None:
+    """Four fleet merges by one author and one bot merge since the tag: two lookups, and a
+    PR merged before the tag costs none."""
+    shas = [f"{i}" * 40 for i in range(1, 6)]
+    rows = [same_repo(merged(1180 + i, s, author=PEER)) for i, s in enumerate(shas[:4])]
+    rows.append(same_repo(merged(1193, shas[4], author="app/dependabot")))
+    rows.append(same_repo(merged(1100, OLD_MERGE, author="someone-else")))
+    assoc = CountingAssoc({1193: "NONE"})
+    out = _release(yk, monkeypatch, capsys, FIX, merged_prs=rows, assoc=assoc,
+                   merges_since_tag=tuple(shas))
+    assert "RELEASE DUE" in out and "#1193" in out, out
+    assert len(assoc.calls) == 2, assoc.calls
+    assert 1100 not in assoc.calls, assoc.calls
+
 # --------------------------------------------------------------------------- r1 N1: fidelity
 
 

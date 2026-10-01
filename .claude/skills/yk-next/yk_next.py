@@ -321,8 +321,9 @@ def print_run_approval(pr: dict) -> None:
 
 
 def release_due(prs: list[dict]) -> bool:
-    """Step 4: print RELEASE DUE (and return True) when an external PR merged since the
-    latest `v*` tag and no release PR is open. A major prints RELEASE NEEDS CAPTAIN. A
+    """Step 4: print RELEASE DUE (and return True) when an external PR (a fork's, or a
+    bot/App's on a branch here: the association decides) merged since the latest `v*` tag
+    and no release PR is open. A major prints RELEASE NEEDS CAPTAIN. A
     release already under way prints RELEASE IN FLIGHT (r1 N2): an open release PR, or
     pyproject.toml on main ahead of the latest tag (merged, not yet tagged)."""
     rel = [p for p in prs if (p.get("title") or "").startswith(RELEASE_TITLE)]
@@ -332,9 +333,10 @@ def release_due(prs: list[dict]) -> bool:
         return False
     merged = gh_json("pr", "list", "--state", "merged", "--limit", "100", "--json",
                      "number,title,author,isCrossRepository,mergeCommit,mergedAt,files")
-    forks = [m for m in merged if m.get("isCrossRepository") and m.get("mergedAt")
-             and (m.get("mergeCommit") or {}).get("oid")]
-    if not forks:
+    # every merged PR, not only forks (r2 N-c): a bot/App PR on a branch of this repo is
+    # external too (r1 N4); the association decides, below
+    done = [m for m in merged if m.get("mergedAt") and (m.get("mergeCommit") or {}).get("oid")]
+    if not done:
         return False
     git("fetch", "-q", "origin", "main", "--tags")
     tag = latest_tag()
@@ -347,9 +349,14 @@ def release_due(prs: list[dict]) -> bool:
         sha, _, subject = line.partition(" ")
         shas.add(sha)
         nums.update(int(a or b) for a, b in PR_IN_SUBJECT.findall(subject))
-    ext = [m for m in forks
-           if (m["mergeCommit"]["oid"] in shas or m["number"] in nums)
-           and association(m["number"]) not in MEMBERS]
+    since = [m for m in done if m["mergeCommit"]["oid"] in shas or m["number"] in nums]
+    # one association call per AUTHOR merged since the tag, not per PR
+    by_author: dict[str, bool] = {}
+    for m in since:
+        login = m["author"]["login"]
+        if login not in by_author:
+            by_author[login] = association(m["number"]) not in MEMBERS
+    ext = [m for m in since if by_author[m["author"]["login"]]]
     if not ext:
         return False
     names = ", ".join(f"#{m['number']} by {m['author']['login']}" for m in ext)
