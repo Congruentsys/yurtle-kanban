@@ -132,9 +132,12 @@ SECRET = re.compile(
     r"-----BEGIN|\bgh[pousr]_[A-Za-z0-9]{16,}|\bgithub_pat_[A-Za-z0-9_]{16,}"
     r"|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-|\bpypi-[A-Za-z0-9_-]{16,}"
     r"|\bsk-ant-[A-Za-z0-9_-]{16,}|\bsk-proj-[A-Za-z0-9_-]{16,}|\bsk-[A-Za-z0-9]{20,}"
-    # a PEM body line without its header: a base64 run of 60+, mixed case and a digit (a hex
-    # sha, all lower case, is not one)
-    r"|(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*\d)"
+)
+# a PEM body line without its header: a base64 run of 60+, mixed case and a digit (a hex
+# sha, all lower case, is not one). Its own regex, so skipping a permalink run (SHA_SEGMENT)
+# never hides a token prefix that SECRET would find inside it (r3).
+PEM_RUN = re.compile(
+    r"(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z])(?=[A-Za-z0-9+/]*\d)"
     r"[A-Za-z0-9+/]{60,}"
 )
 # secret / token / api_key / aws_secret_access_key / GITHUB_TOKEN = <value>, or a JSON
@@ -150,7 +153,10 @@ SECRET_VALUE = re.compile(r"(?=[A-Za-z0-9_/+=-]*\d)(?=[A-Za-z0-9_/+=-]*[A-Za-z])
 PATH_VALUE = re.compile(r"::|/.*\.[A-Za-z][A-Za-z0-9]{0,4}$")
 # a value that is code, not a credential (r2): a lower-case snake_case identifier (a test or
 # function name: `test_1213_check_verdict`, `hashed_pw_v2`) or a `<placeholder>`
-CODE_VALUE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+|<[^>]*>?")
+# segments are capped: an identifier has short ones, a keyed token (`shpat_<32 hex>`,
+# `sbp_<40 hex>`) one long random one (r3)
+CODE_VALUE = re.compile(r"[a-z][a-z0-9]{0,15}(?:_[a-z0-9]{1,15})+|<[^>]*>?")
+PLACEHOLDER = re.compile(r"<[^>]*>?")  # the only code a password value may be (r3)
 # a 40-hex sha path segment: a GitHub permalink (`…/blob/<sha>/…`), not a PEM body (r2)
 SHA_SEGMENT = re.compile(r"(?:^|/)[0-9a-f]{40}(?:/|$)")
 # `password: <value>`: a 6+ char value that is not code — a call or subscript (`getpass()`,
@@ -263,7 +269,9 @@ def check_verdict(text: str, head: str) -> str | None:
         return "line 2 is not `verdict: approve` or `verdict: changes`"
     if len(text) > VERDICT_MAX:
         return f"it is {len(text):,} chars, over the {VERDICT_MAX:,} limit"
-    for m in SECRET.finditer(text):
+    if m := SECRET.search(text):
+        return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
+    for m in PEM_RUN.finditer(text):
         if SHA_SEGMENT.search(m.group(0)):  # a sha-pinned permalink run, not a PEM body
             continue
         return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
@@ -274,7 +282,7 @@ def check_verdict(text: str, head: str) -> str | None:
             return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     for m in PASSWORD.finditer(text):
         value = m.group(1).rstrip(".,;:)]}")
-        if not (PASSWORD_CODE.fullmatch(value) or CODE_VALUE.fullmatch(value)):
+        if not (PASSWORD_CODE.fullmatch(value) or PLACEHOLDER.fullmatch(value)):
             return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     prose = CODE_SPAN.sub("", CODE_FENCE.sub("", text))
     if m := MENTION.search(prose):
