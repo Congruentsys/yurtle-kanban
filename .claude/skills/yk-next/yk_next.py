@@ -139,15 +139,20 @@ SECRET = re.compile(
 )
 # secret / token / api_key / aws_secret_access_key / GITHUB_TOKEN = <value>, or a JSON
 # `"token": "<value>"`, or an upper-case env name and a space (`GITHUB_TOKEN <value>`). The
-# keyword starts at a non-letter (r1 B1: `tokenizer:` is not one); a value is a secret when it
-# starts with a 20+ run with a digit and a letter (SECRET_VALUE) and is not a path (`a/b.py`,
-# `x.py::test`).
+# value is a secret when it starts with a 20+ run with a digit and a letter (SECRET_VALUE) and
+# is neither a path (`a/b.py`, `x.py::test`) nor code (CODE_VALUE: an identifier, a
+# placeholder). A keyword inside a longer name (`mytoken:`) still counts: the safe side (r2).
 GENERIC = re.compile(
-    r"(?i:(?<![A-Za-z])(?:aws_)?(?:secret|token|api_?key)(?:_[A-Za-z]+)*)['\"]?\s*[:=]\s*['\"]?(\S+)"
+    r"(?i:(?:aws_)?(?:secret|token|api_?key)(?:_[A-Za-z]+)*)['\"]?\s*[:=]\s*['\"]?(\S+)"
     r"|(?<![A-Za-z])(?:[A-Z]+_)*(?:SECRET|TOKEN|API_?KEY)(?:_[A-Z]+)*[ \t]+['\"]?(\S+)")
 SECRET_VALUE = re.compile(r"(?=[A-Za-z0-9_/+=-]*\d)(?=[A-Za-z0-9_/+=-]*[A-Za-z])"
                           r"[A-Za-z0-9_/+=-]{20,}")
 PATH_VALUE = re.compile(r"::|/.*\.[A-Za-z][A-Za-z0-9]{0,4}$")
+# a value that is code, not a credential (r2): a lower-case snake_case identifier (a test or
+# function name: `test_1213_check_verdict`, `hashed_pw_v2`) or a `<placeholder>`
+CODE_VALUE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+|<[^>]*>?")
+# a 40-hex sha path segment: a GitHub permalink (`…/blob/<sha>/…`), not a PEM body (r2)
+SHA_SEGMENT = re.compile(r"(?:^|/)[0-9a-f]{40}(?:/|$)")
 # `password: <value>`: a 6+ char value that is not code — a call or subscript (`getpass()`,
 # `Optional[str]`), a dotted name (`self.pw`) or a digit-free identifier (`str`, `SecretStr`,
 # `password`); so an all-letter password passes (the price of postable review prose).
@@ -258,15 +263,18 @@ def check_verdict(text: str, head: str) -> str | None:
         return "line 2 is not `verdict: approve` or `verdict: changes`"
     if len(text) > VERDICT_MAX:
         return f"it is {len(text):,} chars, over the {VERDICT_MAX:,} limit"
-    if m := SECRET.search(text):
+    for m in SECRET.finditer(text):
+        if SHA_SEGMENT.search(m.group(0)):  # a sha-pinned permalink run, not a PEM body
+            continue
         return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     for m in GENERIC.finditer(text):
         value = (m.group(1) or m.group(2)).rstrip("'\"`.,;:)]}")
-        if SECRET_VALUE.match(value) and not PATH_VALUE.search(value):
+        if (SECRET_VALUE.match(value) and not PATH_VALUE.search(value)
+                and not CODE_VALUE.fullmatch(value)):
             return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     for m in PASSWORD.finditer(text):
         value = m.group(1).rstrip(".,;:)]}")
-        if not PASSWORD_CODE.fullmatch(value):
+        if not (PASSWORD_CODE.fullmatch(value) or CODE_VALUE.fullmatch(value)):
             return f"it contains something secret-shaped ({m.group(0)[:12]}…): never post it"
     prose = CODE_SPAN.sub("", CODE_FENCE.sub("", text))
     if m := MENTION.search(prose):
