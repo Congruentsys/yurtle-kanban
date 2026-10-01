@@ -56,8 +56,13 @@ def test_version_headings_unchanged() -> None:  # control
 
 
 def test_fragment_wording_excludes_breaking_from_removed_and_deprecated() -> None:
-    text = FRAGMENT.read_text(encoding="utf-8")
-    assert text.splitlines()[0] == "<!-- section: Fixed -->"
+    # a release assembles and deletes the fragment (as #1188 found for test_673): then the
+    # wording is checked where it went, in CHANGELOG.md
+    if FRAGMENT.exists():
+        text = FRAGMENT.read_text(encoding="utf-8")
+        assert text.splitlines()[0] == "<!-- section: Fixed -->"
+    else:
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     flat = " ".join(text.split())
     assert "except Breaking entries, listed once under Breaking changes" in flat
     assert "(#1207)" in flat
