@@ -248,7 +248,8 @@ class TestFragmentDocs:
     # habits are theirs. Pinned by hash (its sha256 on origin/main when #178 was written), so
     # the test works in a shallow CI checkout and after merge. A deliberate change to the
     # skill updates this pin.
-    RELEASE_SKILL_SHA256 = "8d0d4b8544561df9b056aa6992ad06a7465b7ff1ee1e223206e185e20a20b3be"
+    # Re-pinned by #1191 (step 8 builds the notes with scripts/release_notes.py).
+    RELEASE_SKILL_SHA256 = "e24351277fc1999e2450060cc40c9b72a4d9d528a43193296ba7612c590bba2f"
 
     def test_release_skill_unchanged(self) -> None:  # control
         data = (REPO / "skills/release/SKILL.md").read_bytes()
