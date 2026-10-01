@@ -12,6 +12,11 @@
 # remove the PR's worktree (found by branch, wherever it lives) and merge, with
 # --match-head-commit so GitHub refuses if the head moved in between.
 #
+# The external-PR process (#1195, .claude/skills/external-pr/SKILL.md) adds two refusals,
+# defined as yk_next.py defines them: a `proposed-reject` PR (only the Captain closes it),
+# and an EXTERNAL PR that is ESCALATED without the Captain's `captain-approved` label.
+# A fork PR's head is read from refs/pull/<PR>/head, and its branch is never deleted.
+#
 # Usage (from the main checkout):  bash .claude/skills/pairit/safe_merge.sh <PR>
 set -u
 PR=${1:?usage: safe_merge.sh <PR>}
@@ -20,10 +25,50 @@ PR=${1:?usage: safe_merge.sh <PR>}
 # the checks; every later check and the merge itself are tied to that head
 # (--match-head-commit), so a commit pushed meanwhile can't be merged unchecked or
 # unreviewed (#186)
-pr=$(gh pr view "$PR" --json headRefName,headRefOid,comments) || {
+pr=$(gh pr view "$PR" --json headRefName,headRefOid,comments,labels,files,changedFiles,isCrossRepository) || {
   echo "NOT MERGING #$PR: could not read the PR"; exit 1; }
 branch=$(printf '%s' "$pr" | jq -r '.headRefName // ""')
 head=$(printf '%s' "$pr" | jq -r '.headRefOid // ""')
+
+# #1195. The fleet never sets `captain-approved`; only the Captain does.
+labels=$(printf '%s' "$pr" | jq -r '[.labels[]?.name] | join(",")')
+has_label() { case ",$labels," in *",$1,"*) return 0 ;; esac; return 1; }
+if has_label proposed-reject; then
+  echo "NOT MERGING #$PR: it is labelled proposed-reject (the Captain closes it)"; exit 1
+fi
+fork=$(printf '%s' "$pr" | jq -r '.isCrossRepository // false')
+if [ "$fork" = true ]; then
+  # EXTERNAL: the author is not OWNER/MEMBER/COLLABORATOR. Only a fork can carry such a
+  # PR (a non-member can't push a branch here), so it is read for forks only
+  assoc=$(gh api "repos/{owner}/{repo}/pulls/$PR" --jq .author_association) || {
+    echo "NOT MERGING #$PR: could not read its author's association"; exit 1; }
+  case $assoc in
+    OWNER|MEMBER|COLLABORATOR) ;;
+    *)
+      # ESCALATED: the label, a `class: captain` line in the latest member verdict, or
+      # the release/CI/security path (yk_next.py's ESCALATE_*)
+      why=$(printf '%s' "$pr" | jq -r '[
+        (if any(.labels[]?; .name == "captain-approval") then "label captain-approval"
+         else empty end),
+        ([.comments[]? | select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER"
+            or .authorAssociation == "COLLABORATOR") | .body
+          | select(startswith("reviewed-at-sha:"))] | last // ""
+          | if split("\n") | map(sub("\r$"; "")) | any(startswith("class: captain"))
+            then "verdict class: captain" else empty end),
+        ([.files[]?.path | select(startswith(".github/") or startswith("skills/release/")
+            or startswith(".claude/skills/") or . == "pyproject.toml"
+            or . == "src/yurtle_kanban/__init__.py" or . == "scripts/check_release_version.py")]
+          | if length > 0 then "touches " + join(", ") else empty end),
+        (if (.changedFiles // 0) > ([.files[]?] | length)
+         then "more changed files than listed" else empty end)
+      ] | join("; ")') || { echo "NOT MERGING #$PR: could not parse the PR"; exit 1; }
+      if [ -n "$why" ] && ! has_label captain-approved; then
+        echo "NOT MERGING #$PR: external PR escalated to the Captain ($why) and not labelled"\
+          "captain-approved (only the Captain adds it)"
+        exit 1
+      fi ;;
+  esac
+fi
 
 gh pr checks "$PR" --watch >/dev/null 2>&1   # wait only; its exit code decides nothing
 
@@ -44,10 +89,19 @@ if [ -n "$bad" ]; then
 fi
 
 git fetch -q --prune origin || { echo "NOT MERGING #$PR: git fetch failed"; exit 1; }
-if [ -z "$branch" ] || ! at=$(git rev-parse --verify -q "refs/remotes/origin/$branch"); then
+if [ "$fork" = true ]; then
+  # a fork's branch is not on origin; GitHub keeps the PR's head at refs/pull/<PR>/head
+  ref="refs/pull/$PR/head"
+  if ! git fetch -q origin "+$ref:$ref" || ! at=$(git rev-parse --verify -q "$ref"); then
+    echo "NOT MERGING #$PR: could not fetch $ref"; exit 1
+  fi
+  if [ "$at" != "$head" ]; then
+    echo "NOT MERGING #$PR: $ref is at ${at:0:12}, the PR head is ${head:0:12}"; exit 1
+  fi
+elif [ -z "$branch" ] || ! at=$(git rev-parse --verify -q "refs/remotes/origin/$branch"); then
   echo "NOT MERGING #$PR: origin/$branch not found (deleted, or a fork's branch)"; exit 1
 fi
-if [ "$at" != "$head" ]; then
+if [ "$fork" != true ] && [ "$at" != "$head" ]; then
   echo "NOT MERGING #$PR: origin/$branch is at ${at:0:12}, the PR head is ${head:0:12}"; exit 1
 fi
 git merge-tree --write-tree origin/main "$head" >/dev/null 2>&1
@@ -86,6 +140,14 @@ if [ -z "$ok" ]; then
   latest=$(printf '%s' "$verdict" | tr '\n' ' ')
   echo "NOT MERGING #$PR: no approve verdict at $head (latest verdict: ${latest:-none})"
   exit 1
+fi
+
+if [ "$fork" = true ]; then
+  # the branch name is the fork's own: no worktree here is the PR's, and --delete-branch
+  # would delete a same-named LOCAL branch (a fork's `main`, say)
+  gh pr merge "$PR" --merge --match-head-commit "$head" || { echo "merge of #$PR failed"; exit 1; }
+  echo "merged #$PR"
+  exit 0
 fi
 
 # the local branch can't be deleted while a worktree has it checked out

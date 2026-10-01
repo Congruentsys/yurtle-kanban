@@ -9,16 +9,32 @@ This repo's work lives on GitHub (issues and PRs), not on a kanban board. In ord
                  itself or on the issue it fixes), is SKIPPED — that is how pairit parks a PR
                  whose finding needs a decision without wedging the loop. A head with the
                  driver's fixes comment after ONE review round counts as reviewed (#987).
-2. REVIEW PR     another author's open PR with no verdict (or fixes comment) at its head sha
-                 (reviewer != author).
-3. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet, not held, not waiting.
-   (`--skip-prs` jumps straight to 4, for claiming the next issue while a PR is in review.)
-4. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label,
+2. EXTERNAL PR   an open PR by a non-member (#1195; .claude/skills/external-pr/SKILL.md):
+                 MERGE EXTERNAL PR  approve at head + CI green + not escalated (or labelled
+                                    `captain-approved`, which only the Captain sets);
+                 REVIEW EXTERNAL PR no member verdict at its head.
+                 Not picked, listed: WAIT CAPTAIN (escalated, no `captain-approved`), a
+                 `changes` verdict (waiting on the author), `proposed-reject` (the Captain
+                 closes it), a draft or held one, CI pending or red, a conflict.
+3. REVIEW PR     another FLEET author's open PR with no verdict (or fixes comment) at its
+                 head sha (reviewer != author). Review only: its author merges it.
+4. RELEASE DUE   an external PR merged since the latest `v*` tag and no open PR titled
+                 `chore: release v…`: patch if the unreleased changelog.d fragments are only
+                 Fixed/Security, minor if any Added/Changed/Deprecated. A Removed or
+                 breaking fragment prints RELEASE NEEDS CAPTAIN instead and picks nothing.
+5. RESUME ISSUE  an open issue assigned to me that no open PR fixes yet, not held, not waiting.
+   (`--skip-prs` jumps straight to 6, for claiming the next issue while a PR is in review.)
+6. CLAIMED ISSUE the first open, unassigned issue that no open PR fixes, carries no hold label,
                  and whose "depends on #N" / "blocked by #N" issues are all closed.
                  `bug` first, then the lower number.
    A claim is `gh issue edit N --add-assignee @me`, then a re-read: another assignee means a
    peer got there first, so un-assign and take the next one.
-5. NOTHING READY
+7. NOTHING READY
+
+An EXTERNAL PR's author association is not OWNER/MEMBER/COLLABORATOR. It is ESCALATED
+(waits for the Captain) when labelled `captain-approval`, when the latest member verdict has
+a line `class: captain…`, or when it touches the release/CI/security path (ESCALATE_*).
+safe_merge.sh applies the same definitions as its gate.
 
 A review verdict is a PR comment whose first two lines are `reviewed-at-sha: <sha>` and
 `verdict: approve|changes` (pairit step 3). It only counts at the PR's CURRENT head.
@@ -57,8 +73,23 @@ DEPENDS = re.compile(
 )
 PR_FIELDS = (
     "number,title,author,labels,headRefName,headRefOid,isDraft,mergeable,"
-    "statusCheckRollup,comments,closingIssuesReferences"
+    "statusCheckRollup,comments,closingIssuesReferences,isCrossRepository,files,changedFiles"
 )
+
+# --- the external-PR process (#1195, Captain 2026-10-01); safe_merge.sh mirrors these ---
+# the release/CI/security path: an external PR touching it waits for the Captain
+ESCALATE_DIRS = (".github/", "skills/release/", ".claude/skills/")
+ESCALATE_FILES = {"pyproject.toml", "src/yurtle_kanban/__init__.py",
+                  "scripts/check_release_version.py"}
+CAPTAIN_APPROVAL = "captain-approval"  # escalated: the fleet sets it and waits
+CAPTAIN_APPROVED = "captain-approved"  # the Captain's yes: ONLY the Captain sets it
+PROPOSED_REJECT = "proposed-reject"    # the fleet proposes; only the Captain closes
+CLASS_CAPTAIN = re.compile(r"(?m)^class: captain")  # the reviewer's third verdict line
+RELEASE_TITLE = "chore: release v"
+FRAGMENT_NAME = re.compile(r"(\d+)(?:-.*)?\.md")      # as scripts/assemble_changelog.py
+SECTION_LINE = re.compile(r"<!-- section: (\w+) -->")
+MINOR_SECTIONS = {"Added", "Changed", "Deprecated"}  # Fixed/Security alone: a patch
+BREAKING = re.compile(r"(?<![-\w])breaking\b", re.I)  # "non-breaking" isn't
 
 
 def gh(*args: str) -> str:
@@ -70,6 +101,105 @@ def gh(*args: str) -> str:
 
 def gh_json(*args: str) -> list | dict:
     return json.loads(gh(*args))
+
+
+def git(*args: str) -> str:
+    r = subprocess.run(["git", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"ERROR: git {' '.join(args)}: {(r.stderr or r.stdout).strip()[:300]}")
+    return r.stdout
+
+
+def association(number: int) -> str:
+    """The PR author's association; `gh pr list --json` doesn't expose it."""
+    return gh("api", f"repos/{{owner}}/{{repo}}/pulls/{number}",
+              "--jq", ".author_association").strip()
+
+
+def is_external(pr: dict) -> bool:
+    """A non-member's PR. Only a fork can carry one (a non-member can't push a branch
+    here), so the association is fetched for fork PRs only: one gh call each."""
+    return bool(pr.get("isCrossRepository")) and association(pr["number"]) not in MEMBERS
+
+
+def latest_verdict(pr: dict) -> str:
+    """The body of the latest member comment starting `reviewed-at-sha:`, or ''."""
+    bodies = [c.get("body") or "" for c in pr.get("comments") or []
+              if c.get("authorAssociation", "MEMBER") in MEMBERS]
+    return next((b for b in reversed(bodies) if b.startswith("reviewed-at-sha:")), "")
+
+
+def escalation(pr: dict) -> list[str]:
+    """Why an external PR waits for the Captain; empty when it is routine."""
+    labels = {lbl["name"] for lbl in pr.get("labels") or []}
+    files = [f["path"] for f in pr.get("files") or []]
+    why = []
+    if CAPTAIN_APPROVAL in labels:
+        why.append(f"label {CAPTAIN_APPROVAL}")
+    if CLASS_CAPTAIN.search(latest_verdict(pr).replace("\r", "")):
+        why.append("verdict class: captain")
+    hits = [f for f in files if f in ESCALATE_FILES or f.startswith(ESCALATE_DIRS)]
+    if hits:
+        why.append("touches " + ", ".join(hits[:5]) + (" …" if len(hits) > 5 else ""))
+    if (pr.get("changedFiles") or 0) > len(files):
+        why.append(f"{pr['changedFiles']} changed files, only {len(files)} listed")
+    return why
+
+
+def release_bump() -> tuple[str, str]:
+    """(patch | minor | major, why) from the unreleased changelog.d/ fragments on origin/main."""
+    names = [n.rsplit("/", 1)[-1] for n in git(
+        "ls-tree", "--name-only", "origin/main", "changelog.d/").split()]
+    sections: dict[str, list[str]] = {}
+    major = []
+    for name in sorted(n for n in names if FRAGMENT_NAME.fullmatch(n)):
+        first, _, rest = git("show", f"origin/main:changelog.d/{name}").partition("\n")
+        m = SECTION_LINE.fullmatch(first.strip())
+        sec = m.group(1) if m else "?"
+        sections.setdefault(sec, []).append(name)
+        if sec == "Removed" or BREAKING.search(rest):
+            major.append(f"{name} ({'Removed' if sec == 'Removed' else 'breaking'})")
+    seen = "; ".join(f"{k}: {', '.join(v)}" for k, v in sorted(sections.items()))
+    if major:
+        return "major", "breaking: " + ", ".join(major)
+    if not sections:
+        return "patch", ("no changelog.d fragments: the release PR adds one per merged external "
+                         "PR (crediting @author); its section decides the bump")
+    if set(sections) - {"Fixed", "Security"}:
+        return "minor", seen
+    return "patch", seen
+
+
+def release_due(prs: list[dict]) -> bool:
+    """Step 4: print RELEASE DUE (and return True) when an external PR merged since the
+    latest `v*` tag and no release PR is open. A major prints RELEASE NEEDS CAPTAIN."""
+    if any((p.get("title") or "").startswith(RELEASE_TITLE) for p in prs):
+        return False
+    merged = gh_json("pr", "list", "--state", "merged", "--limit", "100", "--json",
+                     "number,title,author,isCrossRepository,mergeCommit,mergedAt")
+    forks = [m for m in merged if m.get("isCrossRepository") and m.get("mergedAt")
+             and (m.get("mergeCommit") or {}).get("oid")]
+    if not forks:
+        return False
+    git("fetch", "-q", "origin", "main", "--tags")
+    tags = git("tag", "-l", "v*", "--sort=-v:refname").split()
+    if not tags:
+        return False
+    since = set(git("log", "--merges", "--format=%H", f"{tags[0]}..origin/main").split())
+    ext = [m for m in forks
+           if m["mergeCommit"]["oid"] in since and association(m["number"]) not in MEMBERS]
+    if not ext:
+        return False
+    names = ", ".join(f"#{m['number']} by {m['author']['login']}" for m in ext)
+    bump, why = release_bump()
+    if bump == "major":
+        print(f"\n  RELEASE NEEDS CAPTAIN — {names} merged since {tags[0]}; {why}. A major is "
+              "the Captain's: open a chore issue labelled captain-approval, never cut it.")
+        return False
+    print(f"\nRELEASE DUE — {bump} after {tags[0]}: external PRs merged since: {names}"
+          f"\n  fragments: {why}"
+          "\n  follow .claude/skills/external-pr/SKILL.md (Release) and skills/release/SKILL.md")
+    return True
 
 
 def agent_name() -> str:
@@ -191,7 +321,8 @@ def main() -> None:
     in_progress: dict[int, str] = {}
     for pr in prs:
         for n in map(int, re.findall(r"#(\d+)\b", pr.get("title") or "")):
-            in_progress.setdefault(n, f"in progress in PR #{pr['number']} by {pr['author']['login']}")
+            in_progress.setdefault(
+                n, f"in progress in PR #{pr['number']} by {pr['author']['login']}")
     open_prs = {pr["number"] for pr in prs}
 
     if a.skip_prs:
@@ -213,14 +344,64 @@ def main() -> None:
         print(f"\nRESUME PR #{p['number']} [{state}] — {p['title']}\n  branch: {p['headRefName']}")
         return
 
-    # 2. other authors' PRs that have no verdict at their head
+    # 2. external PRs (#1195): merge an approved one before reviewing a new one
+    external = [p for p in prs if p["author"]["login"] != me and is_external(p)]
+    picks: list[tuple[int, dict, list[str]]] = []
+    for p in external:
+        labels = {lbl["name"] for lbl in p.get("labels") or []}
+        verdict, ci, why = verdict_at_head(p), ci_state(p), escalation(p)
+        esc = "escalated: " + "; ".join(why) if why else "not escalated"
+        skip = held(labels) + (["draft"] if p.get("isDraft") else [])
+        if PROPOSED_REJECT in labels:
+            state = "SKIP: proposed-reject (the Captain closes it)"
+        elif skip:
+            state = "SKIP: " + "; ".join(skip)
+        elif verdict is None:
+            state = "needs-review"
+            picks.append((1, p, why))
+        elif verdict == "changes":
+            state = "SKIP: changes requested, waiting on the author's new head"
+        elif p.get("mergeable") == "CONFLICTING":
+            state = "SKIP: conflict, waiting on the author"
+        elif ci != "green":
+            state = f"SKIP: approved, CI {ci}"
+        elif why and CAPTAIN_APPROVED not in labels:
+            state = "WAIT CAPTAIN"
+            print(f"  WAIT CAPTAIN #{p['number']} by {p['author']['login']} — {esc}; "
+                  f"only the Captain adds {CAPTAIN_APPROVED}")
+        else:
+            state = "ready-to-merge"
+            picks.append((0, p, why))
+        print(f"  external PR #{p['number']:<4} by {p['author']['login']}  {p['title'][:50]}"
+              f"  [{state}]  ({esc})")
+    if picks:
+        kind, p, why = min(picks, key=lambda t: (t[0], t[1]["number"]))
+        esc = "escalated: " + "; ".join(why) if why else "not escalated"
+        if kind == 0:
+            print(f"\nMERGE EXTERNAL PR #{p['number']} by {p['author']['login']} — {p['title']}"
+                  f"\n  head: {p['headRefOid'][:12]}  ({esc}"
+                  f"{', captain-approved' if why else ''})"
+                  "\n  follow .claude/skills/external-pr/SKILL.md: safe_merge.sh, then release")
+        else:
+            print(f"\nREVIEW EXTERNAL PR #{p['number']} by {p['author']['login']} — {p['title']}"
+                  f"\n  head: {p['headRefOid'][:12]}  ({esc})"
+                  "\n  follow .claude/skills/external-pr/SKILL.md (triage, fork CI, review)")
+        return
+    external_nums = {p["number"] for p in external}
+
+    # 3. other FLEET authors' PRs that have no verdict at their head (review only)
     for p in prs:
-        if p["author"]["login"] != me and not p.get("isDraft") and verdict_at_head(p) is None:
+        if (p["author"]["login"] != me and p["number"] not in external_nums
+                and not p.get("isDraft") and verdict_at_head(p) is None):
             print(f"\nREVIEW PR #{p['number']} by {p['author']['login']} — {p['title']}"
                   f"\n  head: {p['headRefOid'][:12]}  branch: {p['headRefName']}")
             return
 
-    # 3. an issue I already hold, with no PR yet — unless it has since been held or blocked
+    # 4. an external PR merged since the last tag: cut the release (patch/minor only)
+    if release_due(prs):
+        return
+
+    # 5. an issue I already hold, with no PR yet — unless it has since been held or blocked
     for i in issues:
         if me in {x["login"] for x in i["assignees"]} and i["number"] not in fixed_by_open_pr:
             why = issue_blockers(i)
@@ -242,8 +423,8 @@ def claim(
     issue_labels: dict[int, set[str]],
     in_progress: dict[int, str],
 ) -> None:
-    """Claim the first eligible issue (step 4); every claim rule applies."""
-    # 4. claim a new one
+    """Claim the first eligible issue (step 6); every claim rule applies."""
+    # 6. claim a new one
     cands = []
     for i in issues:
         why = []

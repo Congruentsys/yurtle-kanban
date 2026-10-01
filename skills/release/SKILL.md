@@ -1,7 +1,7 @@
 ---
 name: release
 description: Create a versioned release with git tag and CHANGELOG update
-disable-model-invocation: true
+disable-model-invocation: false
 allowed-tools: Bash(git *), Bash(grep *), Read, Edit, Write
 argument-hint: "[patch|minor|major] [--message 'Description']"
 ---
@@ -161,6 +161,17 @@ Show:
 - **GitHub Release created, and the publish workflow's conclusion**
 - CHANGELOG entry
 - PyPI version live
+
+## Fleet releases (external-PR process, #1195)
+
+In the yurtle-kanban repo itself, fleet sessions may run this skill under
+`.claude/skills/external-pr/SKILL.md`, right after an external PR merges (the picker's
+`RELEASE DUE`). **Patch or minor only** (Fixed/Security → patch, Added/Changed → minor);
+**a major is the Captain's**: open a `captain-approval` chore issue, never cut it. The release
+PR is reviewed by a distinct session and merged with `.claude/skills/pairit/safe_merge.sh`.
+Keep the GitHub Release notes under GitHub's **125,000-char** cap: if the version's section is
+longer, publish a short summary plus a link to `CHANGELOG.md` (#1191). The fleet never sets
+`captain-approved`.
 
 ## When to Release
 
