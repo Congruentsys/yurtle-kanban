@@ -1,14 +1,20 @@
 # ruff: noqa: F811  (the borrowed `yk` fixture)
 """Issue #987: pairit's ONE review round (rachael-lab 819d26e, Captain 2026-09-28).
 
-After a `changes` verdict at R, the driver fixes every finding and posts a comment
-whose first two lines are `fixes-at-sha: <FIX-SHA>` / `for-review-at: <R>`. A fixed
-tip merges without a second review:
+After an `approve` verdict at R with non-blocking `(follow-up)` findings, the driver
+may fix them and post a comment whose first two lines are `fixes-at-sha: <FIX-SHA>` /
+`for-review-at: <R>`. That fixed tip merges without a second review:
 
-- `safe_merge.sh` merges on an approve at the head, OR on a member's verdict at R plus
-  a later member fixes comment at the head for R, where R is an ancestor of the head.
-  Every other gate (checks, head, conflicts, worktree) is unchanged.
+- `safe_merge.sh` merges on an approve at the head, OR on a member's `approve` at R
+  (the latest unedited `reviewed-at-sha: R` comment, #1228) plus a later member fixes
+  comment at the head for R, where R is a proper ancestor of the head. Every other gate
+  (checks, head, conflicts, worktree) is unchanged.
 - `yk_next.py` counts a head with such a fixes comment as reviewed.
+
+Ruled edit (#1228): after `verdict: changes` (blocking findings) a fixes comment no longer
+makes the head mergeable; the fixed head needs a NEW `reviewed-at-sha: <head>` /
+`verdict: approve` (tests/issues/test_1228_blocking_rereview.py). The tests below that
+merged on `changes` + fixes now carry an approve round at R.
 """
 
 from __future__ import annotations
@@ -36,18 +42,20 @@ def _reviewed_ancestor(sb: Sandbox) -> str:
 # --------------------------------------------------------------------------- safe_merge
 
 
-def test_changes_then_fixes_at_head_merges(tmp_path: Path) -> None:
+def test_approve_then_fixes_at_head_merges(tmp_path: Path) -> None:
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
     sb = Sandbox(tmp_path, conflict=False)
     r = _reviewed_ancestor(sb)
-    out = sb.run(GREEN, [verdict(r, "changes"), fixes(sb.head_sha, r)])
+    out = sb.run(GREEN, [verdict(r, "approve"), fixes(sb.head_sha, r)])
     assert out.returncode == 0, _output(out)
     assert len(sb.merge_calls()) == 1, _output(out)
 
 
 def test_fixes_for_a_non_ancestor_review_refuses(tmp_path: Path) -> None:
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
     sb = Sandbox(tmp_path, conflict=False)
     stranger = _git(sb.checkout, "rev-parse", "origin/main")  # main moved on: not an ancestor
-    out = sb.run(GREEN, [verdict(stranger, "changes"), fixes(sb.head_sha, stranger)])
+    out = sb.run(GREEN, [verdict(stranger, "approve"), fixes(sb.head_sha, stranger)])
     assert out.returncode != 0, _output(out)
     assert sb.merge_calls() == []
 
@@ -70,10 +78,11 @@ def test_fixes_without_a_verdict_at_the_reviewed_sha_refuses(tmp_path: Path) -> 
 
 @pytest.mark.parametrize("who", ["verdict", "fixes"])
 def test_non_member_verdict_or_fixes_refuses(tmp_path: Path, who: str) -> None:
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
     sb = Sandbox(tmp_path, conflict=False)
     r = _reviewed_ancestor(sb)
     comments = [
-        verdict(r, "changes", "NONE" if who == "verdict" else "MEMBER"),
+        verdict(r, "approve", "NONE" if who == "verdict" else "MEMBER"),
         fixes(sb.head_sha, r, "NONE" if who == "fixes" else "MEMBER"),
     ]
     out = sb.run(GREEN, comments)
@@ -82,19 +91,21 @@ def test_non_member_verdict_or_fixes_refuses(tmp_path: Path, who: str) -> None:
 
 
 def test_a_later_changes_at_head_overrides_the_fixes(tmp_path: Path) -> None:
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
     sb = Sandbox(tmp_path, conflict=False)
     r = _reviewed_ancestor(sb)
-    out = sb.run(GREEN, [verdict(r, "changes"), fixes(sb.head_sha, r),
+    out = sb.run(GREEN, [verdict(r, "approve"), fixes(sb.head_sha, r),
                          verdict(sb.head_sha, "changes")])
     assert out.returncode != 0, _output(out)
     assert sb.merge_calls() == []
 
 
 def test_fixed_tip_still_needs_green_checks(tmp_path: Path) -> None:
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
     sb = Sandbox(tmp_path, conflict=False)
     r = _reviewed_ancestor(sb)
     red = [dict(c, state="FAILURE") if c["name"] == "test (3.11)" else c for c in GREEN]
-    out = sb.run(red, [verdict(r, "changes"), fixes(sb.head_sha, r)])
+    out = sb.run(red, [verdict(r, "approve"), fixes(sb.head_sha, r)])
     assert out.returncode != 0, _output(out)
     assert sb.merge_calls() == []
 
@@ -108,7 +119,8 @@ def test_control_approve_at_head_still_merges(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- yk_next
 
 HEAD, R = "b" * 40, "c" * 40
-FIXED = [picker_verdict(R, "changes"), f"fixes-at-sha: {HEAD}\nfor-review-at: {R}\n\nF1"]
+# ruled edit (#1228): fixes-at-sha carries only an approve round
+FIXED = [picker_verdict(R, "approve"), f"fixes-at-sha: {HEAD}\nfor-review-at: {R}\n\nF1"]
 
 
 def test_picker_fixed_head_is_ready_to_merge(yk) -> None:
@@ -159,10 +171,11 @@ def test_fixes_posted_before_the_verdict_refuses(tmp_path: Path) -> None:
 
 
 def test_crlf_bodies_merge(tmp_path: Path) -> None:
+    # ruled edit (#1228): fixes-at-sha carries only an approve round
     sb = Sandbox(tmp_path, conflict=False)
     r = _reviewed_ancestor(sb)
     comments = [
-        {"body": f"reviewed-at-sha: {r}\r\nverdict: changes\r\n", "association": "MEMBER"},
+        {"body": f"reviewed-at-sha: {r}\r\nverdict: approve\r\n", "association": "MEMBER"},
         {"body": f"fixes-at-sha: {sb.head_sha}\r\nfor-review-at: {r}\r\n",
          "association": "MEMBER"},
     ]
