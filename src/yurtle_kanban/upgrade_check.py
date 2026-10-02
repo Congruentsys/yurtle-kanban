@@ -28,6 +28,7 @@ import ast
 import json
 import os
 import re
+import stat
 import subprocess
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
@@ -223,9 +224,37 @@ def _prose(sub: str, toks: list[_Tok]) -> bool:
     return all(_PROSE_WORD.fullmatch(t.text) for t in toks[:words])
 
 
+def _in_prose_backticks(before: str, shell: bool) -> bool:
+    """The match opens inside a backtick quote that is prose, not code. In a doc or
+    a Python string a backtick is always a quote. In a shell script an unescaped
+    backtick outside single quotes is command substitution, which runs the command;
+    only a `\\`` or a backtick inside single quotes is a literal (prose) one."""
+    if not shell:
+        return before.count("`") % 2 == 1
+    prose = False
+    single = double = escaped = False
+    for c in before:
+        if escaped:
+            escaped = False
+            if c == "`":
+                prose = not prose
+        elif single:
+            if c == "'":
+                single = False
+            elif c == "`":
+                prose = not prose
+        elif c == "\\":
+            escaped = True
+        elif c == '"':
+            double = not double
+        elif c == "'" and not double:  # a quote inside "…" is a literal
+            single = True
+    return prose
+
+
 def _shell_findings(
     rel: str, lines: list[str], aliases: set[str], low_lines: set[int], doc: bool,
-    names_agent_env: bool,
+    names_agent_env: bool, shell: bool,
 ) -> Iterator[Finding]:
     for lineno, line in enumerate(lines, 1):
         for m in _INVOKE.finditer(line):
@@ -239,10 +268,12 @@ def _shell_findings(
             toks = [_Tok(w, lineno) for t in _SHELL_TOKEN.findall(rest) if (w := t.strip("[]"))]
             if _prose(m.group("sub"), toks):
                 continue
-            in_backticks = line[: m.start()].count("`") % 2 == 1
             stripped = line.lstrip()
             comment = stripped.startswith(("#", "//")) and not stripped.startswith("#!")
-            low = doc or in_backticks or comment or lineno in low_lines
+            low = (
+                doc or comment or lineno in low_lines
+                or _in_prose_backticks(line[: m.start()], shell=shell)
+            )
             yield from _invocation_findings(
                 rel, lineno, m.group("sub"), toks, m.group(0) + rest,
                 "low" if low else "high", names_agent_env, actor_notes=not low,
@@ -362,7 +393,8 @@ def _status_findings_py(
                     continue
                 hit = sorted(
                     n for n in names
-                    if n in renamed.natives and not set(renamed.natives[n]) <= names
+                    # a check that accepts any native name already works
+                    if n in renamed.natives and not set(renamed.natives[n]) & names
                 )
                 if not hit:
                     continue
@@ -431,7 +463,7 @@ def _status_line_findings(
 
 def _load_config(root: Path) -> Any | None:
     path = root / ".kanban" / "config.yaml"
-    if not path.is_file():
+    if not os.path.isfile(path):  # False, not an exception, on an unreadable .kanban
         return None
     from yurtle_kanban.config import KanbanConfig
 
@@ -528,15 +560,21 @@ def _file_kind(path: Path, root: Path) -> str | None:
 
 
 def _walk(root: Path) -> Iterator[Path]:
-    for dirpath, dirnames, filenames in os.walk(root):
+    """Regular files under `root`. An unreadable directory is skipped, never raised:
+    `os.path.exists` / `lstat` under `try` return no answer instead of an error."""
+    for dirpath, dirnames, filenames in os.walk(root, onerror=lambda _err: None):
         here = Path(dirpath)
         dirnames[:] = sorted(
             d for d in dirnames
-            if d not in SKIP_DIRS and not (here / d / "pyvenv.cfg").exists()
+            if d not in SKIP_DIRS and not os.path.exists(here / d / "pyvenv.cfg")
         )
         for name in sorted(filenames):
             path = here / name
-            if path.is_file() and not path.is_symlink():
+            try:
+                mode = path.lstat().st_mode  # lstat: a symlink is not followed
+            except OSError:
+                continue
+            if stat.S_ISREG(mode):
                 yield path
 
 
@@ -554,9 +592,13 @@ def scan(root: Path) -> list[Finding]:
         try:
             if path.stat().st_size > MAX_BYTES:
                 continue
-            src = path.read_text(errors="replace")
+            data = path.read_bytes()
         except OSError:
             continue
+        if b"\x00" in data:  # a binary file under a code suffix
+            continue
+        # utf-8 whatever the locale: the same repo scans the same everywhere
+        src = data.decode("utf-8", errors="replace")
         if _is_item(path, src, root, item_dirs):
             continue
         findings.extend(_scan_file(path.relative_to(root).as_posix(), src, kind, renamed))
@@ -586,7 +628,9 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
                 )
                 for t in node.targets if isinstance(t, ast.Name)
             }
-    yield from _shell_findings(rel, lines, aliases, low_lines, doc, names_agent_env)
+    yield from _shell_findings(
+        rel, lines, aliases, low_lines, doc, names_agent_env, shell=kind == "sh"
+    )
     if tree is not None:
         yield from _python_list_findings(rel, src, tree, names_agent_env)
     if renamed is not None:
