@@ -520,7 +520,7 @@ def _flat(text: str) -> str:
 
 
 NOT_CHECKED_MARKERS = (
-    "WorkItem.blocks", "to_yurtle()", "validate_transition", "get_allowed_transitions",
+    "WorkItem.blocks", "Yurtle-block export", "validate_transition", "get_allowed_transitions",
     "_commit_and_push_file", "kb:blocks", "stderr", "#877", "kanban_get_blocked",
     "kanban_add_comment", "non-JSON",
 )
