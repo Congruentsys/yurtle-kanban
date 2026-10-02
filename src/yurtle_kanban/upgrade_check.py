@@ -647,9 +647,10 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
 def _default_root() -> Path:
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+            check=False, stdin=subprocess.DEVNULL, timeout=30,  # every git call: #580, #880
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return Path.cwd()
     return Path(out.stdout.strip()) if out.returncode == 0 and out.stdout.strip() else Path.cwd()
 
