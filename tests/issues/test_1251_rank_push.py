@@ -211,7 +211,8 @@ def test_lost_race_to_title_update_retries_and_keeps_both(world) -> None:
     history = git(world.remote, "rev-list", f"{base}..{world.remote_sha()}").split()
     assert len(history) == 2, history
     ours, theirs = history
-    assert subject(world.remote, theirs) == f"Update {ITEM_ID}: title Rival title"
+    # ruled edit (#1251): update --push names the fields it changed, not their values
+    assert subject(world.remote, theirs) == f"Update {ITEM_ID}: title"
     assert subject(world.remote, ours) == f"Rank {ITEM_ID} as #5"
     fm = origin_fm(world)
     assert fm["title"] == "Rival title", "B's title was lost"
