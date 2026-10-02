@@ -289,6 +289,60 @@ def _in_prose_backticks(before: str, shell: bool) -> bool:
     return prose
 
 
+def _comment_start(line: str) -> int | None:
+    """Where a shell comment starts: a `#` at the start of a word (line start or
+    after whitespace) outside quotes (#1237). A `#` inside quotes, escaped, or
+    mid-word (`$#`, `${#x}`, `a#b`) is not one."""
+    single = double = escaped = False
+    for i, c in enumerate(line):
+        if escaped:
+            escaped = False
+        elif single:
+            single = c != "'"
+        elif c == "\\":
+            escaped = True
+        elif c == '"':
+            double = not double
+        elif double:
+            continue
+        elif c == "'":
+            single = True
+        elif c == "#" and (i == 0 or line[i - 1].isspace()):
+            return i
+    return None
+
+
+# a heredoc operator: `<<TAG`, `<<-TAG`, `<<'TAG'`, `<<"TAG"`, `<<\TAG` (not `<<<`)
+_HEREDOC = re.compile(
+    r"(?<!<)<<(?P<dash>-?)[ \t]*(?:'(?P<sq>[^']+)'|\"(?P<dq>[^\"]+)\"|\\(?P<bs>\w+)|(?P<bare>\w+))"
+)
+
+
+def _quoted_heredoc_lines(lines: list[str]) -> set[int]:
+    """Line numbers inside a quoted heredoc's body (`<<'TAG'`, `<<"TAG"`,
+    `<<\\TAG`): literal text, so prose (#1237). An unquoted `<<TAG` body still
+    expands `$(…)` and backticks, so its lines stay code."""
+    out: set[int] = set()
+    pending: list[tuple[str, bool, bool]] = []  # (tag, strip tabs, quoted)
+    for lineno, line in enumerate(lines, 1):
+        if pending:
+            tag, dash, quoted = pending[0]
+            if (line.lstrip("\t") if dash else line) == tag:
+                pending.pop(0)
+            elif quoted:
+                out.add(lineno)
+            continue
+        code = line[: c] if (c := _comment_start(line)) is not None else line
+        for m in _HEREDOC.finditer(code):
+            # an operator inside quotes is text, not a redirection
+            before = code[: m.start()]
+            if before.count("'") % 2 or before.count('"') % 2:
+                continue
+            tag = m.group("sq") or m.group("dq") or m.group("bs") or m.group("bare")
+            pending.append((tag, bool(m.group("dash")), m.group("bare") is None))
+    return out
+
+
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _LIST_MARKER = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\$\s+)?`?")
 
@@ -333,6 +387,9 @@ def _shell_findings(
                 continue
             stripped = line.lstrip()
             comment = stripped.startswith(("#", "//")) and not stripped.startswith("#!")
+            if shell and not comment:  # a trailing ` # …` comment (#1237)
+                start = _comment_start(line)
+                comment = start is not None and start < m.start()
             # a skill's command line is run by agents: not low for being in a doc
             code = lineno in code_lines
             low = (
@@ -727,6 +784,8 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
                 )
                 for t in node.targets if isinstance(t, ast.Name)
             }
+    if kind == "sh":
+        low_lines = _quoted_heredoc_lines(lines)
     code_lines = _skill_code_lines(lines) if doc and _is_skill(rel) else set()
     yield from _shell_findings(
         rel, lines, aliases, low_lines, doc, names_agent_env, shell=kind == "sh",
