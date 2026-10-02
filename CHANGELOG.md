@@ -10,6 +10,22 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-10-02
+
+### Added
+
+- **`yurtle-kanban upgrade-check [PATH] [--json]`** (#1231): a read-only, heuristic scan of a repo for yurtle-kanban 2.x usages that 3.x changed. It reads scripts (`*.py`, `*.sh`, Makefiles, shebang scripts, CI workflows) and docs (`*.md`, skills included) and reports file:line, the old form, its replacement and a confidence for: options 3.0.0 removed (#580) in shell strings and Python argument lists (`[YK, 'move', iid, 'in_progress', '-a', agent]` → `--assign agent`; `comment --author A ID TEXT` → `comment ID --body TEXT --agent A`); a board item's front matter `resolution: obsolete` or `resolution: merged`, values #581 dropped from the vocabulary (#1242: `obsolete` → `wont_do` (a dead dependency: its dependents stop being pickable) or `superseded --superseded-by ID`; `merged` → `superseded --superseded-by ID` or `duplicate --superseded-by ID`); raw status comparisons (`status == 'in_progress'`) when the nearest `.kanban/config.yaml` (PATH or above it, up to the git root or `$HOME`, so `~/.kanban` is read only when PATH is `$HOME`; with none, a note says status checks were skipped) uses a theme with native status names (nautical, hdd, spec); `comment`/`move` calls with no `--agent` or `YURTLE_AGENT` (low). Docs, comments and backtick-quoted mentions are low confidence, except a skill's (`.claude/skills/**/SKILL.md`, `skills/**/SKILL.md`) fenced and command lines, which agents run (high), and its inline-code commands in prose (medium); `.git`, virtualenvs, conda envs, `.direnv`, `node_modules` are skipped, and work-item files are read only for their front matter `resolution:`. `--json` prints `{"findings": [...], "heuristic": true, "not_checked": [...], "skipped": N, "notes": [...]}` (`skipped`: files over 2 MB or binary, also counted in the text summary); exit 1 with findings, 0 without, 3 (one `Error:` line on stderr) when the scan itself fails. It does not check (and says so in `--help`, in its header, on a clean run and in `not_checked`): Python API removals (`WorkItem.blocks`, `to_yurtle()`, `validate_transition`, `get_allowed_transitions`, `_commit_and_push_file`, the `kb:blocks` triple), refusals moved to stderr (#1080/#1086/#1090), the `--json` refusal shape (#877), MCP's `kanban_get_blocked` shape and `kanban_add_comment`'s `"agent"` default, and hand-rolled readers of non-JSON output; see UPGRADING.md.
+- A deprecation policy (#1232): CONTRIBUTING.md's **Deprecation policy** says a removal or rename is first deprecated in a minor release (it keeps working, warns once on stderr with the replacement, and is listed under **Deprecated**), and the major that removes it adds an upgrade-guide (`UPGRADING.md`) entry; dropping it with no alias needs the Captain's ruling. `scripts/check_upgrade_guide.py X.Y.Z`, run by the release skill for a major, exits non-zero when a `Removed` or `**Breaking` entry has no upgrade-guide entry for its issue.
+- `UPGRADING.md`, the 2.x → 3.x upgrade guide (#1233).
+
+### Changed
+
+- pairit (#1228): after a `changes` verdict (blocking findings) the fixed head needs a fresh `reviewed-at-sha: <head>` / `verdict: approve` before `safe_merge.sh` merges it or yk-next calls it ready; `fixes-at-sha` now carries only an approve round's `(follow-up)` fixes (the last verdict before the fixes comment, at any sha, must be an unedited `approve` of the reviewed sha: a `changes` anywhere after that approve, or an edited or malformed verdict in between, refuses).
+
+### Deprecated
+
+- **The 2.x forms 3.0.0 removed (#580) work again, with a deprecation warning, until 4.0** (#1230). Each maps to its 3.x form and behaves exactly as it; it prints one line on stderr, `yurtle-kanban: <command> <old> is deprecated, use <command> <new> (removed in 4.0)`, so `--json` stdout stays pure JSON. The forms: `move -a` → `move --assign`; `create --assignee/-a` → `create --assign`; `create --description/-d` → `create --body`; `comment ID TEXT` → `comment ID --body TEXT`; `comment --author/-a` → `comment --agent`; `next --assignee/-a` → `next --agent`; `list -a` → `list --assignee`. They are hidden from `--help`. Giving an old form with its new one (or two old spellings of it) is a usage error, exit 2. The MCP tools lost no field in #580, so they need no alias.
+
 ## [3.2.0] - 2026-10-01
 
 ### Added
