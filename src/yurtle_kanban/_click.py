@@ -239,3 +239,10 @@ def pull_note(result: dict[str, Any]) -> str:
         result.get("branch") or "main", result.get("dirty_parent"), result.get("ff_why")
     )
     return f"[yellow]  {safe(note)}[/yellow]"
+
+
+def given_flag(new: str, old: dict[str, Any]) -> str:
+    """The spelling a value reached through `deprecated(...)` was given under, for
+    a later refusal to name (#1239): the old spelling that carried it, else `new`.
+    `old` is the map passed to `deprecated` (which has already refused two)."""
+    return next((name for name, v in old.items() if v is not None), new)
