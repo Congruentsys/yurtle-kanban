@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 
+from yurtle_kanban import cli
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 
@@ -63,6 +64,8 @@ def _make_repo(root: Path) -> Path:
 
 def _invoke(repo: Path, args: list[str], monkeypatch: pytest.MonkeyPatch) -> Result:
     monkeypatch.chdir(repo)
+    # no wrapping: a printed path is compared whole, with its repo masked
+    monkeypatch.setattr(cli.console, "_width", 10_000)
     return CliRunner().invoke(main, args)
 
 
@@ -161,7 +164,21 @@ def _twin(tmp_path_factory, monkeypatch, old: list[str], new: list[str]):
     _seed(b, monkeypatch)
     r_old = _invoke(a, old, monkeypatch)
     r_new = _invoke(b, new, monkeypatch)
-    return r_old, r_new, _tree(a), _tree(b)
+    return _Run(r_old, a), _Run(r_new, b), _tree(a), _tree(b)
+
+
+class _Run:
+    """A result whose stdout/stderr name its repo as `<REPO>` (paths are printed)
+    and its timestamps as `<T>` (two runs differ by seconds)."""
+
+    def __init__(self, result: Result, repo: Path) -> None:
+        def norm(text: str) -> str:
+            return _STAMP.sub("<T>", text.replace(str(repo), "<REPO>"))
+
+        self.exit_code = result.exit_code
+        self.output = result.output
+        self.stdout = norm(result.stdout)
+        self.stderr = norm(result.stderr)
 
 
 @pytest.mark.parametrize(
@@ -208,7 +225,7 @@ def test_the_effect_is_the_new_forms(tmp_path_factory, monkeypatch):
     assert "the body text" in bug["description"]
     feat = json.loads(_invoke(repo, ["show", "FEAT-001", "--json"], monkeypatch).stdout)
     assert feat["assignee"] == "frank"
-    assert [(c["author"], c["text"]) for c in feat["comments"]] == [("erin", "shipped it")]
+    assert [(c["author"], c["content"]) for c in feat["comments"]] == [("erin", "shipped it")]
 
 
 def test_two_deprecated_forms_warn_once_each(tmp_path_factory, monkeypatch):
