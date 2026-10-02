@@ -562,9 +562,12 @@ class TestFreeTextHelper:
     def test_create_with_neither_is_fine(self, repo):
         _ok(["create", "feature", "other"])
 
-    def test_comment_positional_text_is_gone(self, repo):
-        """`comment ID TEXT` was the injection channel; the text is `--body` now."""
-        _usage_error(["comment", "FEAT-001", "hi"])
+    def test_comment_positional_text_is_deprecated(self, repo):
+        """`comment ID TEXT` was the injection channel; the text is `--body` now.
+        Captain's ruling on #1230: the positional text is accepted again until
+        4.0, with one deprecation line on stderr naming `--body`."""
+        result = _ok(["comment", "FEAT-001", "hi"])
+        assert "use comment ID --body TEXT (removed in 4.0)" in result.stderr, result.stderr
 
     def test_body_file_dash_on_create_push_reaches_the_file(self, repo):
         _ok(["create", "feature", "other", "--push", "--body-file", "-"],
@@ -910,7 +913,7 @@ class TestGitStdinDevnull:
 
 
 # ---------------------------------------------------------------------------
-# Acceptance 11 / Expected 4 — flag normalisation (no aliases kept)
+# Acceptance 11 / Expected 4 — flag normalisation (old forms deprecated until 4.0, #1230)
 # ---------------------------------------------------------------------------
 
 
@@ -936,12 +939,16 @@ class TestFlagNormalisation:
             pytest.param(["comment", "FEAT-001", "--body", "hi", "-a", "X"], id="comment -a"),
         ],
     )
-    def test_old_flag_is_a_usage_error(self, args):
-        """Rejected for the OLD flag itself — not for some other unknown option."""
+    def test_old_flag_is_deprecated(self, args):
+        """Captain's ruling on #1230: the OLD flag itself warns (one line on
+        stderr, naming it and 4.0) and works until 4.0, instead of being refused."""
         old = next(a for a in args if a in {"-a", "-d", "--assignee", "--description",
                                             "--author"})
-        out = _flat(_usage_error(args).output)
-        assert re.search(rf"No such option:? ['\"]?{re.escape(old)}(?![\w-])", out), out
+        result = _ok(args)
+        lines = [ln for ln in result.stderr.splitlines() if "is deprecated" in ln]
+        assert len(lines) == 1, result.stderr
+        assert re.search(rf" {re.escape(old)} is deprecated, use .*\(removed in 4\.0\)$",
+                         lines[0]), lines
 
     def test_next_agent_is_accepted(self):
         _ok(["next", "--agent", "Mini"])

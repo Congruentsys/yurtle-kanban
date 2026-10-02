@@ -615,11 +615,10 @@ def _verdict(line):
         ("yurtle-kanban move EXP-1 done -f", None),
         ("yurtle-kanban move EXP-1 done -z", "`-z` is not accepted by `yurtle-kanban move`"),
         ("yurtle-kanban move EXP-1 done -m 'msg' --assign Mini", None),
-        # #580: `-a` is removed everywhere
-        (
-            "yurtle-kanban move EXP-1 done -m 'msg' -a Mini",
-            "`-a` is not accepted by `yurtle-kanban move`",
-        ),
+        # #580 removed `-a`; the Captain's ruling on #1230 brings it back on move as
+        # a hidden deprecated alias until 4.0, so click accepts it (a hidden alias
+        # counts, as above). Skills are still kept off it by #580's skill lint.
+        ("yurtle-kanban move EXP-1 done -m 'msg' -a Mini", None),
         # an env-var prefix is still a command
         ("KANBAN_ROOT=/tmp/b yurtle-kanban list --status done", None),
         (

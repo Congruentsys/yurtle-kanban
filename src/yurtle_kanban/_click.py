@@ -105,6 +105,50 @@ def _value_follows(cmd: click.Command, arg: str, nxt: str | None = None) -> bool
     return False
 
 
+class HiddenArgument(click.Argument):
+    """A positional argument left out of the usage line, as `hidden=True` leaves
+    an option out of `--help`: for a deprecated 2.x positional (#1230)."""
+
+    def get_usage_pieces(self, ctx: click.Context) -> list[str]:
+        return []
+
+
+def deprecated(
+    command: str,
+    new: str,
+    value: Any,
+    old: dict[str, Any],
+    *,
+    given: str | None = None,
+) -> Any:
+    """The value of a 3.x form that 2.x forms #580 removed still map to (#1230).
+
+    `old` maps each 2.x spelling (`-a`, `--assignee`, `ID TEXT`) to the value it
+    was given (None when absent); `value` is the 3.x form `new`'s own, and `given`
+    names the 3.x spelling actually used, when it isn't `new` (`--body-file`).
+    No old form: `value`, unchanged. One old form alone: its value, with ONE line
+    on stderr, `yurtle-kanban: <command> <old> is deprecated, use <command> <new>
+    (removed in 4.0)`; stdout (and so `--json`) is untouched. An old form with
+    the new one, or two old spellings, is a usage error: never a silent pick."""
+    used = [name for name, v in old.items() if v is not None]
+    if not used:
+        return value
+    if value is not None:
+        used.insert(0, given or new)
+    if len(used) > 1:
+        both = " and ".join(f"{command} {name}" for name in used)
+        raise click.UsageError(
+            f"{both} both given: use {command} {new} only",
+            ctx=click.get_current_context(silent=True),
+        )
+    click.echo(
+        f"yurtle-kanban: {command} {used[0]} is deprecated, "
+        f"use {command} {new} (removed in 4.0)",
+        err=True,
+    )
+    return old[used[0]]
+
+
 def json_refusal(message: object, *, exit_code: int = 1, **extra: Any) -> NoReturn:
     """A `--json` refusal: exactly one JSON object on stdout,
     `{"success": false, "error": <message>}` plus `extra`, and exit 1 (#877), or
