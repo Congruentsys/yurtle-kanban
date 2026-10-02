@@ -762,7 +762,7 @@ HEADER = (
 )
 # the 3.0 changes this scan never looks for: a clean run is not "safe to upgrade"
 NOT_CHECKED: tuple[str, ...] = (
-    "Python API removals (WorkItem.blocks, to_dict()['blocks'], WorkItem.to_yurtle(), "
+    "Python API removals (WorkItem.blocks, to_dict()['blocks'], WorkItem's Yurtle-block export, "
     "WorkflowParser.validate_transition, WorkflowConfig.get_allowed_transitions, "
     "KanbanService._commit_and_push_file, the kb:blocks query triple)",
     "refusals moved to stderr (#1080/#1086/#1090): a script grepping stdout for "
