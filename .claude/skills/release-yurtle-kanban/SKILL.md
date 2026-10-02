@@ -75,6 +75,17 @@ gh search prs --repo Congruentsys/yurtle-kanban --merged-at ">=$(git log -1 --fo
   | grep -wE "^#($IN_RELEASE)"
 ```
 
+For a **major** (X.0.0), check that every removal and break reaches users through the
+upgrade guide (the deprecation policy in CONTRIBUTING.md):
+
+```bash
+python scripts/check_upgrade_guide.py X.Y.Z   # non-zero = stop: add the missing UPGRADING.md entries
+```
+
+It fails unless each `### Removed` entry, and each `**Breaking` entry, of the new section
+has its `#N` in `UPGRADING.md`. Non-zero: stop, write the missing guide entries, and run it
+again. For a minor or patch it has nothing to check.
+
 ### 5. Commit the Release on a Branch
 
 ```bash

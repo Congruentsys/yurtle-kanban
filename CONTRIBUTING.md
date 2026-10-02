@@ -73,6 +73,21 @@ fragments. With nothing to release it changes nothing.
 
 A release is the Captain's call.
 
+### Deprecation policy
+
+A CLI flag, command, MCP tool or field, or file format that will be removed or renamed is
+first **deprecated in a minor release**: it keeps working, warns once on stderr naming its
+replacement, and is listed under **Deprecated** in the changelog. The next **major**
+release removes it, and adds an entry for it to the upgrade guide, `UPGRADING.md`: what
+changed, and what to use instead.
+
+Removing something in a major with **no aliases kept**, without a deprecating minor
+first, needs the Captain's explicit ruling.
+
+For a major, the release runs `python scripts/check_upgrade_guide.py X.Y.Z`. It fails
+unless every `### Removed` entry, and every `**Breaking` entry, of the version's
+changelog section has its issue number (`#N`) in `UPGRADING.md`.
+
 ### License
 
 By contributing, you agree that your contributions will be licensed under the same license as the project (see LICENSE file).
