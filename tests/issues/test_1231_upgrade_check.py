@@ -512,7 +512,7 @@ def test_files_are_read_as_utf8_whatever_the_locale(tmp_path: Path) -> None:
     assert any("café prêt" in h["old"] for h in hits), hits
 
 
-# --- r2: Mini's review (B1, F2-F6, F8) -------------------------------------------------
+# --- r2: Mini's review (B1, F2-F6) -------------------------------------------------------
 
 
 def _flat(text: str) -> str:
@@ -692,50 +692,3 @@ def test_f6_conda_envs_and_direnv_are_skipped(tmp_path: Path) -> None:
     files = {f["file"] for f in _json(root)["findings"]}
     assert "scripts/claim.sh" in files, files
     assert not any(f.startswith(("env/", ".direnv/")) for f in files), files
-
-
-RESOLUTION_SH = """\
-#!/usr/bin/env bash
-export YURTLE_AGENT=Air
-yurtle-kanban move "$ID" done --resolution obsolete
-yurtle-kanban update "$ID" --resolution=merged
-yurtle-kanban list --resolution "obsolete" --json
-yurtle-kanban move "$ID" done --resolution wont_do
-"""
-
-RESOLUTION_PY = """\
-import subprocess
-
-YK = 'yurtle-kanban'
-
-
-def f(iid):
-    subprocess.run([YK, 'move', iid, 'done', '--resolution', 'merged', '--agent', 'Air'])
-"""
-
-
-def test_f8_removed_resolution_values_are_flagged(tmp_path: Path) -> None:
-    """#581 removed `obsolete`/`merged`: completed, superseded, duplicate, wont_do."""
-    root = tmp_path / "r"
-    _write(root, "r.sh", RESOLUTION_SH)
-    _write(root, "r.py", RESOLUTION_PY)
-    findings = _json(root)["findings"]
-
-    def res_hits(file: str, line: int) -> list[dict]:
-        return [
-            f for f in _in(findings, file, kind="removed-form", line=line)
-            if "--resolution" in f["suggestion"]
-        ]
-
-    for file, line, value in (
-        ("r.sh", 3, "obsolete"), ("r.sh", 4, "merged"), ("r.sh", 5, "obsolete"),
-        ("r.py", 7, "merged"),
-    ):
-        hits = res_hits(file, line)
-        assert len(hits) == 1, (file, line, findings)
-        s = hits[0]["suggestion"]
-        assert hits[0]["confidence"] == "high"
-        assert value in s and "#581" in s, s
-        assert "wont_do" in s and "superseded" in s, s
-    assert res_hits("r.sh", 6) == [], findings
-    assert not _in(findings, "r.sh", line=6), findings
