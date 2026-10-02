@@ -311,15 +311,19 @@ def _skill_code_lines(lines: list[str]) -> set[int]:
 _INLINE_CODE = re.compile(r"`([^`\n]+)`")
 
 
-def _skill_inline_lines(lines: list[str], code_lines: set[int]) -> set[int]:
-    """A skill's prose lines quoting a yurtle-kanban command in inline code
-    (`**Atomic claim:** `yurtle-kanban move … -a <agent>``): agents follow those,
-    so their findings are `medium`, between a command line's `high` and a doc's `low`."""
-    return {
-        lineno for lineno, line in enumerate(lines, 1)
-        if lineno not in code_lines
-        and any(_INVOKE.search(m.group(1)) for m in _INLINE_CODE.finditer(line))
-    }
+def _skill_inline_spans(lines: list[str], code_lines: set[int]) -> list[str]:
+    """Each skill prose line reduced to its inline-code spans that quote a
+    yurtle-kanban command (`**Atomic claim:** `yurtle-kanban move … -a <agent>``),
+    joined by `;`: agents follow those, so their findings are `medium`, between a
+    command line's `high` and a doc's `low`. Per span, not per line: a bare-prose
+    command sharing the line with a quoted one is not in the result."""
+    out: list[str] = []
+    for lineno, line in enumerate(lines, 1):
+        spans = [] if lineno in code_lines else [
+            m.group(1) for m in _INLINE_CODE.finditer(line) if _INVOKE.search(m.group(1))
+        ]
+        out.append(" ; ".join(spans))
+    return out
 
 
 def _shell_findings(
@@ -771,12 +775,22 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
             }
     skill = doc and _is_skill(rel)
     code_lines = _skill_code_lines(lines) if skill else set()
-    medium_lines = _skill_inline_lines(lines, code_lines) if skill else set()
+    # the removed forms inside a skill's inline-code spans: scanned on their own,
+    # so a finding is medium only when its own invocation is in backticks
+    medium = {
+        (f.line, f.old, f.suggestion) for f in _shell_findings(
+            rel, _skill_inline_spans(lines, code_lines), aliases, low_lines, doc,
+            names_agent_env, shell=False,
+        ) if f.kind == "removed-form"
+    } if skill else set()
     for f in _shell_findings(
         rel, lines, aliases, low_lines, doc, names_agent_env, shell=kind == "sh",
         code_lines=code_lines,
     ):
-        if f.kind == "removed-form" and f.confidence == "low" and f.line in medium_lines:
+        if (
+            f.kind == "removed-form" and f.confidence == "low"
+            and (f.line, f.old, f.suggestion) in medium
+        ):
             f = replace(f, confidence="medium")
         yield f
     if tree is not None:
