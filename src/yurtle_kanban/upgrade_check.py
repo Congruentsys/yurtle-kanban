@@ -42,7 +42,7 @@ import re
 import stat
 import subprocess
 from collections.abc import Iterable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +107,11 @@ _SHELL_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|\'[^\']*\'|\S+')
 _ALIAS_ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_]\w*)=\S*yurtle-kanban", re.M)
 _STATUS_NAME_CONTEXT = re.compile(r"status|\bst\b", re.I)
 _STATE_CONTEXT = re.compile(r"state|stat", re.I)
+
+
+# a finding's confidence: run as written / a skill's prose that agents follow /
+# a doc, comment or quoted mention people may copy
+CONFIDENCES = ("high", "medium", "low")
 
 
 @dataclass(frozen=True)
@@ -301,6 +306,20 @@ def _skill_code_lines(lines: list[str]) -> set[int]:
         if fenced or _INVOKE.match(line, start):
             out.add(lineno)
     return out
+
+
+_INLINE_CODE = re.compile(r"`([^`\n]+)`")
+
+
+def _skill_inline_lines(lines: list[str], code_lines: set[int]) -> set[int]:
+    """A skill's prose lines quoting a yurtle-kanban command in inline code
+    (`**Atomic claim:** `yurtle-kanban move … -a <agent>``): agents follow those,
+    so their findings are `medium`, between a command line's `high` and a doc's `low`."""
+    return {
+        lineno for lineno, line in enumerate(lines, 1)
+        if lineno not in code_lines
+        and any(_INVOKE.search(m.group(1)) for m in _INLINE_CODE.finditer(line))
+    }
 
 
 def _shell_findings(
@@ -742,11 +761,16 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
                 )
                 for t in node.targets if isinstance(t, ast.Name)
             }
-    code_lines = _skill_code_lines(lines) if doc and _is_skill(rel) else set()
-    yield from _shell_findings(
+    skill = doc and _is_skill(rel)
+    code_lines = _skill_code_lines(lines) if skill else set()
+    medium_lines = _skill_inline_lines(lines, code_lines) if skill else set()
+    for f in _shell_findings(
         rel, lines, aliases, low_lines, doc, names_agent_env, shell=kind == "sh",
         code_lines=code_lines,
-    )
+    ):
+        if f.kind == "removed-form" and f.confidence == "low" and f.line in medium_lines:
+            f = replace(f, confidence="medium")
+        yield f
     if tree is not None:
         yield from _python_list_findings(rel, src, tree, names_agent_env)
     if renamed is not None:
@@ -852,11 +876,11 @@ def upgrade_check(path: Path | None, as_json: bool) -> None:
             click.echo(f"      -> {f.suggestion}")
         if findings:
             files = len({f.file for f in findings})
-            high = sum(f.confidence == "high" for f in findings)
+            count = {c: sum(f.confidence == c for f in findings) for c in CONFIDENCES}
             click.echo("")
             click.echo(
                 f"{len(findings)} finding(s) in {files} file(s): "
-                f"{high} high, {len(findings) - high} low confidence"
+                + ", ".join(f"{count[c]} {c}" for c in CONFIDENCES) + " confidence"
             )
         click.echo(f"skipped: {result.skipped} large/binary files")
     click.get_current_context().exit(1 if findings else 0)
