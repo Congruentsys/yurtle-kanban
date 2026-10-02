@@ -83,6 +83,8 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [3.0.0] - 2026-09-30
 
+Upgrading from 2.x: see [UPGRADING.md](UPGRADING.md) for every break and what to use instead.
+
 ### Added
 
 - **CHANGELOG fragments** (#178): each PR adds `changelog.d/<N>.md` instead of

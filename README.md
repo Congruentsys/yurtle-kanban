@@ -39,6 +39,8 @@ pip install yurtle-kanban[mcp]
 pip install yurtle-kanban[all]
 ```
 
+**Upgrading from 2.x?** See [UPGRADING.md](UPGRADING.md): every 2.x → 3.x break and its replacement, and `yurtle-kanban upgrade-check` to scan your repo.
+
 ## Quick Start
 
 ```bash
