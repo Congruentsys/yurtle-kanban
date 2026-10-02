@@ -300,6 +300,28 @@ def test_status_checks_not_flagged_without_a_config(tmp_path: Path) -> None:
     assert json.loads(res.stdout)["findings"] == []
 
 
+def test_a_message_naming_the_command_is_not_a_call(tmp_path: Path) -> None:
+    """nightly.py's error text: `yurtle-kanban comment failed (rc=…)` is prose."""
+    root = tmp_path / "r"
+    _write(root, "m.py", 'def f(p):\n'
+           '    raise RuntimeError(f"yurtle-kanban comment failed (rc={p.returncode})")\n'
+           '    raise RuntimeError("yurtle-kanban move did not commit")\n')
+    assert _json(root)["findings"] == []
+
+
+def test_a_status_string_in_python_is_low(tmp_path: Path) -> None:
+    """`"status: done\\n"` in Python is often a fixture writing front matter: low;
+    in a shell script (`grep 'status: in_progress'`) it is a check: high."""
+    root = tmp_path / "r"
+    _write(root, ".kanban/config.yaml", NAUTICAL_CONFIG)
+    _write(root, "fixture.py", 'ITEM = "---\\nid: EXP-1\\nstatus: done\\n---\\n"\n')
+    _write(root, "check.sh", "grep -l 'status: in_progress' kanban-work/*/*.md\n")
+    findings = _json(root)["findings"]
+    assert [(f["file"], f["confidence"]) for f in findings] == [
+        ("check.sh", "high"), ("fixture.py", "low"),
+    ], findings
+
+
 # --- 3. actor note ---------------------------------------------------------------
 
 
@@ -373,6 +395,14 @@ def test_skipped_dirs_and_board_items(lab: Path) -> None:
     ), files
     # the board's own item files are not scanned (their `status:` is the board's)
     assert not any(f.startswith("kanban-work/") for f in files), files
+
+
+def test_a_vendored_boards_item_files_are_skipped(lab: Path) -> None:
+    """Another repo's board vendored here: its items are data, known by their
+    front matter, though no board of this config names the directory."""
+    _write(lab, "vendor/other-lab/kanban-work/EXP-009.md", ITEM_MD)
+    files = {f["file"] for f in _json(lab)["findings"]}
+    assert not any(f.startswith("vendor/") for f in files), files
 
 
 def test_scan_is_read_only(lab: Path) -> None:

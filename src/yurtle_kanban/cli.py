@@ -87,6 +87,7 @@ from .service import (
     parse_duration,
 )
 from .sync import HALTED, NOTHING_PICKABLE, Outcome
+from .upgrade_check import upgrade_check
 
 
 def _get_shared_data_dir(subdir: str) -> Path:
@@ -2710,6 +2711,9 @@ def query(
 # Epic subgroups (epic is primary, voyage is nautical alias)
 main.add_command(epic)
 main.add_command(voyage)
+
+# upgrade-check: scan a repo for 2.x usages 3.x changed (#1231)
+main.add_command(upgrade_check)
 
 
 if __name__ == "__main__":
