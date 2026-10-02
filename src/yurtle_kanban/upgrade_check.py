@@ -465,6 +465,7 @@ def _status_line_findings(
 # --- the repo: config, files ----------------------------------------------------------
 
 
+CRASHED = 3  # exit code of an unexpected error: 1 is findings, 2 a usage error
 NO_CONFIG_NOTE = "no .kanban config found: status checks skipped"
 
 
@@ -713,7 +714,8 @@ _HELP = f"""Scan a repo for 2.x usages that 3.x changed (read-only).
     argument lists; raw status comparisons a nautical, hdd or spec board's
     native status names break; comment/move calls with no --agent. Docs and
     quoted mentions are low confidence. Skips .git, virtualenvs, node_modules
-    and the board's own items. Exit 0 with nothing found, 1 with findings.
+    and the board's own items. Exit 0 with nothing found, 1 with findings,
+    2 on a usage error, 3 when the scan itself fails.
 
     Not checked (see UPGRADING.md): {'; '.join(NOT_CHECKED)}.
     """
@@ -728,7 +730,14 @@ _HELP = f"""Scan a repo for 2.x usages that 3.x changed (read-only).
 )
 def upgrade_check(path: Path | None, as_json: bool) -> None:
     root = path if path is not None else _default_root()
-    result = scan(root)
+    try:
+        result = scan(root)
+    except Exception as e:  # a crash is neither findings (1) nor a usage error (2)
+        message = " ".join(f"upgrade-check failed: {type(e).__name__}: {e}".split())
+        click.echo(f"Error: {message}", err=True)
+        if as_json:  # stdout stays one JSON object, as every refusal (#877)
+            click.echo(json.dumps({"success": False, "error": message}, ensure_ascii=False))
+        click.get_current_context().exit(CRASHED)
     findings = result.findings
     if as_json:
         click.echo(json.dumps(
