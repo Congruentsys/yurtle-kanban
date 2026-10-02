@@ -62,11 +62,13 @@ text, never stdin; use `--body-file -` to read stdin. MCP `kanban_add_comment` k
 ### Who is acting: actor resolution (#580)
 
 The *actor* (a comment's author, `kb:by` on a status change) resolves in one order: `--agent`,
-then the `YURTLE_AGENT` environment variable, then git `user.name`; a command that records an
-actor (`comment`, `move`) refuses with `No actor` when none resolves. (`next` and
-`list --pickable` still run without one; the 3.x-only `claim`, `bounce`, `control` and
-`move --take-over` need `--agent` or `YURTLE_AGENT` and never fall back to git `user.name`.) The 2.x defaults `"cli"`, `"agent"` and `"unknown"` are gone, and a set but
-blank `YURTLE_AGENT` is an error. `kb:by` is now the actor, not the assignee.
+then the `YURTLE_AGENT` environment variable, then git `user.name`. A command that records an
+actor (`comment`, `move`, `control`, `create --push`, `next-id` when it commits an allocation)
+refuses with `No actor` when none resolves; `next` and `list --pickable` still run without one.
+The 3.x-only `claim`, `bounce` and `move --take-over` need `--agent` or `YURTLE_AGENT`: they
+never fall back to git `user.name`. The 2.x defaults `"cli"`, `"agent"` and `"unknown"` are
+gone, and a set but blank `YURTLE_AGENT` is an error. `kb:by` is now the actor, not the
+assignee.
 
 The *assignee* is never defaulted: only `--assign` sets it. Identity values (`--agent`,
 `YURTLE_AGENT`, `--assign`, `list --assignee`) are refused when empty, whitespace-only or
@@ -104,7 +106,8 @@ from stdout must read stderr, or better, check the exit code.
 
 With `--json`, every refusal prints exactly one JSON object on stdout,
 `{"success": false, "error": "…"}`, and exits non-zero: `1` for a refused input, `2` for a
-usage error, `8` when the board is halted (`next --json`, `list --pickable --json`). Parse `success` and `error` rather than an
+usage error, `8` when the board is halted (`next --json`, `list --pickable --json`).
+`upgrade-check --json` also exits `3` when the scan itself fails (see step 1). Parse `success` and `error` rather than an
 empty stdout or a hint on stderr. `next-id --json` keeps its keys and gains `error`.
 
 ### Resolutions (#581)
@@ -124,7 +127,7 @@ as `resolution`. Re-record those items:
 
 A `wont_do` item is a dead dependency: anything that depends on it stops being pickable.
 `upgrade-check` reports them from item front matter (kind `resolution-value`, `high`). Without
-it: `grep -rnE "resolution:[[:space:]]*[\"']?(obsolete|merged)" <board dirs>`.
+it: `grep -rnE "resolution:[[:space:]]*[\"']?(obsolete|merged)\b" <board dirs>`.
 
 ### The allocation file (#818)
 
