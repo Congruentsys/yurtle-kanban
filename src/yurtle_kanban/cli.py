@@ -41,6 +41,7 @@ from ._click import (
     HiddenArgument,
     argv_requests_json,
     deprecated,
+    given_flag,
     json_refusal,
     pull_note,
     refuse,
@@ -607,11 +608,12 @@ def list_items(
     --stale or --stale-after only, #1055) the author date of the last commit that
     changed its `status:` line, else `created:`, else unknown.
     """
-    assignee = deprecated("list", "--assignee", assignee, {"-a": old_a})
+    old_assignee = {"-a": old_a}
+    assignee = deprecated("list", "--assignee", assignee, old_assignee)
+    # refusals name the flag as given: `-a` is the deprecated --assignee (#1235, #1239)
+    assignee_flag = given_flag("--assignee", old_assignee)
     if pickable and (status is not None or assignee is not None):
-        # name the flags as given: `-a` is the deprecated spelling of --assignee (#1235)
-        given = [flag for flag, v in (("--status", status),
-                                      ("-a" if old_a is not None else "--assignee", assignee))
+        given = [flag for flag, v in (("--status", status), (assignee_flag, assignee))
                  if v is not None]
         raise click.UsageError(
             f"--pickable chooses statuses and holders itself: drop {'/'.join(given)}"
@@ -620,7 +622,7 @@ def list_items(
         raise click.UsageError("--agent and --explain go with --pickable")
     if assignee is not None:
         try:
-            assignee = check_identity(assignee, "--assignee")
+            assignee = check_identity(assignee, assignee_flag)
         except ValueError as e:
             _refuse(e)
     service = get_service()
@@ -806,18 +808,25 @@ def create(
         ...body text, never expanded by the shell...
         EOF
     """
-    assign = deprecated("create", "--assign", assign, {"-a": old_a, "--assignee": old_assignee})
+    # refusals name the flag as given, a deprecated alias included (#1239)
+    old_assign = {"-a": old_a, "--assignee": old_assignee}
+    assign = deprecated("create", "--assign", assign, old_assign)
+    old_body = {"-d": old_d, "--description": old_description}
     text = deprecated(
-        "create", "--body", body if body is not None else body_file,
-        {"-d": old_d, "--description": old_description},
+        "create", "--body", body if body is not None else body_file, old_body,
         given="--body" if body is not None else "--body-file",
     )
     if body is None and body_file is None:
         body = text
     # the whole body is read before any subprocess can touch stdin (#580)
     try:
-        description = read_text_option(body, body_file, "body")
-        assignee = check_identity(assign, "--assign") if assign is not None else None
+        description = read_text_option(
+            body, body_file, "body", given=given_flag("--body", old_body)
+        )
+        assignee = (
+            check_identity(assign, given_flag("--assign", old_assign))
+            if assign is not None else None
+        )
     except ValueError as e:
         _refuse(e)
     service = get_service()
@@ -969,11 +978,13 @@ def move(
     An item someone else holds in progress is refused unless you are its holder
     (--agent / $YURTLE_AGENT) or pass --take-over; --force does not override that.
     """
-    assign = deprecated("move", "--assign", assign, {"-a": old_a})
+    old_assign = {"-a": old_a}
+    assign = deprecated("move", "--assign", assign, old_assign)
     service = get_service()
     try:
         if assign is not None:
-            assign = check_identity(assign, "--assign")
+            # named as given, a deprecated alias included (#1239)
+            assign = check_identity(assign, given_flag("--assign", old_assign))
         # a take-over needs an explicit actor: git user.name is shared (#574 §4)
         actor = resolve_actor(agent, allow_git_fallback=not take_over, cwd=service.repo_root)
     except ValueError as e:
@@ -1796,10 +1807,14 @@ def next_item(agent: str | None, old_a: str | None, old_assignee: str | None, as
     gate (or use claim --next). With no identity at all, only unassigned items are
     considered. With --json, nothing to offer prints null and exits 7.
     """
-    agent = deprecated("next", "--agent", agent, {"-a": old_a, "--assignee": old_assignee})
+    old_agent = {"-a": old_a, "--assignee": old_assignee}
+    agent = deprecated("next", "--agent", agent, old_agent)
     service = get_service()
     try:
-        actor = advisory_actor(agent, cwd=service.repo_root)
+        # named as given, a deprecated alias included (#1239)
+        actor = advisory_actor(
+            agent, cwd=service.repo_root, flag=given_flag("--agent", old_agent)
+        )
     except InputRefused as e:
         _refuse(e)
     _halt_gate(service)  # even with work in progress: finishing it is a move (#582)
@@ -1967,17 +1982,24 @@ def comment(
     )
     if body is None and body_file is None:
         body = text
-    agent = deprecated("comment", "--agent", agent, {"--author": old_author, "-a": old_a})
-    # the whole text is read before any subprocess can touch stdin (#580)
+    old_agent = {"--author": old_author, "-a": old_a}
+    agent = deprecated("comment", "--agent", agent, old_agent)
+    # the whole text is read before any subprocess can touch stdin (#580); a
+    # refusal names the spelling given: the 2.x positional is `TEXT` (#1239)
     try:
-        text = read_text_option(body, body_file, "body", required=True)
+        text = read_text_option(
+            body, body_file, "body", required=True,
+            given="TEXT" if old_text is not None else None,
+        )
         assert text is not None  # required=True: None is a usage error
     except ValueError as e:
         _refuse(e)
     service = get_service()
 
     try:
-        author = resolve_actor(agent, cwd=service.repo_root)
+        author = resolve_actor(
+            agent, cwd=service.repo_root, flag=given_flag("--agent", old_agent)
+        )
         item = service.add_comment(fold_id(item_id), text, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:

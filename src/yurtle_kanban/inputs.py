@@ -132,8 +132,12 @@ def read_text_option(
     name: str,
     *,
     required: bool = False,
+    given: str | None = None,
 ) -> str | None:
     """The text of a `--{name}` / `--{name}-file PATH|-` pair.
+
+    `given` names the inline text in a refusal when it came through another
+    spelling (a deprecated alias, #1239); default `--{name}`.
 
     Both given, or (when `required`) neither, is a click usage error. The file or
     stdin is read whole, as strict UTF-8; CRLF/CR become LF and trailing newlines
@@ -156,7 +160,7 @@ def read_text_option(
             ) from None
         source_name = f"--{name}-file"
     else:
-        source_name = f"--{name}"
+        source_name = given or f"--{name}"
     assert text is not None
     text = text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
     if not text.strip():
