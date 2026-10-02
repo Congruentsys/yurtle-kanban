@@ -602,6 +602,7 @@ def _walk(root: Path) -> Iterator[Path]:
 class ScanResult:
     findings: list[Finding]
     notes: list[str]
+    skipped: int = 0  # scanned-kind files not read: over MAX_BYTES, or binary (a NUL)
 
 
 def scan(root: Path) -> ScanResult:
@@ -617,17 +618,20 @@ def scan(root: Path) -> ScanResult:
     renamed = _renamed(config)
     item_dirs = _item_dirs(config, board_root)
     findings: list[Finding] = []
+    skipped = 0
     for path in _walk(root):
         kind = _file_kind(path, root)
         if kind is None:
             continue
         try:
             if path.stat().st_size > MAX_BYTES:
+                skipped += 1
                 continue
             data = path.read_bytes()
         except OSError:
             continue
         if b"\x00" in data:  # a binary file under a code suffix
+            skipped += 1
             continue
         # utf-8 whatever the locale: the same repo scans the same everywhere
         src = data.decode("utf-8", errors="replace")
@@ -636,7 +640,7 @@ def scan(root: Path) -> ScanResult:
         findings.extend(_scan_file(path.relative_to(root).as_posix(), src, kind, renamed))
     unique = {(f.file, f.line, f.kind, f.suggestion): f for f in findings}
     ordered = sorted(unique.values(), key=lambda f: (f.file, f.line, f.kind, f.suggestion))
-    return ScanResult(ordered, notes)
+    return ScanResult(ordered, notes, skipped)
 
 
 def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Iterator[Finding]:
@@ -743,7 +747,8 @@ def upgrade_check(path: Path | None, as_json: bool) -> None:
         click.echo(json.dumps(
             {
                 "findings": [asdict(f) for f in findings], "heuristic": True,
-                "not_checked": list(NOT_CHECKED), "notes": result.notes,
+                "not_checked": list(NOT_CHECKED), "skipped": result.skipped,
+                "notes": result.notes,
             },
             ensure_ascii=False,
         ))
@@ -771,4 +776,5 @@ def upgrade_check(path: Path | None, as_json: bool) -> None:
                 f"{len(findings)} finding(s) in {files} file(s): "
                 f"{high} high, {len(findings) - high} low confidence"
             )
+        click.echo(f"skipped: {result.skipped} large/binary files")
     click.get_current_context().exit(1 if findings else 0)
