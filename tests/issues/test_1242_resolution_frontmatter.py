@@ -224,6 +224,27 @@ def test_skill_inline_code_commands_are_medium(tmp_path: Path) -> None:
     assert doc and all(f["confidence"] == "low" for f in doc), doc
 
 
+# the medium level is per inline-code SPAN, not per line: a bare-prose command
+# sharing its line with a different inline-code command stays low (PR #1245 review)
+MIXED_SKILL_MD = """\
+# Claim
+
+Run `yurtle-kanban list --json` first, then yurtle-kanban move X in_progress -a Air to claim.
+"""
+
+
+def test_a_bare_prose_command_beside_an_inline_code_one_stays_low(tmp_path: Path) -> None:
+    root = tmp_path / "r"
+    (root / ".git").mkdir(parents=True)
+    _write(root, "skills/claim/SKILL.md", MIXED_SKILL_MD)
+    removed = [
+        f for f in _json(root)["findings"]
+        if f["file"] == "skills/claim/SKILL.md" and f["kind"] == "removed-form"
+    ]
+    assert removed and all(f["line"] == 3 for f in removed), removed
+    assert all(f["confidence"] == "low" for f in removed), removed
+
+
 def test_medium_is_shown_and_counted_in_text(tmp_path: Path) -> None:
     root = tmp_path / "r"
     (root / ".git").mkdir(parents=True)
@@ -282,3 +303,18 @@ def test_a_config_below_home_is_still_found(
     monkeypatch.setenv("HOME", str(home))
     data = _json(home / "proj" / "scripts")
     assert [f for f in data["findings"] if f["kind"] == "status-check"], data
+
+
+def test_the_walk_up_stops_at_home_when_path_is_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # PATH is $HOME with no ~/.kanban: the walk must not climb to $HOME's parent
+    parent = tmp_path / "users"
+    home = parent / "home"
+    _write(parent, ".kanban/config.yaml", NAUTICAL_CONFIG)
+    _write(home, "proj/scripts/claim.py", CLAIM)  # no .git anywhere: only $HOME stops it
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    data = _json(home)
+    assert [f for f in data["findings"] if f["kind"] == "status-check"] == [], data
+    assert NOTE in data["notes"], data
