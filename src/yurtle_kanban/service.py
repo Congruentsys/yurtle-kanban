@@ -7312,6 +7312,46 @@ class KanbanService:
             self._board = None
         return outcome
 
+    def link_related_push(
+        self,
+        item_id: str,
+        target_id: str,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """`epic add` / `voyage add` as one compare-and-swap commit on origin's
+        default branch (#1251): `target_id`'s own spelling appended to the item's
+        `related:` as the FETCHED tree has them, so a rival's link to another epic
+        survives. Both must be on origin; an item origin already links is `noop`.
+        `seam`, `sleep` and `jitter` are `sync_and_push`'s."""
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            target = self._item_target(read, target_id, "a link")
+            if isinstance(target, Refuse):
+                return target
+            found = self._item_target(read, item_id, "a link")
+            if isinstance(found, Refuse):
+                return found
+            rel, text, item = found
+            link = target[2].id  # the epic's own spelling (#868)
+            if any(self._dup_key(str(r)) == self._dup_key(link) for r in item.related):
+                return NoOp(f"{item.id} is already linked to {link}")
+            try:
+                new_text, _ = self._edited_text(
+                    item, text, _Edits(related=[*map(str, item.related), link])
+                )
+            except ValueError as e:
+                return Refuse(str(e))
+            return Change({rel: new_text}, f"Link {item.id} → {link}")
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        return outcome
+
     def _update_change(self, read: Read, item_id: str, edits: _Edits) -> Change | NoOp | Refuse:
         """`update --push`'s `mutate` (#574 §5): `edits` applied to the item as
         `read`'s tree has it, new dependencies checked against that tree's board."""

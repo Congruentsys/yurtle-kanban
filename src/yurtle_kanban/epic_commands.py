@@ -350,9 +350,16 @@ def _do_show(epic_id: str):
         render_research_interlinks(linked_items, console)
 
 
-def _do_add(epic_id: str, item_id: str):
-    """Link an item to an epic/voyage by adding it to the item's related field."""
+def _do_add(epic_id: str, item_id: str, push: bool = False):
+    """Link an item to an epic/voyage by adding it to the item's related field.
+    With `push`, one compare-and-swap commit on origin's item (#1251)."""
     service = _get_service()
+    if push:  # every refusal comes back as an outcome (#825), as `update --push`
+        outcome = service.link_related_push(fold_id(item_id), fold_id(epic_id))
+        if (code := 8 if outcome.halted else int(outcome.exit_code)) != 0:
+            refuse(outcome.message, console=console, exit_code=code)
+        console.print(f"[green]{safe(outcome.message)}[/green]", soft_wrap=True)
+        return
 
     # Verify epic exists: the folded lookup (#868)
     epic_item = service.get_item(epic_id)
@@ -410,9 +417,14 @@ def epic_show(epic_id: str):
 @epic.command("add")
 @click.argument("epic_id")
 @click.argument("item_id")
-def epic_add(epic_id: str, item_id: str):
+@click.option(
+    "--push",
+    is_flag=True,
+    help="Link the item as origin's default branch has it and push, as `update --push` does",
+)
+def epic_add(epic_id: str, item_id: str, push: bool):
     """Link an item to an epic."""
-    _do_add(epic_id, item_id)
+    _do_add(epic_id, item_id, push)
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +462,11 @@ def voyage_show(epic_id: str):
 @voyage.command("add")
 @click.argument("epic_id")
 @click.argument("item_id")
-def voyage_add(epic_id: str, item_id: str):
+@click.option(
+    "--push",
+    is_flag=True,
+    help="Link the item as origin's default branch has it and push, as `update --push` does",
+)
+def voyage_add(epic_id: str, item_id: str, push: bool):
     """Link an item to a voyage."""
-    _do_add(epic_id, item_id)
+    _do_add(epic_id, item_id, push)
