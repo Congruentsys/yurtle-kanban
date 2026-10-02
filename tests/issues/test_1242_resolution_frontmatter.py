@@ -231,7 +231,8 @@ def test_medium_is_shown_and_counted_in_text(tmp_path: Path) -> None:
     res = _run(str(root))
     assert res.exit_code == 1, res.output
     assert "  3: [medium] removed-form:" in res.stdout, res.stdout
-    assert "5 finding(s) in 1 file(s): 2 high, 1 medium, 2 low confidence" in res.stdout, (
+    # line 10's `comment --author A ID TEXT` is two removed forms; line 7 adds a low actor note
+    assert "6 finding(s) in 1 file(s): 3 high, 1 medium, 2 low confidence" in res.stdout, (
         res.stdout
     )
 
