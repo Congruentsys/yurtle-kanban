@@ -18,16 +18,17 @@ yurtle-kanban upgrade-check --json     # machine-readable, for CI
 ```
 
 It reports each place that uses a form 3.x changed: file, line, the old form, a suggestion and
-a confidence (`high`, or `low` for mentions in docs, comments and quoted text). Exit codes:
-`0` nothing found, `1` findings, `2` a bad PATH or usage, `3` an unexpected error. With
-`--json` it prints `{"findings": [...], "heuristic": true, "not_checked": [...]}`, plus
-`notes` and `skipped` when it has them.
+a confidence: `high`, `medium` (a command quoted in a skill's prose) or `low` (mentions in
+docs, comments and quoted text). Exit codes: `0` nothing found, `1` findings, `2` a bad PATH
+or usage, `3` an unexpected error. With `--json` it prints
+`{"findings": [...], "heuristic": true, "not_checked": [...], "skipped": N, "notes": [...]}`;
+each finding has `file`, `line`, `kind`, `old`, `suggestion` and `confidence`.
 
 It is a heuristic. A clean run means no known 2.x pattern was found, not that nothing changed:
 it does not check Python API use (see [Removed APIs](#removed-apis)), scripts that read
 refusals from stdout (they moved to stderr), code that parses the `--json` refusal shape, MCP
-clients, readers that parse the plain-text output by hand, or `resolution:` values in item
-files. Read the rest of this section for those.
+clients, or readers that parse the plain-text output by hand. Read the rest of this section for
+those.
 
 ### Renamed CLI flags (#580)
 
@@ -48,10 +49,11 @@ together with its new form is a usage error (exit 2).
 
 The short flag `-a` is gone everywhere in 3.x; only the deprecated aliases above still accept it.
 
-**`next --agent` changed meaning.** In 2.x, `next --assignee A` was a filter on the assignee.
-In 3.x, `next --agent A` names the actor who is asking: it offers that actor's own in-progress
-items first, then pickable ones. The alias maps the old spelling to the new option, so check a
-script that relied on the filter.
+**`next --agent` changed meaning.** In 2.x, `next --assignee A` looked only at `ready` items,
+preferred the ones assigned to A, and fell back to every ready item when A had none. In 3.x,
+`next --agent A` names the actor who is asking: it offers that actor's own in-progress items
+first, then pickable ones. The alias maps the old spelling to the new option, so check a script
+that relied on the 2.x preference.
 
 `comment ID TEXT` takes exactly one argument (quote multi-word text), and `-` there is literal
 text, never stdin; use `--body-file -` to read stdin. MCP `kanban_add_comment` keeps its
@@ -60,8 +62,10 @@ text, never stdin; use `--body-file -` to read stdin. MCP `kanban_add_comment` k
 ### Who is acting: actor resolution (#580)
 
 The *actor* (a comment's author, `kb:by` on a status change) resolves in one order: `--agent`,
-then the `YURTLE_AGENT` environment variable, then git `user.name`, else the command refuses
-with an error. The 2.x defaults `"cli"`, `"agent"` and `"unknown"` are gone, and a set but
+then the `YURTLE_AGENT` environment variable, then git `user.name`; a command that records an
+actor (`comment`, `move`) refuses with `No actor` when none resolves. (`next` and
+`list --pickable` still run without one; the 3.x-only `claim`, `bounce`, `control` and
+`move --take-over` need `--agent` or `YURTLE_AGENT` and never fall back to git `user.name`.) The 2.x defaults `"cli"`, `"agent"` and `"unknown"` are gone, and a set but
 blank `YURTLE_AGENT` is an error. `kb:by` is now the actor, not the assignee.
 
 The *assignee* is never defaulted: only `--assign` sets it. Identity values (`--agent`,
@@ -86,8 +90,8 @@ nautical, hdd or spec.
 
 ### Comments are their own field (#605)
 
-The `## Comments` section is parsed into `comments` (author, time, text) and is no longer part
-of `description`. `show --json`, MCP `kanban_get_item` and semantic search read the new field.
+The `## Comments` section is parsed into `comments`, a list of `{"author", "created_at",
+"content"}`, and is no longer part of `description`. `show --json`, MCP `kanban_get_item` and semantic search read the new field.
 A workflow rule on `len(item.description)` now counts only the body (#635).
 
 ### Refusals print on stderr (#962, #1086, #1090)
@@ -99,7 +103,8 @@ from stdout must read stderr, or better, check the exit code.
 ### `--json` refusals (#877)
 
 With `--json`, every refusal prints exactly one JSON object on stdout,
-`{"success": false, "error": "…"}`, and exits 1. Parse `success` and `error` rather than an
+`{"success": false, "error": "…"}`, and exits non-zero: `1` for a refused input, `2` for a
+usage error, `8` when the board is halted (`next --json`, `list --pickable --json`). Parse `success` and `error` rather than an
 empty stdout or a hint on stderr. `next-id --json` keeps its keys and gains `error`.
 
 ### Resolutions (#581)
@@ -107,8 +112,10 @@ empty stdout or a hint on stderr. `next-id --json` keeps its keys and gains `err
 3.x records how an item finished with `move ID STATUS --resolution R`: `completed`,
 `superseded`, `duplicate` or `wont_do`. `superseded` and `duplicate` each need exactly one
 `--superseded-by ID`. 2.x had no `--resolution` option, but an item file may carry a hand-written
-`resolution:` in its frontmatter. The values `obsolete` and `merged` are not 3.x resolutions: 3.x
-logs a warning for them and ignores them. Re-record those items:
+`resolution:` in its frontmatter. The values `obsolete` and `merged` are not 3.x resolutions:
+every command that scans the board logs a warning for them, and they mean nothing to 3.x
+(no dead dependency, no supersession), though `list --json` and `show --json` still show them
+as `resolution`. Re-record those items:
 
 | 2.x frontmatter | 3.x |
 |---|---|
@@ -116,8 +123,8 @@ logs a warning for them and ignores them. Re-record those items:
 | `resolution: merged` | `--resolution superseded --superseded-by ID`, or `--resolution duplicate --superseded-by ID` |
 
 A `wont_do` item is a dead dependency: anything that depends on it stops being pickable.
-`upgrade-check` does not scan item files, so look for these values with
-`grep -rn "resolution: \(obsolete\|merged\)" <board dirs>`.
+`upgrade-check` reports them from item front matter (kind `resolution-value`, `high`). Without
+it: `grep -rnE "resolution:[[:space:]]*[\"']?(obsolete|merged)" <board dirs>`.
 
 ### The allocation file (#818)
 
@@ -135,14 +142,14 @@ remove it; a missing file starts a fresh list.
 
 ### Removed APIs
 
-These Python names are gone. Nothing in the CLI used them; `upgrade-check` does not look for
-them.
+These Python names are gone. No CLI behaviour changes because of them; `upgrade-check` does not
+look for them.
 
 | Removed | Use instead |
 |---|---|
 | `WorkItem.blocks`, the `blocks` key of `to_dict()`, and the `kb:blocks` triple in `query` (#576) | `depends_on`: "X blocks Y" is "Y depends on X" |
 | `WorkItem.to_yurtle()` (#576) | the item's frontmatter, the only source of truth |
-| The theme keys hdd `id_formats` and `status_aliases` (#611) | nothing: they were never read; IDs come from the item types |
+| The theme keys `id_formats` (hdd) and `status_aliases` (spec) (#611) | nothing: they were never read; IDs come from the item types |
 | `KanbanService._commit_and_push_file`, and the `push` argument of `update_parent_turtle_block` (#645) | `create_item_and_push(parent=...)`, which puts the link in the child's commit |
 | `WorkflowParser.validate_transition`, `WorkflowConfig.get_allowed_transitions` (#651) | `KanbanService.legal_next` |
 

@@ -298,3 +298,41 @@ def test_guide_and_upgrade_check_agree_on_resolutions() -> None:
             assert replacement in rows[value], (
                 f"upgrade-check suggests `{replacement}` for {value}; the guide's row doesn't"
             )
+
+
+# --- 12. the guide's "not checked" list matches the scanner (r1 B1) -------------------------
+
+
+def _not_checked_paragraph() -> str:
+    s = _section()
+    start = re.search(r"(does not|doesn't) check", s)
+    assert start, "the guide does not say what upgrade-check doesn't check"
+    return s[start.start() : s.index("\n\n", start.start())]
+
+
+# each NOT_CHECKED category (upgrade_check.py) -> words the guide's paragraph must carry
+CATEGORY_WORDS = {
+    "Python API": "Python API",
+    "stderr": "stderr",
+    "--json refusal": "`--json` refusal",
+    "MCP": "MCP",
+    "non-JSON": "plain-text",
+}
+
+
+def test_guide_lists_every_not_checked_category() -> None:
+    from yurtle_kanban.upgrade_check import NOT_CHECKED
+
+    para = _not_checked_paragraph()
+    for key, words in CATEGORY_WORDS.items():
+        assert any(key in c for c in NOT_CHECKED), f"NOT_CHECKED lost its {key!r} category"
+        assert words in para, f"the guide's not-checked list lacks {words!r} ({key})"
+    assert len(NOT_CHECKED) == len(CATEGORY_WORDS), "a NOT_CHECKED category the guide doesn't map"
+
+
+def test_guide_never_calls_a_checked_kind_unchecked() -> None:
+    """r1 B1: upgrade-check reports `resolution: obsolete|merged` from item front matter
+    (#1242); the guide must say so, and not list item files as unchecked."""
+    para = _not_checked_paragraph()
+    assert "item file" not in para and "resolution" not in para, para
+    assert "resolution-value" in _section()
