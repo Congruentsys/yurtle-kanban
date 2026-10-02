@@ -29,11 +29,15 @@ The fixtures below are minimal synthetic copies of the labs' real shapes.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
+import yurtle_kanban
 from yurtle_kanban.cli import main
 
 FINDING_KEYS = {"file", "line", "kind", "old", "suggestion", "confidence"}
@@ -410,3 +414,95 @@ def test_scan_is_read_only(lab: Path) -> None:
     _run(str(lab))
     after = {p: p.read_bytes() for p in lab.rglob("*") if p.is_file()}
     assert before == after
+
+
+# --- r1: robustness and the confidence rules -----------------------------------------
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="chmod 000 does not lock a directory on Windows or for root",
+)
+def test_an_unreadable_dir_does_not_crash_the_scan(tmp_path: Path) -> None:
+    """A root-owned docker volume or a `chmod 000` scratch dir: the scan skips it
+    and still reports the rest. A crash would exit 1 too, and read as findings."""
+    root = tmp_path / "r"
+    _write(root, "a.sh", 'yurtle-kanban move X done -a A\n')
+    locked = root / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        res = _run(str(root), "--json")
+        text = _run(str(root))
+    finally:
+        locked.chmod(0o755)
+    assert res.exception is None or isinstance(res.exception, SystemExit), res.exception
+    assert res.exit_code == 1, res.output
+    assert "Traceback" not in res.output and "PermissionError" not in res.output
+    assert _in(json.loads(res.stdout)["findings"], "a.sh", kind="removed-form", line=1)
+    assert text.exception is None or isinstance(text.exception, SystemExit), text.exception
+    assert text.exit_code == 1, text.output
+    assert "Traceback" not in text.output and "a.sh" in text.output
+
+
+def test_a_doc_code_block_without_backticks_on_the_line_is_low(tmp_path: Path) -> None:
+    """A fenced block or a 4-space indented block in a doc: no backtick on the
+    line, low only because it is a doc."""
+    root = tmp_path / "r"
+    _write(root, "docs/fenced.md", "# Claim\n\n```bash\nyurtle-kanban move X done -a Air\n```\n")
+    _write(root, "docs/indented.md", "# Claim\n\n    yurtle-kanban move X done -a Air\n")
+    findings = _json(root)["findings"]
+    fenced = _in(findings, "docs/fenced.md", line=4)
+    indented = _in(findings, "docs/indented.md", line=3)
+    assert fenced and indented, findings
+    assert all(f["confidence"] == "low" for f in fenced + indented), findings
+
+
+def test_a_check_already_accepting_the_native_name_is_not_flagged(tmp_path: Path) -> None:
+    root = tmp_path / "r"
+    _write(root, ".kanban/config.yaml", NAUTICAL_CONFIG)
+    _write(root, "pick.py", "def f(i):\n"
+           "    return i.get('status') in ('in_progress', 'underway')\n")
+    assert _json(root)["findings"] == []
+
+
+def test_a_shell_backtick_substitution_is_code(tmp_path: Path) -> None:
+    """``out=`yurtle-kanban move ...` `` runs the command: high, with the actor note."""
+    root = tmp_path / "r"
+    _write(root, "s.sh", '#!/usr/bin/env bash\nout=`yurtle-kanban move "$ID" done -a "$A"`\n')
+    findings = _json(root)["findings"]
+    removed = _in(findings, "s.sh", kind="removed-form", line=2)
+    assert removed and all(f["confidence"] == "high" for f in removed), findings
+    assert _in(findings, "s.sh", kind="actor", line=2), findings
+
+
+def test_a_binary_file_with_a_code_suffix_is_skipped(tmp_path: Path) -> None:
+    root = tmp_path / "r"
+    root.mkdir()
+    (root / "x.py").write_bytes(b"\x00\x01\x02yurtle-kanban move X done -a Air\n\x00")
+    res = _run(str(root), "--json")
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.stdout)["findings"] == []
+
+
+def test_files_are_read_as_utf8_whatever_the_locale(tmp_path: Path) -> None:
+    """A non-UTF-8 locale must not change what the scan reads."""
+    root = tmp_path / "r"
+    root.mkdir()
+    (root / "c.sh").write_bytes(
+        'yurtle-kanban comment X "café prêt" --agent Air\n'.encode()
+    )
+    src = Path(yurtle_kanban.__file__).resolve().parents[1]
+    env = {
+        **os.environ, "LC_ALL": "en_US.ISO8859-1", "LANG": "en_US.ISO8859-1",
+        "PYTHONUTF8": "0", "PYTHONIOENCODING": "utf-8", "PYTHONPATH": str(src),
+    }
+    p = subprocess.run(
+        [sys.executable, "-c", "from yurtle_kanban.cli import main; main()",
+         "upgrade-check", str(root), "--json"],
+        capture_output=True, text=True, encoding="utf-8", env=env,
+    )
+    assert p.returncode == 1, p.stderr
+    hits = _in(json.loads(p.stdout)["findings"], "c.sh", kind="removed-form", line=1)
+    assert hits, p.stdout
+    assert any("café prêt" in h["old"] for h in hits), hits
