@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -515,8 +516,9 @@ def test_files_are_read_as_utf8_whatever_the_locale(tmp_path: Path) -> None:
 
 
 def _flat(text: str) -> str:
-    """Help and wrapped lines with their whitespace collapsed."""
-    return " ".join(text.split())
+    """Help and wrapped lines with their whitespace collapsed; a word click wrapped at its
+    hyphen (`non-` / `JSON`) is joined back, so a marker never depends on the wrap width."""
+    return " ".join(re.sub(r"(?<=\w)-\n\s*", "-", text).split())
 
 
 NOT_CHECKED_MARKERS = (
