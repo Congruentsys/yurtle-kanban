@@ -51,6 +51,8 @@ Semantic versioning. Version locations must stay in sync:
 - `pyproject.toml` → `version`
 - `src/yurtle_kanban/__init__.py` → `__version__`
 
+Removals and renames follow the deprecation policy in CONTRIBUTING.md: deprecate in a minor (warn once, keep working), remove in the next major with an `UPGRADING.md` entry.
+
 To release this repo, follow `/release-yurtle-kanban` (`.claude/skills/release-yurtle-kanban/SKILL.md`). The shipped `skills/release` (internal repos) and `skills/release-foss` (public repos) are for consumer repos.
 
 ## Multi-Agent Coordination
