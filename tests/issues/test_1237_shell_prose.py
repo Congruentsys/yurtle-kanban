@@ -139,3 +139,67 @@ def test_a_hash_inside_quotes_is_not_a_comment(tmp_path: Path) -> None:
     findings = _findings(root)
     removed = _removed(findings, "q.sh", 2)
     assert removed and all(f["confidence"] == "high" for f in removed), findings
+
+
+# --- r1: one shell quote-state scanner (PR #1244 review follow-ups 1, 2, 3, 5) ---
+
+
+def _confidences(root: Path, file: str, line: int) -> list[str]:
+    findings = _findings(root)
+    hits = _removed(findings, file, line)
+    assert hits, findings
+    return [f["confidence"] for f in hits]
+
+
+def test_a_quote_inside_substitution_inside_double_quotes_does_not_close(tmp_path: Path) -> None:
+    """Follow-up 1: the `"` around ` #` is inside `$(…)`, so the outer `"…"` stays
+    open and the `#` is quoted; bash runs the move."""
+    root = tmp_path / "r"
+    _write(root, "s.sh", (
+        "#!/usr/bin/env bash\n"
+        'out="$(grep " #" f)"; yurtle-kanban move X done -a A\n'
+    ))
+    assert set(_confidences(root, "s.sh", 2)) == {"high"}
+
+
+def test_an_escaped_quote_in_an_ansi_c_string_does_not_close(tmp_path: Path) -> None:
+    """Follow-up 2: in `$'…'` a `\\'` is an escaped quote, so the `#` is quoted."""
+    root = tmp_path / "r"
+    _write(root, "s.sh", (
+        "#!/usr/bin/env bash\n"
+        "echo $'it\\'s #'; yurtle-kanban move X done -a A\n"
+    ))
+    assert set(_confidences(root, "s.sh", 2)) == {"high"}
+
+
+def test_a_heredoc_operator_inside_quotes_starts_no_heredoc(tmp_path: Path) -> None:
+    """Follow-up 3: both quote counts before `<<` are even, but the `<<` is inside
+    `'…'`; no heredoc starts, so the next line's move is code."""
+    root = tmp_path / "r"
+    _write(root, "s.sh", (
+        "#!/usr/bin/env bash\n"
+        "echo \"don't\" 'x <<\"EOF\"'\n"
+        "yurtle-kanban move X done -a A\n"
+    ))
+    assert set(_confidences(root, "s.sh", 3)) == {"high"}
+
+
+def test_a_comment_after_a_semicolon_is_low(tmp_path: Path) -> None:
+    """Follow-up 5: bash starts a comment at a `#` after `;` (also `&`, `|`, `(`, `)`)."""
+    root = tmp_path / "r"
+    _write(root, "s.sh", "#!/usr/bin/env bash\nx=1;# `yurtle-kanban move X done -a A`\n")
+    assert set(_confidences(root, "s.sh", 2)) == {"low"}
+
+
+def test_an_arithmetic_shift_starts_no_heredoc(tmp_path: Path) -> None:
+    """Follow-up 4: `$((1<<2))` is a shift, not a heredoc with tag `2`; a later
+    `<<'EOF'` usage block is still detected and low."""
+    root = tmp_path / "r"
+    _write(root, "s.sh", (
+        "#!/usr/bin/env bash\n"
+        "echo $((1<<2))\n"
+        "cat <<'EOF'\n"
+        "  Runs `yurtle-kanban move ID in_progress -a AGENT` for you.\n"
+        "EOF\n"
+    ))
+    assert set(_confidences(root, "s.sh", 4)) == {"low"}
