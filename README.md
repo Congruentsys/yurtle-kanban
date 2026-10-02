@@ -135,6 +135,7 @@ yurtle-kanban export --format json
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
 | `validate` | Check for ID mismatches, duplicate IDs across boards, dependency cycles and dangling `depends_on` targets |
+| `upgrade-check` | Read-only, heuristic scan of a repo (`[PATH]`, default the repo root) for 2.x usages 3.x changed: options 3.0 removed in scripts, docs and skills (`move -a`, `comment --author`, `comment ID TEXT`, …), `--resolution obsolete\|merged`, raw status checks a nautical/hdd/spec board's native names break, `comment`/`move` calls with no `--agent`; names what it does not check (see UPGRADING.md); `--json`; exit 1 with findings, 3 if the scan fails |
 | `voyage/epic` | Campaign management: `create`, `show`, `add` |
 | `idea` | HDD: Create research/feature ideas |
 | `literature` | HDD: Create literature reviews |
