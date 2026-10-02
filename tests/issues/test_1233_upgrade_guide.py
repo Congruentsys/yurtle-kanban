@@ -277,3 +277,24 @@ def test_changelog_3_0_0_mentions_guide() -> None:
     m = re.search(r"^## \[3\.0\.0\].*?(?=^## \[)", text, re.M | re.S)
     assert m, "CHANGELOG.md has no ## [3.0.0] section"
     assert "UPGRADING.md" in m.group(0), "CHANGELOG's 3.0.0 section doesn't mention UPGRADING.md"
+
+
+# --- 11. the guide and upgrade-check agree on the resolution replacements --------------------
+
+
+def test_guide_and_upgrade_check_agree_on_resolutions() -> None:
+    """Air's request on #1232: `upgrade_check.REMOVED_RESOLUTIONS` (what the scanner suggests,
+    #1242) and the guide's resolutions table name the same replacements, so they can't drift."""
+    from yurtle_kanban.upgrade_check import REMOVED_RESOLUTIONS
+
+    rows = {
+        m.group(1): line
+        for line in _section().splitlines()
+        if (m := re.match(r"\|\s*`resolution: (\w+)`\s*\|", line))
+    }
+    assert set(rows) == set(REMOVED_RESOLUTIONS), (rows.keys(), REMOVED_RESOLUTIONS.keys())
+    for value, suggestion in REMOVED_RESOLUTIONS.items():
+        for replacement in re.findall(r"`([^`]+)`", suggestion):
+            assert replacement in rows[value], (
+                f"upgrade-check suggests `{replacement}` for {value}; the guide's row doesn't"
+            )
