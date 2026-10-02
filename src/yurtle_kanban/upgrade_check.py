@@ -6,7 +6,8 @@ the file, line, kind, the old form, a suggestion and a confidence:
 
 - `removed-form`: a yurtle-kanban invocation using a form 3.0.0 removed (#580):
   `move -a`, `create --assignee/-a/--description/-d`, `comment --author/-a` and
-  `comment ID TEXT`, `next --assignee/-a`, `list -a`. Found in shell command
+  `comment ID TEXT`, `next --assignee/-a`, `list -a`; and a resolution value
+  #581 removed (`--resolution obsolete|merged` on move, update or list). Found in shell command
   strings (`yurtle-kanban move …`, `$YK move …`) on any line, and in Python
   argument lists whose first element is a yurtle-kanban executable
   (`[YK, 'move', iid, 'in_progress', '-a', agent]`).
@@ -53,6 +54,16 @@ REMOVED: dict[str, dict[str, str]] = {
     "next": {"-a": "--agent", "--assignee": "--agent"},
     "list": {"-a": "--assignee"},
 }
+# the resolution values #581 removed: the 3.x set is completed, superseded,
+# duplicate, wont_do (CHANGELOG 3.0.0, #581); the closest replacement of each
+REMOVED_RESOLUTIONS: dict[str, str] = {
+    "obsolete": "`wont_do` for work dropped as no longer needed, or "
+                "`superseded --superseded-by ID` when another item replaced it",
+    "merged": "`superseded --superseded-by ID` when it was folded into another item, "
+              "or `duplicate`",
+}
+# the subcommands scanned: the #580 removals' and `update` (a removed --resolution)
+SUBCOMMANDS: tuple[str, ...] = (*REMOVED, "update")
 ACTOR_COMMANDS = ("comment", "move")
 # options of the scanned subcommands that take a value (beyond the removed ones,
 # which all do), so an option's value is never counted as a positional argument
@@ -65,6 +76,10 @@ VALUE_OPTIONS: dict[str, frozenset[str]] = {
     "list": frozenset({"-s", "--status", "-t", "--type", "--assignee", "-p", "--priority",
                        "-b", "--board", "--resolution", "--agent", "--older-than",
                        "--stale-after"}),
+    # `--resolution` is not an `update` option in 3.x, but a 2.x call may pass one
+    "update": frozenset({"--title", "--priority", "--tag", "--untag", "--body", "--body-file",
+                         "--depends-on", "--add-dep", "--rm-dep", "--related",
+                         "--resolution"}),
 }
 # shell variables taken to hold the yurtle-kanban executable on any line
 ALIAS_VARS = frozenset({"YK", "YK_BIN", "YK_EXE", "KANBAN", "KANBAN_BIN", "YURTLE_KANBAN"})
@@ -78,7 +93,7 @@ SKIP_DIRS = frozenset({
 ENV_MARKERS = ("pyvenv.cfg", "conda-meta")
 MAX_BYTES = 2_000_000
 
-_SUB = "|".join(REMOVED)
+_SUB = "|".join(SUBCOMMANDS)
 # an invocation in a shell string: the exe (a path ending in yurtle-kanban,
 # `python -m yurtle_kanban[.cli]`, or a `$VAR`/`${VAR}`/`{var}`), then a subcommand
 _INVOKE = re.compile(
@@ -123,7 +138,7 @@ def _short(text: str, limit: int = 160) -> str:
 def _analyse(sub: str, toks: list[_Tok]) -> tuple[list[tuple[int, str]], bool, bool]:
     """The removed forms in one invocation's arguments (after the subcommand):
     ([(line, suggestion)], names --agent, uses a removed actor option)."""
-    removed = REMOVED[sub]
+    removed = REMOVED.get(sub, {})
     takes = VALUE_OPTIONS[sub]
     issues: list[tuple[int, str]] = []
     positionals: list[_Tok] = []
@@ -155,6 +170,8 @@ def _analyse(sub: str, toks: list[_Tok]) -> tuple[list[tuple[int, str]], bool, b
         if not attached and (new is not None or flag in takes) and i + 1 < len(toks):
             value = toks[i + 1].text
             i += 1
+        if flag == "--resolution" and (gone := value.strip("'\"")) in REMOVED_RESOLUTIONS:
+            issues.append((tok.line, _resolution_note(sub, gone)))
         if new is not None:
             if new == "--agent":
                 removed_actor = True
@@ -171,6 +188,16 @@ def _analyse(sub: str, toks: list[_Tok]) -> tuple[list[tuple[int, str]], bool, b
             f"`comment ID --body {positionals[1].text}` (or `--body-file -`)",
         ))
     return issues, has_agent, removed_actor
+
+
+def _resolution_note(sub: str, value: str) -> str:
+    note = (
+        f"`--resolution {value}` was removed in 3.0 (#581): the values are completed, "
+        f"superseded, duplicate and wont_do; use {REMOVED_RESOLUTIONS[value]}"
+    )
+    if sub == "update":
+        note += " (`update` sets no resolution: record it with `move ID STATUS --resolution R`)"
+    return note
 
 
 def _actor_note(sub: str) -> str:
@@ -357,7 +384,7 @@ def _list_invocation(node: ast.List | ast.Tuple) -> tuple[str, list[ast.expr]] |
     else:
         return None
     sub = _str(rest[0]) if rest else None
-    if sub not in REMOVED:
+    if sub not in SUBCOMMANDS:
         return None
     return sub, rest[1:]
 
@@ -752,7 +779,8 @@ _HELP = f"""Scan a repo for 2.x usages that 3.x changed (read-only).
     Reads scripts (*.py, *.sh, Makefiles, CI workflows) and docs (*.md) under
     PATH (default: the repo root) and reports each file:line, the old form and
     its 3.x replacement: options 3.0 removed (#580) in shell strings and Python
-    argument lists; raw status comparisons a nautical, hdd or spec board's
+    argument lists; --resolution obsolete|merged (#581 removed them); raw
+    status comparisons a nautical, hdd or spec board's
     native status names break; comment/move calls with no --agent. Docs and
     quoted mentions are low confidence. Skips .git, virtualenvs, node_modules
     and the board's own items. Exit 0 with nothing found, 1 with findings,
