@@ -12,7 +12,8 @@ the file, line, kind, the old form, a suggestion and a confidence:
   (`[YK, 'move', iid, 'in_progress', '-a', agent]`).
 - `status-check`: a raw comparison on a canonical status name that the board's
   theme renames (`status == 'in_progress'` on a nautical board, where 3.x writes
-  `underway`). Only when PATH's `.kanban/config.yaml` uses such a theme.
+  `underway`). Only when the nearest `.kanban/config.yaml` (PATH or above it,
+  up to the git root) uses such a theme; with none, a note says so.
 - `actor`: a `comment`/`move` call with no `--agent` in a file that never names
   `YURTLE_AGENT`; 3.x falls back to git `user.name`, then refuses (low).
 
@@ -464,6 +465,21 @@ def _status_line_findings(
 # --- the repo: config, files ----------------------------------------------------------
 
 
+NO_CONFIG_NOTE = "no .kanban config found: status checks skipped"
+
+
+def _config_root(start: Path) -> Path | None:
+    """The nearest directory from `start` up that holds `.kanban/config.yaml`, so
+    `upgrade-check scripts/` still knows the board's theme. The walk stops at a
+    git root (a directory holding `.git`) or the filesystem root."""
+    for d in (start, *start.parents):
+        if os.path.isfile(d / ".kanban" / "config.yaml"):
+            return d
+        if os.path.exists(d / ".git"):
+            return None
+    return None
+
+
 def _load_config(root: Path) -> Any | None:
     path = root / ".kanban" / "config.yaml"
     if not os.path.isfile(path):  # False, not an exception, on an unreadable .kanban
@@ -581,12 +597,24 @@ def _walk(root: Path) -> Iterator[Path]:
                 yield path
 
 
-def scan(root: Path) -> list[Finding]:
-    """Every finding under `root`, sorted by file and line. Reads only."""
+@dataclass
+class ScanResult:
+    findings: list[Finding]
+    notes: list[str]
+
+
+def scan(root: Path) -> ScanResult:
+    """Every finding under `root`, sorted by file and line, and notes on what
+    was not checked. Reads only."""
     root = root.resolve()
-    config = _load_config(root)
+    notes: list[str] = []
+    config_root = _config_root(root)
+    if config_root is None:
+        notes.append(NO_CONFIG_NOTE)
+    config = _load_config(config_root) if config_root is not None else None
+    board_root = config_root or root
     renamed = _renamed(config)
-    item_dirs = _item_dirs(config, root)
+    item_dirs = _item_dirs(config, board_root)
     findings: list[Finding] = []
     for path in _walk(root):
         kind = _file_kind(path, root)
@@ -602,11 +630,12 @@ def scan(root: Path) -> list[Finding]:
             continue
         # utf-8 whatever the locale: the same repo scans the same everywhere
         src = data.decode("utf-8", errors="replace")
-        if _is_item(path, src, root, item_dirs):
+        if _is_item(path, src, board_root, item_dirs):
             continue
         findings.extend(_scan_file(path.relative_to(root).as_posix(), src, kind, renamed))
     unique = {(f.file, f.line, f.kind, f.suggestion): f for f in findings}
-    return sorted(unique.values(), key=lambda f: (f.file, f.line, f.kind, f.suggestion))
+    ordered = sorted(unique.values(), key=lambda f: (f.file, f.line, f.kind, f.suggestion))
+    return ScanResult(ordered, notes)
 
 
 def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Iterator[Finding]:
@@ -699,16 +728,19 @@ _HELP = f"""Scan a repo for 2.x usages that 3.x changed (read-only).
 )
 def upgrade_check(path: Path | None, as_json: bool) -> None:
     root = path if path is not None else _default_root()
-    findings = scan(root)
+    result = scan(root)
+    findings = result.findings
     if as_json:
         click.echo(json.dumps(
             {
                 "findings": [asdict(f) for f in findings], "heuristic": True,
-                "not_checked": list(NOT_CHECKED),
+                "not_checked": list(NOT_CHECKED), "notes": result.notes,
             },
             ensure_ascii=False,
         ))
     else:
+        for note in result.notes:
+            click.echo(f"note: {note}", err=True)
         click.echo(HEADER)
         click.echo(NOT_CHECKED_LINE)
         click.echo(f"scanned: {root}")
