@@ -19,9 +19,10 @@ the file, line, kind, the old form, a suggestion and a confidence:
 
 Docs, comments, docstrings and backtick-quoted mentions are `low` confidence:
 people copy them, but they are not run. A skill's (`skills/**/SKILL.md`) fenced
-and command lines are the exception: agents run them, so they are `high`. `.git`, virtualenvs, `node_modules` and
-the board's own item files (and any work-item file, known by its `id:`/`status:`
-front matter) are skipped.
+and command lines are the exception: agents run them, so they are `high`.
+`.git`, virtualenvs and conda envs, `.direnv`, `node_modules` and the board's
+own item files (and any work-item file, known by its `id:`/`status:` front
+matter) are skipped.
 
 What it never checks is `NOT_CHECKED`, printed in `--help`, the header, a clean
 run and `--json`: a clean run is not "safe to upgrade" (see UPGRADING.md).
@@ -70,7 +71,11 @@ ALIAS_VARS = frozenset({"YK", "YK_BIN", "YK_EXE", "KANBAN", "KANBAN_BIN", "YURTL
 SKIP_DIRS = frozenset({
     ".git", ".hg", ".svn", ".venv", "venv", "site-packages", "node_modules",
     "__pycache__", ".tox", ".nox", ".mypy_cache", ".ruff_cache", ".pytest_cache",
+    ".direnv",
 })
+# a directory holding one of these is an environment, not the repo's code:
+# a virtualenv (`pyvenv.cfg`) or a conda env (`conda-meta/`)
+ENV_MARKERS = ("pyvenv.cfg", "conda-meta")
 MAX_BYTES = 2_000_000
 
 _SUB = "|".join(REMOVED)
@@ -615,7 +620,8 @@ def _walk(root: Path) -> Iterator[Path]:
         here = Path(dirpath)
         dirnames[:] = sorted(
             d for d in dirnames
-            if d not in SKIP_DIRS and not os.path.exists(here / d / "pyvenv.cfg")
+            if d not in SKIP_DIRS
+            and not any(os.path.exists(here / d / m) for m in ENV_MARKERS)
         )
         for name in sorted(filenames):
             path = here / name
