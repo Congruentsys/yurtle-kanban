@@ -609,8 +609,12 @@ def list_items(
     """
     assignee = deprecated("list", "--assignee", assignee, {"-a": old_a})
     if pickable and (status is not None or assignee is not None):
+        # name the flags as given: `-a` is the deprecated spelling of --assignee (#1235)
+        given = [flag for flag, v in (("--status", status),
+                                      ("-a" if old_a is not None else "--assignee", assignee))
+                 if v is not None]
         raise click.UsageError(
-            "--pickable chooses statuses and holders itself: drop --status/--assignee"
+            f"--pickable chooses statuses and holders itself: drop {'/'.join(given)}"
         )
     if not pickable and (agent is not None or explain):
         raise click.UsageError("--agent and --explain go with --pickable")
