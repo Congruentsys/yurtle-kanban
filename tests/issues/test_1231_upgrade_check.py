@@ -351,7 +351,8 @@ def test_json_shape(lab: Path) -> None:
     res = _run(str(lab), "--json")
     assert res.exit_code == 1, res.output
     data = json.loads(res.stdout)
-    assert set(data) == {"findings", "heuristic"}
+    # r2: what the scan does not check, the skipped-file count and notes (B1, F2, F4)
+    assert set(data) == {"findings", "heuristic", "not_checked", "skipped", "notes"}
     assert data["heuristic"] is True
     assert data["findings"]
     for f in data["findings"]:
@@ -379,7 +380,9 @@ def test_clean_repo_exits_zero(tmp_path: Path) -> None:
     assert "heuristic" in res.output.lower()
     res = _run(str(root), "--json")
     assert res.exit_code == 0, res.output
-    assert json.loads(res.stdout) == {"findings": [], "heuristic": True}
+    data = json.loads(res.stdout)
+    assert data["findings"] == [] and data["heuristic"] is True
+    assert data["skipped"] == 0 and data["notes"] == []
 
 
 def test_skipped_dirs_and_board_items(lab: Path) -> None:
@@ -506,3 +509,231 @@ def test_files_are_read_as_utf8_whatever_the_locale(tmp_path: Path) -> None:
     hits = _in(json.loads(p.stdout)["findings"], "c.sh", kind="removed-form", line=1)
     assert hits, p.stdout
     assert any("café prêt" in h["old"] for h in hits), hits
+
+
+# --- r2: Mini's review (B1, F2-F6, F8) -------------------------------------------------
+
+
+def _flat(text: str) -> str:
+    """Help and wrapped lines with their whitespace collapsed."""
+    return " ".join(text.split())
+
+
+NOT_CHECKED_MARKERS = (
+    "WorkItem.blocks", "to_yurtle()", "validate_transition", "get_allowed_transitions",
+    "_commit_and_push_file", "kb:blocks", "stderr", "#877", "kanban_get_blocked",
+    "kanban_add_comment", "non-JSON",
+)
+
+
+def test_b1_help_names_what_is_not_checked() -> None:
+    res = _run("--help")
+    assert res.exit_code == 0, res.output
+    text = _flat(res.output)
+    assert "not checked" in text.lower(), text
+    assert "UPGRADING.md" in text, text
+    for marker in NOT_CHECKED_MARKERS:
+        assert marker in text, (marker, text)
+
+
+def test_b1_text_header_names_what_is_not_checked(lab: Path) -> None:
+    res = _run(str(lab))
+    assert res.exit_code == 1, res.output
+    lines = res.stdout.splitlines()
+    head = _flat("\n".join(lines[: lines.index(next(ln for ln in lines if ln.startswith("scanned:")))]))
+    assert "not checked" in head.lower() and "UPGRADING.md" in head, head
+    for marker in NOT_CHECKED_MARKERS:
+        assert marker in head, (marker, head)
+
+
+def test_b1_a_clean_run_does_not_over_claim(tmp_path: Path) -> None:
+    """rc 0 is not "safe to upgrade": the clean-run line itself names what the
+    scan never looks at."""
+    root = tmp_path / "clean"
+    _write(root, ".kanban/config.yaml", NAUTICAL_CONFIG)
+    _write(root, "scripts/new_forms.sh", NEW_FORMS_SH)
+    res = _run(str(root))
+    assert res.exit_code == 0, res.output
+    clean = [ln for ln in res.stdout.splitlines() if "no 2.x usages found" in ln]
+    assert len(clean) == 1, res.stdout
+    line = clean[0]
+    assert "no 2.x usages found by this scan" in line, line
+    assert "not checked" in line and "UPGRADING.md" in line, line
+    assert "WorkItem.blocks" in line and "kanban_get_blocked" in line, line
+
+
+def test_b1_json_lists_what_is_not_checked(lab: Path, tmp_path: Path) -> None:
+    from yurtle_kanban.upgrade_check import NOT_CHECKED
+
+    clean = tmp_path / "clean"
+    _write(clean, "a.sh", "echo hi\n")
+    for root in (lab, clean):
+        data = _json(root)
+        assert data["not_checked"] == list(NOT_CHECKED), data
+        joined = " ".join(data["not_checked"])
+        for marker in NOT_CHECKED_MARKERS:
+            assert marker in joined, (marker, joined)
+
+
+NOTE = "no .kanban config found: status checks skipped"
+
+
+def test_f2_path_below_the_repo_root_finds_the_config_above(lab: Path) -> None:
+    """`upgrade-check scripts/` walks up to the nearest `.kanban/config.yaml`."""
+    findings = _json(lab / "scripts")["findings"]
+    hits = _in(findings, "lab_next.py", kind="status-check", line=LAB_NEXT_BACKLOG_LINE)
+    assert hits, findings
+    assert _in(findings, "claim.py", kind="status-check", line=CLAIM_LINE), findings
+    assert _json(lab / "scripts")["notes"] == []
+
+
+def test_f2_the_walk_up_stops_at_the_git_root(tmp_path: Path) -> None:
+    outer = tmp_path / "outer"
+    _write(outer, ".kanban/config.yaml", NAUTICAL_CONFIG)
+    inner = outer / "inner"
+    (inner / ".git").mkdir(parents=True)
+    _write(inner, "scripts/claim.py", CLAIM)
+    data = _json(inner / "scripts")
+    assert [f for f in data["findings"] if f["kind"] == "status-check"] == [], data
+    assert NOTE in data["notes"], data
+
+
+def test_f2_no_config_is_said(tmp_path: Path) -> None:
+    root = tmp_path / "bare"
+    (root / ".git").mkdir(parents=True)
+    _write(root, "scripts/claim.py", CLAIM)
+    data = _json(root)
+    assert data["notes"] == [NOTE], data
+    res = _run(str(root))
+    assert res.exit_code == 0, res.output
+    assert NOTE in res.stderr, res.stderr
+    assert NOTE not in res.stdout, res.stdout
+
+
+def test_f3_an_unexpected_error_exits_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crash is not "findings" (1) nor a usage error (2): exit 3, one line on stderr."""
+    import yurtle_kanban.upgrade_check as uc
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise RuntimeError("scan exploded")
+
+    monkeypatch.setattr(uc, "scan", boom)
+    root = tmp_path / "r"
+    _write(root, "a.sh", "echo hi\n")
+    res = _run(str(root))
+    assert res.exit_code == 3, res.output
+    err = res.stderr.strip().splitlines()
+    assert len(err) == 1 and "scan exploded" in err[0], res.stderr
+    assert "Traceback" not in res.output
+    res = _run(str(root), "--json")
+    assert res.exit_code == 3, res.output
+    assert "scan exploded" in res.stderr and "Traceback" not in res.output
+    data = json.loads(res.stdout)
+    assert data["success"] is False and "scan exploded" in data["error"], data
+
+
+def test_f4_skipped_files_are_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import yurtle_kanban.upgrade_check as uc
+
+    monkeypatch.setattr(uc, "MAX_BYTES", 200)
+    root = tmp_path / "r"
+    _write(root, "big.sh", "echo hi\n" * 100)
+    root.joinpath("bin.py").write_bytes(b"\x00\x01yurtle-kanban move X done -a A\n")
+    root.joinpath("logo.png").write_bytes(b"\x89PNG\x00\x00")  # not a scanned kind
+    _write(root, "ok.sh", "echo hi\n")
+    data = _json(root)
+    assert data["skipped"] == 2, data
+    res = _run(str(root))
+    assert "skipped: 2 large/binary files" in res.stdout, res.stdout
+
+
+SKILL_MD = """\
+# Next
+
+Claim it with yurtle-kanban move X in_progress -a Air before you start.
+Never run `yurtle-kanban move X done -a Air` by hand.
+
+```bash
+yurtle-kanban move "$ID" in_progress -a "$AGENT"
+```
+
+1. `yurtle-kanban comment "$ID" --author Air "picked up"`
+"""
+
+
+def test_f5_skill_commands_are_high_prose_low(tmp_path: Path) -> None:
+    """Agents execute a skill's commands: fenced and command lines are high."""
+    root = tmp_path / "r"
+    _write(root, ".claude/skills/next/SKILL.md", SKILL_MD)
+    _write(root, "skills/other/SKILL.md", SKILL_MD)
+    findings = _json(root)["findings"]
+    for rel in (".claude/skills/next/SKILL.md", "skills/other/SKILL.md"):
+        removed = {
+            f["line"]: f["confidence"] for f in _in(findings, rel, kind="removed-form")
+        }
+        assert removed.get(3) == "low", (rel, removed)
+        assert removed.get(4) == "low", (rel, removed)
+        assert removed.get(7) == "high", (rel, removed)
+        assert removed.get(10) == "high", (rel, removed)
+    # a doc that is not a skill keeps its fences low
+    _write(root, "docs/how.md", SKILL_MD)
+    doc = _in(_json(root)["findings"], "docs/how.md", kind="removed-form")
+    assert doc and all(f["confidence"] == "low" for f in doc), doc
+
+
+def test_f6_conda_envs_and_direnv_are_skipped(tmp_path: Path) -> None:
+    root = tmp_path / "r"
+    (root / "env" / "conda-meta").mkdir(parents=True)
+    _write(root, "env/bin/claim.sh", CLAIM_SH)
+    _write(root, ".direnv/python-3.12/bin/claim.sh", CLAIM_SH)
+    _write(root, "scripts/claim.sh", CLAIM_SH)
+    files = {f["file"] for f in _json(root)["findings"]}
+    assert "scripts/claim.sh" in files, files
+    assert not any(f.startswith(("env/", ".direnv/")) for f in files), files
+
+
+RESOLUTION_SH = """\
+#!/usr/bin/env bash
+export YURTLE_AGENT=Air
+yurtle-kanban move "$ID" done --resolution obsolete
+yurtle-kanban update "$ID" --resolution=merged
+yurtle-kanban list --resolution "obsolete" --json
+yurtle-kanban move "$ID" done --resolution wont_do
+"""
+
+RESOLUTION_PY = """\
+import subprocess
+
+YK = 'yurtle-kanban'
+
+
+def f(iid):
+    subprocess.run([YK, 'move', iid, 'done', '--resolution', 'merged', '--agent', 'Air'])
+"""
+
+
+def test_f8_removed_resolution_values_are_flagged(tmp_path: Path) -> None:
+    """#581 removed `obsolete`/`merged`: completed, superseded, duplicate, wont_do."""
+    root = tmp_path / "r"
+    _write(root, "r.sh", RESOLUTION_SH)
+    _write(root, "r.py", RESOLUTION_PY)
+    findings = _json(root)["findings"]
+
+    def res_hits(file: str, line: int) -> list[dict]:
+        return [
+            f for f in _in(findings, file, kind="removed-form", line=line)
+            if "--resolution" in f["suggestion"]
+        ]
+
+    for file, line, value in (
+        ("r.sh", 3, "obsolete"), ("r.sh", 4, "merged"), ("r.sh", 5, "obsolete"),
+        ("r.py", 7, "merged"),
+    ):
+        hits = res_hits(file, line)
+        assert len(hits) == 1, (file, line, findings)
+        s = hits[0]["suggestion"]
+        assert hits[0]["confidence"] == "high"
+        assert value in s and "#581" in s, s
+        assert "wont_do" in s and "superseded" in s, s
+    assert res_hits("r.sh", 6) == [], findings
+    assert not _in(findings, "r.sh", line=6), findings
