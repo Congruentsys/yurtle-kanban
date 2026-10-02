@@ -6,24 +6,28 @@ the file, line, kind, the old form, a suggestion and a confidence:
 
 - `removed-form`: a yurtle-kanban invocation using a form 3.0.0 removed (#580):
   `move -a`, `create --assignee/-a/--description/-d`, `comment --author/-a` and
-  `comment ID TEXT`, `next --assignee/-a`, `list -a`; and a resolution value
-  #581 removed (`--resolution obsolete|merged` on move, update or list). Found in shell command
+  `comment ID TEXT`, `next --assignee/-a`, `list -a`. Found in shell command
   strings (`yurtle-kanban move …`, `$YK move …`) on any line, and in Python
   argument lists whose first element is a yurtle-kanban executable
   (`[YK, 'move', iid, 'in_progress', '-a', agent]`).
 - `status-check`: a raw comparison on a canonical status name that the board's
   theme renames (`status == 'in_progress'` on a nautical board, where 3.x writes
   `underway`). Only when the nearest `.kanban/config.yaml` (PATH or above it,
-  up to the git root) uses such a theme; with none, a note says so.
+  up to the git root or $HOME) uses such a theme; with none, a note says so.
+- `resolution-value`: a board item's front matter `resolution: obsolete` or
+  `resolution: merged`, values #581 dropped from the vocabulary (2.x had no
+  `--resolution` flag). The one thing read in an item file (high).
 - `actor`: a `comment`/`move` call with no `--agent` in a file that never names
   `YURTLE_AGENT`; 3.x falls back to git `user.name`, then refuses (low).
 
 Docs, comments, docstrings and backtick-quoted mentions are `low` confidence:
 people copy them, but they are not run. A skill's (`skills/**/SKILL.md`) fenced
-and command lines are the exception: agents run them, so they are `high`.
-`.git`, virtualenvs and conda envs, `.direnv`, `node_modules` and the board's
-own item files (and any work-item file, known by its `id:`/`status:` front
-matter) are skipped.
+and command lines are the exception: agents run them, so they are `high`; a
+skill's inline-code command in prose (an "Atomic claim:" sentence quoting
+`yurtle-kanban move …`) is `medium`. `.git`, virtualenvs and conda envs,
+`.direnv` and `node_modules` are skipped, and the board's own item files (and
+any work-item file, known by its `id:`/`status:` front matter) are read only
+for their front matter `resolution:`.
 
 What it never checks is `NOT_CHECKED`, printed in `--help`, the header, a clean
 run and `--json`: a clean run is not "safe to upgrade" (see UPGRADING.md).
@@ -54,16 +58,16 @@ REMOVED: dict[str, dict[str, str]] = {
     "next": {"-a": "--agent", "--assignee": "--agent"},
     "list": {"-a": "--assignee"},
 }
-# the resolution values #581 removed: the 3.x set is completed, superseded,
-# duplicate, wont_do (CHANGELOG 3.0.0, #581); the closest replacement of each
+# the resolution values #581 dropped from the vocabulary, as a 2.x item's front
+# matter carries them (2.x had no `--resolution` flag): the 3.x set is completed,
+# superseded, duplicate, wont_do; each one's replacement, as UPGRADING.md words it
 REMOVED_RESOLUTIONS: dict[str, str] = {
-    "obsolete": "`wont_do` for work dropped as no longer needed, or "
-                "`superseded --superseded-by ID` when another item replaced it",
-    "merged": "`superseded --superseded-by ID` when it was folded into another item, "
-              "or `duplicate`",
+    "obsolete": "`wont_do` (a dead dependency: its dependents stop being pickable) "
+                "or `superseded --superseded-by ID`",
+    "merged": "`superseded --superseded-by ID` or `duplicate --superseded-by ID`",
 }
-# the subcommands scanned: the #580 removals' and `update` (a removed --resolution)
-SUBCOMMANDS: tuple[str, ...] = (*REMOVED, "update")
+# the subcommands scanned: the #580 removals'
+SUBCOMMANDS: tuple[str, ...] = tuple(REMOVED)
 ACTOR_COMMANDS = ("comment", "move")
 # options of the scanned subcommands that take a value (beyond the removed ones,
 # which all do), so an option's value is never counted as a positional argument
@@ -76,10 +80,6 @@ VALUE_OPTIONS: dict[str, frozenset[str]] = {
     "list": frozenset({"-s", "--status", "-t", "--type", "--assignee", "-p", "--priority",
                        "-b", "--board", "--resolution", "--agent", "--older-than",
                        "--stale-after"}),
-    # `--resolution` is not an `update` option in 3.x, but a 2.x call may pass one
-    "update": frozenset({"--title", "--priority", "--tag", "--untag", "--body", "--body-file",
-                         "--depends-on", "--add-dep", "--rm-dep", "--related",
-                         "--resolution"}),
 }
 # shell variables taken to hold the yurtle-kanban executable on any line
 ALIAS_VARS = frozenset({"YK", "YK_BIN", "YK_EXE", "KANBAN", "KANBAN_BIN", "YURTLE_KANBAN"})
@@ -170,8 +170,6 @@ def _analyse(sub: str, toks: list[_Tok]) -> tuple[list[tuple[int, str]], bool, b
         if not attached and (new is not None or flag in takes) and i + 1 < len(toks):
             value = toks[i + 1].text
             i += 1
-        if flag == "--resolution" and (gone := value.strip("'\"")) in REMOVED_RESOLUTIONS:
-            issues.append((tok.line, _resolution_note(sub, gone)))
         if new is not None:
             if new == "--agent":
                 removed_actor = True
@@ -188,16 +186,6 @@ def _analyse(sub: str, toks: list[_Tok]) -> tuple[list[tuple[int, str]], bool, b
             f"`comment ID --body {positionals[1].text}` (or `--body-file -`)",
         ))
     return issues, has_agent, removed_actor
-
-
-def _resolution_note(sub: str, value: str) -> str:
-    note = (
-        f"`--resolution {value}` was removed in 3.0 (#581): the values are completed, "
-        f"superseded, duplicate and wont_do; use {REMOVED_RESOLUTIONS[value]}"
-    )
-    if sub == "update":
-        note += " (`update` sets no resolution: record it with `move ID STATUS --resolution R`)"
-    return note
 
 
 def _actor_note(sub: str) -> str:
@@ -612,6 +600,31 @@ def _is_item(path: Path, src: str, root: Path, item_dirs: list[Path]) -> bool:
     )
 
 
+_RESOLUTION_LINE = re.compile(
+    r"^resolution:\s*(?P<q>['\"]?)(?P<value>[\w-]+)(?P=q)\s*(?:#.*)?$"
+)
+
+
+def _item_findings(rel: str, src: str) -> Iterator[Finding]:
+    """An item's front matter `resolution: obsolete|merged`: a value #581 dropped
+    from the vocabulary. The only thing read in an item: its body is the board's
+    notes, never scanned for CLI forms."""
+    fm = _FRONT_MATTER.match(src)
+    if fm is None:
+        return
+    first = src.count("\n", 0, fm.start(1)) + 1  # the line of the front matter's first key
+    for offset, line in enumerate(fm.group(1).splitlines()):
+        m = _RESOLUTION_LINE.match(line.rstrip())
+        if m is None or (value := m.group("value")) not in REMOVED_RESOLUTIONS:
+            continue
+        yield Finding(
+            rel, first + offset, "resolution-value", _short(line.strip()),
+            f"`resolution: {value}` is a value #581 dropped from the vocabulary (3.x has "
+            f"completed, superseded, duplicate, wont_do): use {REMOVED_RESOLUTIONS[value]}",
+            "high",
+        )
+
+
 def _file_kind(path: Path, root: Path) -> str | None:
     """'py', 'sh' (any shell-ish text: scripts, Makefiles, CI workflows), 'md' or None."""
     name, suffix = path.name, path.suffix.lower()
@@ -697,9 +710,11 @@ def scan(root: Path) -> ScanResult:
             continue
         # utf-8 whatever the locale: the same repo scans the same everywhere
         src = data.decode("utf-8", errors="replace")
+        rel = path.relative_to(root).as_posix()
         if _is_item(path, src, board_root, item_dirs):
+            findings.extend(_item_findings(rel, src))
             continue
-        findings.extend(_scan_file(path.relative_to(root).as_posix(), src, kind, renamed))
+        findings.extend(_scan_file(rel, src, kind, renamed))
     unique = {(f.file, f.line, f.kind, f.suggestion): f for f in findings}
     ordered = sorted(unique.values(), key=lambda f: (f.file, f.line, f.kind, f.suggestion))
     return ScanResult(ordered, notes, skipped)
@@ -779,11 +794,13 @@ _HELP = f"""Scan a repo for 2.x usages that 3.x changed (read-only).
     Reads scripts (*.py, *.sh, Makefiles, CI workflows) and docs (*.md) under
     PATH (default: the repo root) and reports each file:line, the old form and
     its 3.x replacement: options 3.0 removed (#580) in shell strings and Python
-    argument lists; --resolution obsolete|merged (#581 removed them); raw
-    status comparisons a nautical, hdd or spec board's
-    native status names break; comment/move calls with no --agent. Docs and
-    quoted mentions are low confidence. Skips .git, virtualenvs, node_modules
-    and the board's own items. Exit 0 with nothing found, 1 with findings,
+    argument lists; an item's front matter resolution: obsolete|merged
+    (values #581 dropped from the vocabulary); raw status comparisons a
+    nautical, hdd or spec board's native status names break; comment/move
+    calls with no --agent. Docs and quoted mentions are low confidence, a
+    skill's inline-code commands medium. Skips .git, virtualenvs,
+    node_modules and, but for their front matter resolution, the board's
+    own items. Exit 0 with nothing found, 1 with findings,
     2 on a usage error, 3 when the scan itself fails.
 
     Not checked (see UPGRADING.md): {'; '.join(NOT_CHECKED)}.
