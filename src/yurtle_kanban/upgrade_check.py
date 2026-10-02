@@ -18,7 +18,8 @@ the file, line, kind, the old form, a suggestion and a confidence:
   `YURTLE_AGENT`; 3.x falls back to git `user.name`, then refuses (low).
 
 Docs, comments, docstrings and backtick-quoted mentions are `low` confidence:
-people copy them, but they are not run. `.git`, virtualenvs, `node_modules` and
+people copy them, but they are not run. A skill's (`skills/**/SKILL.md`) fenced
+and command lines are the exception: agents run them, so they are `high`. `.git`, virtualenvs, `node_modules` and
 the board's own item files (and any work-item file, known by its `id:`/`status:`
 front matter) are skipped.
 
@@ -256,9 +257,35 @@ def _in_prose_backticks(before: str, shell: bool) -> bool:
     return prose
 
 
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_LIST_MARKER = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\$\s+)?`?")
+
+
+def _is_skill(rel: str) -> bool:
+    """`.claude/skills/**/SKILL.md` or `skills/**/SKILL.md`: an agent's skill."""
+    parts = rel.split("/")
+    return parts[-1] == "SKILL.md" and "skills" in parts[:-1]
+
+
+def _skill_code_lines(lines: list[str]) -> set[int]:
+    """A skill's lines agents execute: inside a code fence, or a line that is a
+    command (a list item `yurtle-kanban move …` in backticks, `$ yurtle-kanban …`),
+    not prose."""
+    out: set[int] = set()
+    fenced = False
+    for lineno, line in enumerate(lines, 1):
+        if _FENCE.match(line):
+            fenced = not fenced
+            continue
+        start = m.end() if (m := _LIST_MARKER.match(line)) else 0
+        if fenced or _INVOKE.match(line, start):
+            out.add(lineno)
+    return out
+
+
 def _shell_findings(
     rel: str, lines: list[str], aliases: set[str], low_lines: set[int], doc: bool,
-    names_agent_env: bool, shell: bool,
+    names_agent_env: bool, shell: bool, code_lines: frozenset[int] | set[int] = frozenset(),
 ) -> Iterator[Finding]:
     for lineno, line in enumerate(lines, 1):
         for m in _INVOKE.finditer(line):
@@ -274,9 +301,11 @@ def _shell_findings(
                 continue
             stripped = line.lstrip()
             comment = stripped.startswith(("#", "//")) and not stripped.startswith("#!")
+            # a skill's command line is run by agents: not low for being in a doc
+            code = lineno in code_lines
             low = (
-                doc or comment or lineno in low_lines
-                or _in_prose_backticks(line[: m.start()], shell=shell)
+                (doc and not code) or comment or lineno in low_lines
+                or (not code and _in_prose_backticks(line[: m.start()], shell=shell))
             )
             yield from _invocation_findings(
                 rel, lineno, m.group("sub"), toks, m.group(0) + rest,
@@ -665,8 +694,10 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
                 )
                 for t in node.targets if isinstance(t, ast.Name)
             }
+    code_lines = _skill_code_lines(lines) if doc and _is_skill(rel) else set()
     yield from _shell_findings(
-        rel, lines, aliases, low_lines, doc, names_agent_env, shell=kind == "sh"
+        rel, lines, aliases, low_lines, doc, names_agent_env, shell=kind == "sh",
+        code_lines=code_lines,
     )
     if tree is not None:
         yield from _python_list_findings(rel, src, tree, names_agent_env)
