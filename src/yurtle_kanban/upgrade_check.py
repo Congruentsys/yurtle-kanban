@@ -20,6 +20,9 @@ Docs, comments, docstrings and backtick-quoted mentions are `low` confidence:
 people copy them, but they are not run. `.git`, virtualenvs, `node_modules` and
 the board's own item files (and any work-item file, known by its `id:`/`status:`
 front matter) are skipped.
+
+What it never checks is `NOT_CHECKED`, printed in `--help`, the header, a clean
+run and `--json`: a clean run is not "safe to upgrade" (see UPGRADING.md).
 """
 
 from __future__ import annotations
@@ -659,15 +662,21 @@ HEADER = (
     "upgrade-check is heuristic: it lists likely yurtle-kanban 2.x usages that 3.x "
     "changed; review each (it can miss some and flag some wrongly)."
 )
-
-
-@click.command("upgrade-check")
-@click.argument(
-    "path", required=False, type=click.Path(exists=True, file_okay=False, path_type=Path)
+# the 3.0 changes this scan never looks for: a clean run is not "safe to upgrade"
+NOT_CHECKED: tuple[str, ...] = (
+    "Python API removals (WorkItem.blocks, to_dict()['blocks'], WorkItem.to_yurtle(), "
+    "WorkflowParser.validate_transition, WorkflowConfig.get_allowed_transitions, "
+    "KanbanService._commit_and_push_file, the kb:blocks query triple)",
+    "refusals moved to stderr (#1080/#1086/#1090): a script grepping stdout for "
+    "`Error:` or `Item not found`",
+    'the --json refusal shape {"success": false, "error": ...} (#877)',
+    "MCP: kanban_get_blocked's shape (blocked_items/count -> {\"items\": ...}) and "
+    "kanban_add_comment's \"agent\" default",
+    "hand-rolled readers of non-JSON CLI output",
 )
-@click.option("--json", "as_json", is_flag=True, help="One JSON object: findings, heuristic")
-def upgrade_check(path: Path | None, as_json: bool) -> None:
-    """Scan a repo for 2.x usages that 3.x changed (read-only).
+NOT_CHECKED_LINE = f"not checked: {'; '.join(NOT_CHECKED)}; see UPGRADING.md"
+
+_HELP = f"""Scan a repo for 2.x usages that 3.x changed (read-only).
 
     Reads scripts (*.py, *.sh, Makefiles, CI workflows) and docs (*.md) under
     PATH (default: the repo root) and reports each file:line, the old form and
@@ -676,18 +685,35 @@ def upgrade_check(path: Path | None, as_json: bool) -> None:
     native status names break; comment/move calls with no --agent. Docs and
     quoted mentions are low confidence. Skips .git, virtualenvs, node_modules
     and the board's own items. Exit 0 with nothing found, 1 with findings.
+
+    Not checked (see UPGRADING.md): {'; '.join(NOT_CHECKED)}.
     """
+
+
+@click.command("upgrade-check", help=_HELP)
+@click.argument(
+    "path", required=False, type=click.Path(exists=True, file_okay=False, path_type=Path)
+)
+@click.option(
+    "--json", "as_json", is_flag=True, help="One JSON object: findings, heuristic, not_checked"
+)
+def upgrade_check(path: Path | None, as_json: bool) -> None:
     root = path if path is not None else _default_root()
     findings = scan(root)
     if as_json:
         click.echo(json.dumps(
-            {"findings": [asdict(f) for f in findings], "heuristic": True}, ensure_ascii=False
+            {
+                "findings": [asdict(f) for f in findings], "heuristic": True,
+                "not_checked": list(NOT_CHECKED),
+            },
+            ensure_ascii=False,
         ))
     else:
         click.echo(HEADER)
+        click.echo(NOT_CHECKED_LINE)
         click.echo(f"scanned: {root}")
         if not findings:
-            click.echo("no 2.x usages found")
+            click.echo(f"no 2.x usages found by this scan; {NOT_CHECKED_LINE}")
         current = None
         for f in findings:
             if f.file != current:
