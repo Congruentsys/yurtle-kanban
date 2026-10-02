@@ -184,7 +184,12 @@ def test_help_and_changelog_say_values_dropped_from_the_vocabulary() -> None:
     assert "values #581 dropped from the vocabulary" in text, text
     assert "#581 removed them" not in text, text
     assert "--resolution obsolete" not in text, text
-    changelog = (Path(__file__).resolve().parents[2] / "changelog.d" / "1231.md").read_text()
+    # a release assembles and deletes the fragment (#1188, #1224): then check CHANGELOG.md
+    fragment = Path(__file__).resolve().parents[2] / "changelog.d" / "1231.md"
+    if fragment.exists():
+        changelog = fragment.read_text()
+    else:
+        changelog = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text()
     flat = " ".join(changelog.split())
     assert "values #581 dropped from the vocabulary" in flat, flat
     assert "--resolution obsolete" not in flat, flat
