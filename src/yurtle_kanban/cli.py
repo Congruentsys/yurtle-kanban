@@ -38,7 +38,9 @@ from rich.markup import escape
 
 from ._click import (
     Group,
+    HiddenArgument,
     argv_requests_json,
+    deprecated,
     json_refusal,
     pull_note,
     refuse,
@@ -534,6 +536,7 @@ def _duration(ctx: click.Context, param: click.Parameter, value: str | None) -> 
     help="Filter by type: canonical (feature, bug, task...) or as items declare it (spec)",
 )
 @click.option("--assignee", help="Filter by assignee (who holds the item)")
+@click.option("-a", "old_a", hidden=True)  # 2.x; deprecated until 4.0 (#1230)
 @click.option(
     "--priority", "-p",
     help="Filter by priority (critical, high, medium, low). Comma-separated.",
@@ -573,6 +576,7 @@ def list_items(
     status: str | None,
     item_type: str | None,
     assignee: str | None,
+    old_a: str | None,
     priority: str | None,
     board_name: str | None,
     resolution: str | None,
@@ -603,6 +607,7 @@ def list_items(
     --stale or --stale-after only, #1055) the author date of the last commit that
     changed its `status:` line, else `created:`, else unknown.
     """
+    assignee = deprecated("list", "--assignee", assignee, {"-a": old_a})
     if pickable and (status is not None or assignee is not None):
         raise click.UsageError(
             "--pickable chooses statuses and holders itself: drop --status/--assignee"
@@ -758,6 +763,11 @@ def _list_pickable(
     "--body-file",
     help="Read the body from PATH, or from stdin with '-' (pipe it: a quoted heredoc <<'EOF')",
 )
+# 2.x forms, deprecated until 4.0 (#1230)
+@click.option("-a", "old_a", hidden=True)
+@click.option("--assignee", "old_assignee", hidden=True)
+@click.option("-d", "old_d", hidden=True)
+@click.option("--description", "old_description", hidden=True)
 @click.option("--tags", help="Comma-separated tags")
 @click.option(
     "--push",
@@ -771,6 +781,10 @@ def create(
     assign: str | None,
     body: str | None,
     body_file: str | None,
+    old_a: str | None,
+    old_assignee: str | None,
+    old_d: str | None,
+    old_description: str | None,
     tags: str | None,
     push: bool,
 ):
@@ -788,6 +802,14 @@ def create(
         ...body text, never expanded by the shell...
         EOF
     """
+    assign = deprecated("create", "--assign", assign, {"-a": old_a, "--assignee": old_assignee})
+    text = deprecated(
+        "create", "--body", body if body is not None else body_file,
+        {"-d": old_d, "--description": old_description},
+        given="--body" if body is not None else "--body-file",
+    )
+    if body is None and body_file is None:
+        body = text
     # the whole body is read before any subprocess can touch stdin (#580)
     try:
         description = read_text_option(body, body_file, "body")
@@ -878,6 +900,7 @@ def create(
 @click.option("--no-commit", is_flag=True, help="Don't create git commit")
 @click.option("--message", "-m", help="Custom commit message")
 @click.option("--assign", help="Set the assignee (who holds the item, e.g. 'Claude-M5')")
+@click.option("-a", "old_a", hidden=True)  # 2.x; deprecated until 4.0 (#1230)
 @click.option(
     "--agent",
     help="Who is moving it (kb:by); default $YURTLE_AGENT, then git user.name",
@@ -912,6 +935,7 @@ def move(
     no_commit: bool,
     message: str | None,
     assign: str | None,
+    old_a: str | None,
     agent: str | None,
     export_board: str | None,
     force: bool,
@@ -941,6 +965,7 @@ def move(
     An item someone else holds in progress is refused unless you are its holder
     (--agent / $YURTLE_AGENT) or pass --take-over; --force does not override that.
     """
+    assign = deprecated("move", "--assign", assign, {"-a": old_a})
     service = get_service()
     try:
         if assign is not None:
@@ -1752,11 +1777,14 @@ def history(
     help="Who is asking; default $YURTLE_AGENT, then git user.name. "
     "Its own in-progress items come first",
 )
+# 2.x forms, deprecated until 4.0 (#1230)
+@click.option("-a", "old_a", hidden=True)
+@click.option("--assignee", "old_assignee", hidden=True)
 @click.option(
     "--json", "as_json", is_flag=True,
     help='Output as JSON: {"id", "kind": "resume"|"pick", "reason"}, or null (exit 7)',
 )
-def next_item(agent: str | None, as_json: bool):
+def next_item(agent: str | None, old_a: str | None, old_assignee: str | None, as_json: bool):
     """Suggest the next item to work on (#575): your own in-progress item first
     (the one in progress longest), else the top item of list --pickable.
 
@@ -1764,6 +1792,7 @@ def next_item(agent: str | None, as_json: bool):
     gate (or use claim --next). With no identity at all, only unassigned items are
     considered. With --json, nothing to offer prints null and exits 7.
     """
+    agent = deprecated("next", "--agent", agent, {"-a": old_a, "--assignee": old_assignee})
     service = get_service()
     try:
         actor = advisory_actor(agent, cwd=service.repo_root)
@@ -1897,6 +1926,8 @@ def update(
 
 @main.command()
 @click.argument("item_id")
+# 2.x positional text, deprecated until 4.0 (#1230); kept out of the usage line
+@click.argument("old_text", required=False, cls=HiddenArgument)
 @click.option("--body", help="The comment text (prefer --body-file: no shell expansion)")
 @click.option(
     "--body-file",
@@ -1906,7 +1937,18 @@ def update(
     "--agent",
     help="Who is commenting; default $YURTLE_AGENT, then git user.name",
 )
-def comment(item_id: str, body: str | None, body_file: str | None, agent: str | None):
+# 2.x forms, deprecated until 4.0 (#1230)
+@click.option("--author", "old_author", hidden=True)
+@click.option("-a", "old_a", hidden=True)
+def comment(
+    item_id: str,
+    old_text: str | None,
+    body: str | None,
+    body_file: str | None,
+    agent: str | None,
+    old_author: str | None,
+    old_a: str | None,
+):
     """Add a comment to a work item.
 
     Example (the quoted 'EOF' keeps the shell from expanding $(...) and backticks):
@@ -1915,6 +1957,13 @@ def comment(item_id: str, body: str | None, body_file: str | None, agent: str | 
         ...comment text...
         EOF
     """
+    text = deprecated(
+        "comment", "ID --body TEXT", body if body is not None else body_file,
+        {"ID TEXT": old_text}, given="--body" if body is not None else "--body-file",
+    )
+    if body is None and body_file is None:
+        body = text
+    agent = deprecated("comment", "--agent", agent, {"--author": old_author, "-a": old_a})
     # the whole text is read before any subprocess can touch stdin (#580)
     try:
         text = read_text_option(body, body_file, "body", required=True)
