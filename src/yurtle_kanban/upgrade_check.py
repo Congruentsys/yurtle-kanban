@@ -540,11 +540,19 @@ NO_CONFIG_NOTE = "no .kanban config found: status checks skipped"
 def _config_root(start: Path) -> Path | None:
     """The nearest directory from `start` up that holds `.kanban/config.yaml`, so
     `upgrade-check scripts/` still knows the board's theme. The walk stops at a
-    git root (a directory holding `.git`) or the filesystem root."""
+    git root (a directory holding `.git`), at $HOME or at the filesystem root:
+    `~/.kanban` is read only when `start` is $HOME itself, never for a directory
+    below it that is not in a git repo."""
+    try:
+        home: Path | None = Path.home().resolve()
+    except (RuntimeError, OSError):  # no $HOME and no passwd entry
+        home = None
     for d in (start, *start.parents):
+        if d == home and d != start:
+            return None
         if os.path.isfile(d / ".kanban" / "config.yaml"):
             return d
-        if os.path.exists(d / ".git"):
+        if os.path.exists(d / ".git") or d == home:
             return None
     return None
 
