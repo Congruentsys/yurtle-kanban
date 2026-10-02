@@ -282,6 +282,111 @@ def _in_prose_backticks(before: str, shell: bool) -> bool:
     return prose
 
 
+def _plain_offsets(line: str) -> set[int]:
+    """Offsets of the line's characters that bash reads as syntax: outside every
+    quote and every substitution, and not escaped (#1237). One quote-state scan for
+    comments and heredoc operators. It skips `'…'`, `$'…'` (where `\\'` is an
+    escaped quote), and backslash escapes. It keeps a stack of `"…"`, `$(…)`,
+    `$((…))` and backticks, so a `"` inside `$(…)` inside `"…"` opens a new string
+    instead of closing the outer one."""
+    plain: set[int] = set()
+    stack: list[str] = []  # '"', '$(', '$((', '(' (inside a substitution), '`'
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        ctx = stack[-1] if stack else None
+        if c == "\\":
+            i += 2
+            continue
+        if line.startswith("$((", i):
+            stack.append("$((")
+            i += 3
+            continue
+        if line.startswith("$(", i):
+            stack.append("$(")
+            i += 2
+            continue
+        if c == "`":
+            if ctx == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+        elif ctx == '"':
+            if c == '"':
+                stack.pop()
+        elif c == "'":  # '…' is literal to its closing quote
+            end = line.find("'", i + 1)
+            i = n if end < 0 else end + 1
+            continue
+        elif line.startswith("$'", i):  # $'…': `\\'` does not close it
+            i += 2
+            while i < n and line[i] != "'":
+                i += 2 if line[i] == "\\" else 1
+            i += 1
+            continue
+        elif c == '"':
+            stack.append('"')
+        elif c == "(" and ctx in ("$(", "$((", "("):
+            stack.append("(")
+        elif c == ")" and ctx in ("$(", "("):
+            stack.pop()
+        elif ctx == "$((" and line.startswith("))", i):
+            stack.pop()
+            i += 2
+            continue
+        elif ctx is None:
+            plain.add(i)
+        i += 1
+    return plain
+
+
+def _comment_start(line: str) -> int | None:
+    """Where a shell comment starts: a `#` at the start of a word (line start,
+    after whitespace, or after an unquoted `;` `&` `|` `(` `)`) outside quotes and
+    substitutions (#1237). A `#` inside quotes, escaped, or mid-word (`$#`,
+    `${#x}`, `a#b`) is not one."""
+    plain = _plain_offsets(line)
+    for i in sorted(plain):
+        if line[i] == "#" and (
+            i == 0 or line[i - 1].isspace() or (line[i - 1] in ";&|()" and i - 1 in plain)
+        ):
+            return i
+    return None
+
+
+# a heredoc operator: `<<TAG`, `<<-TAG`, `<<'TAG'`, `<<"TAG"`, `<<\TAG` (not `<<<`);
+# a bare tag is a name, so `<<2` (a shift) and `<<END-OF` are not matched
+_HEREDOC = re.compile(
+    r"(?<!<)<<(?P<dash>-?)[ \t]*(?:'(?P<sq>[^']+)'|\"(?P<dq>[^\"]+)\"|\\(?P<bs>\w+)"
+    r"|(?P<bare>[A-Za-z_][A-Za-z0-9_]*)(?![^\s;&|<>()]))"
+)
+
+
+def _quoted_heredoc_lines(lines: list[str]) -> set[int]:
+    """Line numbers inside a quoted heredoc's body (`<<'TAG'`, `<<"TAG"`,
+    `<<\\TAG`): literal text, so prose (#1237). An unquoted `<<TAG` body still
+    expands `$(…)` and backticks, so its lines stay code. A `<<` inside quotes,
+    a substitution, or `$((…))` arithmetic is not an operator."""
+    out: set[int] = set()
+    pending: list[tuple[str, bool, bool]] = []  # (tag, strip tabs, quoted)
+    for lineno, line in enumerate(lines, 1):
+        if pending:
+            tag, dash, quoted = pending[0]
+            if (line.lstrip("\t") if dash else line) == tag:
+                pending.pop(0)
+            elif quoted:
+                out.add(lineno)
+            continue
+        code = line[: c] if (c := _comment_start(line)) is not None else line
+        plain = _plain_offsets(code)
+        for m in _HEREDOC.finditer(code):
+            if m.start() not in plain or m.start() + 1 not in plain:
+                continue
+            tag = m.group("sq") or m.group("dq") or m.group("bs") or m.group("bare")
+            pending.append((tag, bool(m.group("dash")), m.group("bare") is None))
+    return out
+
+
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _LIST_MARKER = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\$\s+)?`?")
 
@@ -344,6 +449,9 @@ def _shell_findings(
                 continue
             stripped = line.lstrip()
             comment = stripped.startswith(("#", "//")) and not stripped.startswith("#!")
+            if shell and not comment:  # a trailing ` # …` comment (#1237)
+                start = _comment_start(line)
+                comment = start is not None and start < m.start()
             # a skill's command line is run by agents: not low for being in a doc
             code = lineno in code_lines
             low = (
@@ -773,6 +881,8 @@ def _scan_file(rel: str, src: str, kind: str, renamed: _Renamed | None) -> Itera
                 )
                 for t in node.targets if isinstance(t, ast.Name)
             }
+    if kind == "sh":
+        low_lines = _quoted_heredoc_lines(lines)
     skill = doc and _is_skill(rel)
     code_lines = _skill_code_lines(lines) if skill else set()
     # the removed forms inside a skill's inline-code spans: scanned on their own,
