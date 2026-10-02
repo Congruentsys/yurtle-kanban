@@ -59,7 +59,7 @@ def _error(args: list[str]) -> str:
 
 @pytest.mark.parametrize(
     "args, named, not_named",
-    [
+    [pytest.param(*c, id=" ".join(c[0])) for c in [
         (["create", "feature", "t", "-a", ""], "-a", "--assign"),
         (["create", "feature", "t", "--assignee", ""], "--assignee", "--assign "),
         (["create", "feature", "t", "-a", "x\ty"], "-a", "--assign"),
@@ -73,8 +73,7 @@ def _error(args: list[str]) -> str:
         (["comment", "FEAT-001", "--body", "x", "--author", ""], "--author", "--agent"),
         (["comment", "FEAT-001", ""], "TEXT", "--body"),
         (["list", "-a", ""], "-a", "--assignee"),
-    ],
-    ids=lambda v: " ".join(v) if isinstance(v, list) else None,
+    ]],
 )
 def test_refusal_through_an_alias_names_the_alias(
     repo: Path, args: list[str], named: str, not_named: str
@@ -86,7 +85,7 @@ def test_refusal_through_an_alias_names_the_alias(
 
 @pytest.mark.parametrize(
     "args, named",
-    [
+    [pytest.param(*c, id=" ".join(c[0])) for c in [
         (["create", "feature", "t", "--assign", ""], "--assign"),
         (["create", "feature", "t", "--body", ""], "--body"),
         (["move", "FEAT-001", "in_progress", "--assign", "", "--agent", "Test", "--no-commit"],
@@ -95,8 +94,7 @@ def test_refusal_through_an_alias_names_the_alias(
         (["comment", "FEAT-001", "--body", "x", "--agent", ""], "--agent"),
         (["comment", "FEAT-001", "--body", ""], "--body"),
         (["list", "--assignee", ""], "--assignee"),
-    ],
-    ids=lambda v: " ".join(v) if isinstance(v, list) else None,
+    ]],
 )
 def test_new_forms_keep_their_own_names(repo: Path, args: list[str], named: str) -> None:
     assert _error(args).startswith(f"Error: {named} ")
