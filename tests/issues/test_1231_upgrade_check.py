@@ -664,7 +664,8 @@ yurtle-kanban move "$ID" in_progress -a "$AGENT"
 
 
 def test_f5_skill_commands_are_high_prose_low(tmp_path: Path) -> None:
-    """Agents execute a skill's commands: fenced and command lines are high."""
+    """Agents execute a skill's commands: fenced and command lines are high; an
+    inline-code command in prose is medium (#1242), bare prose low."""
     root = tmp_path / "r"
     _write(root, ".claude/skills/next/SKILL.md", SKILL_MD)
     _write(root, "skills/other/SKILL.md", SKILL_MD)
@@ -674,7 +675,7 @@ def test_f5_skill_commands_are_high_prose_low(tmp_path: Path) -> None:
             f["line"]: f["confidence"] for f in _in(findings, rel, kind="removed-form")
         }
         assert removed.get(3) == "low", (rel, removed)
-        assert removed.get(4) == "low", (rel, removed)
+        assert removed.get(4) == "medium", (rel, removed)  # #1242: inline code in prose
         assert removed.get(7) == "high", (rel, removed)
         assert removed.get(10) == "high", (rel, removed)
     # a doc that is not a skill keeps its fences low
