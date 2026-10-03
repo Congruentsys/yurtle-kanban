@@ -943,6 +943,11 @@ def create(
     "needs --agent or $YURTLE_AGENT; gates, WIP and legality still apply. An "
     "in-progress item with no holder moves without it (claim refuses one)",
 )
+@click.option(
+    "--push",
+    is_flag=True,
+    help="Move the item as origin has it, judged there, and push one commit (#1251)",
+)
 def move(
     item_id: str,
     new_status: str,
@@ -959,6 +964,7 @@ def move(
     skip_gates: bool,
     self_reviewed: bool,
     take_over: bool,
+    push: bool,
 ):
     """Move a work item to a new status.
 
@@ -978,7 +984,19 @@ def move(
 
     An item someone else holds in progress is refused unless you are its holder
     (--agent / $YURTLE_AGENT) or pass --take-over; --force does not override that.
+
+    With --push (#1251) the move is made to the item as origin's default branch has
+    it — the halt, the holder, legality, WIP limits and gates all judged there, by
+    origin's own config — and pushed as one commit (a kanban-only commit); your
+    checkout is not touched. Exit codes as update --push's: 0 moved (or already
+    there), 1 refused, 4 remote unreachable, 5 remote busy, 6 push refused, 8 halted.
     """
+    if push:  # contradictory before anything else (#1251)
+        for flag, given in (("--no-commit", no_commit), ("--export-board", export_board)):
+            if given:
+                _refuse(ValueError(
+                    f"--push commits and pushes origin's copy: it can't be used with {flag}"
+                ))
     old_assign = {"-a": old_a}
     assign = deprecated("move", "--assign", assign, old_assign)
     service = get_service()
@@ -992,6 +1010,29 @@ def move(
         if take_over:
             _refuse(ValueError(f"--take-over needs an explicit actor: {e}"))
         _refuse(e)
+
+    # Build gate context from CLI flags
+    gate_context: dict[str, object] = {}
+    if self_reviewed:
+        gate_context["self_reviewed"] = True
+    if push:
+        # origin's item and its theme judge the status name; every refusal comes
+        # back as an outcome (#825, #1251)
+        _print_outcome(service.move_item_push(
+            fold_id(item_id),
+            new_status,
+            message=message,
+            assignee=assign,
+            actor=actor,
+            skip_wip_check=force,
+            validate_workflow=not force,
+            closed_by=closed_by,
+            skip_gates=skip_gates or force,
+            gate_context=gate_context,
+            take_over=take_over,
+            resolution=resolution,
+            superseded_by=superseded_by,
+        ))
 
     target = service.get_item(fold_id(item_id))
     if target is None:
@@ -1009,11 +1050,6 @@ def move(
             f"Unknown status: {new_status}; valid statuses: {valid}",
             f"[red]Unknown status: {safe(new_status)}[/red]\nValid statuses: {escape(valid)}",
         )
-
-    # Build gate context from CLI flags
-    gate_context: dict[str, object] = {}
-    if self_reviewed:
-        gate_context["self_reviewed"] = True
 
     try:
         item = service.move_item(

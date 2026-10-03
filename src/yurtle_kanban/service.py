@@ -207,6 +207,22 @@ class _Claimed:
 
 
 @dataclass
+class _Moved:
+    """What a move changed, for the hooks it fires once it has landed (#1251):
+    `assignee` is the item's holder after the move, `assigned` the assignee the
+    move set (ASSIGNED fires for it), `forced` a move past the workflow."""
+
+    item_id: str
+    item_type: str
+    title: str
+    old_status: str
+    new_status: str
+    assignee: str | None
+    assigned: str | None = None
+    forced: bool = False
+
+
+@dataclass
 class DepNode:
     """One unmet dependency, as `unmet_dependencies` walks it (#575): `status` is its
     native status (None when it is on no board), `state` its `dependency_state`
@@ -4753,65 +4769,254 @@ class KanbanService:
 
         # Git commit if requested
         if commit:
-            commit_msg = message
-            if not commit_msg:
-                commit_msg = f"Move {item.id} to {new_status.value}"  # the file's (#751)
-                if forced:
-                    commit_msg += " (forced)"
-                if assignee:
-                    commit_msg += f" (assigned to {assignee})"
-                if taken_over_from is not None:
-                    commit_msg += f" (taken over from {taken_over_from or 'no holder'})"
+            commit_msg = message or self._move_subject(
+                item.id, new_status, forced, assignee, taken_over_from
+            )
             self._git_commit(item.file_path, commit_msg)
 
-        # Fire hooks (after successful move)
+        self._fire_move_hooks(_Moved(  # after a successful move
+            item_id=item.id, item_type=item.item_type.value, title=item.title,
+            old_status=old_status.value, new_status=new_status.value,
+            assignee=item.assignee, assigned=assignee, forced=forced,
+        ))
+        return item
+
+    def move_item_push(
+        self,
+        item_id: str,
+        new_status: WorkItemStatus | str,
+        *,
+        message: str | None = None,
+        assignee: str | None = None,
+        actor: str | None = None,
+        validate_workflow: bool = True,
+        skip_wip_check: bool = False,
+        skip_gates: bool = False,
+        gate_context: dict[str, Any] | None = None,
+        closed_by: str | None = None,
+        take_over: bool = False,
+        resolution: str | None = None,
+        superseded_by: str | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """`move_item` as one compare-and-swap commit on origin's default branch
+        (#1251), judged on the item as the FETCHED tree has it, by origin's config
+        (#831, #865): the halt, the holder guard, the resolution rules, legality,
+        WIP (counted in that tree) and gates, in `move_item`'s order (`_move_change`).
+        A `str` status is resolved through the fetched item's theme, so an item that
+        is only on origin can be moved. A move to the status origin already has,
+        changing nothing else, is `noop`. Hooks fire once, after the move has landed
+        (`won` or `local`). `seam`, `sleep` and `jitter` are `sync_and_push`'s."""
+        try:
+            self._check_text(assignee=assignee, message=message, closed_by=closed_by)  # (#239)
+            if take_over:
+                try:
+                    actor = resolve_actor(actor, allow_git_fallback=False, cwd=self.repo_root)
+                except InputRefused as e:
+                    raise InputRefused(f"--take-over needs an explicit actor: {e}") from None
+            else:
+                actor = resolve_actor(actor, cwd=self.repo_root)
+        except ValueError as e:
+            return Outcome("refused", str(e))
+        mover = actor
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            return self._move_change(
+                read, item_id, new_status, mover, message=message, assignee=assignee,
+                validate_workflow=validate_workflow, skip_wip_check=skip_wip_check,
+                skip_gates=skip_gates, gate_context=gate_context or {},
+                closed_by=closed_by, take_over=take_over, resolution=resolution,
+                superseded_by=superseded_by,
+            )
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        if outcome.kind in ("won", "local") and isinstance(outcome.data, _Moved):
+            self._fire_move_hooks(outcome.data)
+        return outcome
+
+    def _move_change(
+        self,
+        read: Read,
+        item_id: str,
+        status: WorkItemStatus | str,
+        actor: str,
+        *,
+        message: str | None,
+        assignee: str | None,
+        validate_workflow: bool,
+        skip_wip_check: bool,
+        skip_gates: bool,
+        gate_context: dict[str, Any],
+        closed_by: str | None,
+        take_over: bool,
+        resolution: str | None,
+        superseded_by: str | None,
+    ) -> Change | NoOp | Refuse:
+        """`move --push`'s `mutate` (#1251): `move_item`'s rules, in its order,
+        against the item as `read`'s tree has it — the halt (in progress only), the
+        holder guard, the resolution rules (a `superseded_by` target looked up in
+        that tree), legality, WIP and gates on the PROPOSED item (#586) — then
+        `move_item`'s history node and commit subject."""
+        found = self._item_target(read, item_id, "a move")
+        if isinstance(found, Refuse):
+            return found
+        rel, text, item = found
+        try:
+            # `_item_target` read the judge already: this is its cached copy
+            judge = self if read.rev is None else self._judge_at(read.rev)
+            if isinstance(status, WorkItemStatus):
+                new_status = status
+            else:  # the name as origin's theme for the item has it (#587, #865)
+                resolved_status = judge.resolve_status_name(item, status)
+                if resolved_status is None:
+                    valid = ", ".join(judge.listed_status_names(item))
+                    return Refuse(f"Unknown status: {status}; valid statuses: {valid}")
+                new_status = resolved_status
+            if new_status == WorkItemStatus.IN_PROGRESS:  # (#582)
+                control = self._control_at(read)  # the fetched tree's halt
+                if control.halted:
+                    return Refuse(
+                        f"Can't move {item.id} to in progress: {control.refusal()}",
+                        halted=True,
+                    )
+            old_status = item.status
+            held = item.assignee
+            holder = (held if isinstance(held, str) else str(held or "")).strip()
+            try:
+                taken_over_from = self._holder_guard(item, actor, take_over)
+            except InputRefused as e:  # a lost race reads "lost to" the holder
+                return Refuse(str(e), holder=holder or None)
+            if taken_over_from is not None and not assignee:
+                assignee = actor  # the holder after a take-over, as `move_item` does
+            if (
+                new_status == old_status and taken_over_from is None
+                and not (assignee and not same_actor(holder, assignee))
+                and resolution is None and superseded_by is None and not closed_by
+            ):
+                return NoOp(f"{item.id} is already {judge.status_label(item)}: no changes")
+
+            changes: dict[str, Any] = {"status": new_status, "updated": datetime.now()}
+            if assignee:
+                changes["assignee"] = assignee
+            # a `superseded_by` target is known when origin's tree has it (#1251)
+            index = self._dep_index_at(read) if superseded_by else None
+            resolved, cleared = judge._resolution_changes(
+                item, replace(item, **changes), resolution, superseded_by, index=index
+            )
+            changes.update(resolved)
+            proposed = replace(item, **changes)
+
+            if validate_workflow:
+                valid, error = judge._validate_transition(
+                    replace(proposed, status=old_status), new_status
+                )
+                if not valid:
+                    return Refuse(error)
+            if not skip_wip_check:
+                refusal = self._wip_refusal_in(read, proposed)  # counted in `read`'s tree
+                if refusal:
+                    return Refuse(refusal, wip=True)
+            gates_skipped = False
+            if not skip_gates:
+                blocking = [
+                    r for r in judge._evaluate_gates(
+                        proposed, old_status, new_status, gate_context
+                    )
+                    if not r.passed and r.severity == "blocking"
+                ]
+                if blocking:
+                    return Refuse(
+                        f"Gate check failed: {'; '.join(r.message for r in blocking)}"
+                    )
+            elif judge._has_gates_configured(item):
+                gates_skipped = True
+
+            forced = not validate_workflow
+            new_text = judge._history_text(  # origin's name for the status (#865)
+                text, proposed, new_status, assignee, actor=actor, forced=forced,
+                closed_by=closed_by, gates_skipped=gates_skipped,
+                taken_over_from=taken_over_from,
+                resolution=(proposed.resolution, proposed.superseded_by) if resolved else None,
+                cleared_resolution=cleared,
+            )
+        except ValueError as e:  # a refusal, or a tree that can't be read (#814)
+            return Refuse(str(e))
+        commit_msg = message or self._move_subject(
+            item.id, new_status, forced, assignee, taken_over_from
+        )
+        moved = _Moved(
+            item_id=item.id, item_type=item.item_type.value, title=item.title,
+            old_status=old_status.value, new_status=new_status.value,
+            assignee=proposed.assignee, assigned=assignee, forced=forced,
+        )
+        return Change({rel: new_text}, commit_msg, data=moved)
+
+    @staticmethod
+    def _move_subject(
+        item_id: str, new_status: WorkItemStatus, forced: bool, assignee: str | None,
+        taken_over_from: str | None,
+    ) -> str:
+        """`move`'s commit subject without `-m`: the canonical status (#751) and
+        its `(forced)`, `(assigned to X)` and `(taken over from Y)` suffixes."""
+        subject = f"Move {item_id} to {new_status.value}"
+        if forced:
+            subject += " (forced)"
+        if assignee:
+            subject += f" (assigned to {assignee})"
+        if taken_over_from is not None:
+            subject += f" (taken over from {taken_over_from or 'no holder'})"
+        return subject
+
+    def _fire_move_hooks(self, moved: _Moved) -> None:
+        """The hooks of a move that landed (#1251, as `move_item` always fired
+        them): STATUS_CHANGE; ASSIGNED when the move set an assignee; BLOCKED on a
+        move to blocked."""
         self._hook_engine.trigger(
             HookEvent.STATUS_CHANGE,
             HookContext(
                 event=HookEvent.STATUS_CHANGE,
-                item_id=item.id,
-                item_type=item.item_type.value,
-                title=item.title,
-                old_status=old_status.value,
-                new_status=new_status.value,
-                assignee=item.assignee,
-                forced=forced,
+                item_id=moved.item_id,
+                item_type=moved.item_type,
+                title=moved.title,
+                old_status=moved.old_status,
+                new_status=moved.new_status,
+                assignee=moved.assignee,
+                forced=moved.forced,
             ),
         )
-
-        # Fire ASSIGNED hook when an assignee is set
-        if assignee:
+        if moved.assigned:
             self._hook_engine.trigger(
                 HookEvent.ASSIGNED,
                 HookContext(
                     event=HookEvent.ASSIGNED,
-                    item_id=item.id,
-                    item_type=item.item_type.value,
-                    title=item.title,
-                    new_status=new_status.value,
-                    assignee=assignee,
+                    item_id=moved.item_id,
+                    item_type=moved.item_type,
+                    title=moved.title,
+                    new_status=moved.new_status,
+                    assignee=moved.assigned,
                 ),
             )
-
-        # Fire BLOCKED hook when item moves to blocked status
-        if new_status.value == "blocked":
+        if moved.new_status == WorkItemStatus.BLOCKED.value:
             self._hook_engine.trigger(
                 HookEvent.BLOCKED,
                 HookContext(
                     event=HookEvent.BLOCKED,
-                    item_id=item.id,
-                    item_type=item.item_type.value,
-                    title=item.title,
+                    item_id=moved.item_id,
+                    item_type=moved.item_type,
+                    title=moved.title,
                     new_status="blocked",
-                    assignee=item.assignee,
+                    assignee=moved.assignee,
                 ),
             )
 
-        return item
-
     def _resolution_changes(
         self, item: WorkItem, proposed: WorkItem, resolution: str | None,
-        superseded_by: str | None,
+        superseded_by: str | None, *, index: dict[str, WorkItem] | None = None,
     ) -> tuple[dict[str, Any], str | None]:
         """(the `resolution`/`superseded_by` changes, the resolution a reopening
         clears) of moving `item` to `proposed`'s status (#581). Refuses a resolution
@@ -4820,7 +5025,8 @@ class KanbanService:
         reopening clears the resolution and `superseded_by`; a finished move off
         canonical done drops a `completed` it can't keep (#1053), returning it as
         the cleared resolution (`kb:clearedResolution`, #1061); any other
-        resolution stays."""
+        resolution stays. `index` is where a `superseded_by` target is looked up
+        (`_dep_index`'s shape; default the local boards; `move --push`: origin's, #1251)."""
         if superseded_by is not None and resolution not in REDIRECTS:
             raise InputRefused(
                 "--superseded-by goes with --resolution superseded or duplicate"
@@ -4853,14 +5059,17 @@ class KanbanService:
         if resolution in REDIRECTS:
             if not superseded_by:
                 raise InputRefused(f"--resolution {resolution} needs --superseded-by ID")
-            targets = [self._supersession_target(item, superseded_by)]
+            targets = [self._supersession_target(item, superseded_by, index)]
         return {"resolution": resolution, "superseded_by": targets}, None
 
-    def _supersession_target(self, item: WorkItem, raw: str) -> str:
+    def _supersession_target(
+        self, item: WorkItem, raw: str, index: dict[str, WorkItem] | None = None
+    ) -> str:
         """The ID `item` may be superseded by, `raw` folded and looked up on every
-        board (#581): refused when unknown, `item` itself, itself redirected (the
-        message names its final target) or when it would close a cycle."""
-        index = self._dep_index()
+        board (#581), or in `index` (#1251): refused when unknown, `item` itself,
+        itself redirected (the message names its final target) or when it would
+        close a cycle."""
+        index = self._dep_index() if index is None else index
         key, own = fold_id(raw.strip()), fold_id(item.id)
         target = index.get(key)
         if target is None:
