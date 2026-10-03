@@ -7,15 +7,18 @@ gate here blocks ``* -> backlog``; A claims first (gate-free), then the gate lan
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from tests.issues.test_574_claim import ITEM, ITEM_ID, A, claim, frontmatter, service
 from tests.issues.test_574_sync_and_push import Recorder
 from tests.issues.test_585_create_push_loop import World
 from tests.issues.test_590_next_id_and_hdd_ids import b_push
 from tests.issues.test_1260_move_claim_followups import CONFIG, gates_config_text
+from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig
 
 pytestmark = pytest.mark.usefixtures("claim_env")
@@ -64,3 +67,12 @@ def test_bounce_gate_only_local_does_not_block(world, tmp_path: Path) -> None:
 
     assert out.kind == "won", f"a local-only gate must not block: {out.kind}: {out.message}"
     assert not frontmatter(world.remote_show(ITEM)).get("assignee")
+
+
+def test_bounce_help_says_its_gates_are_origins() -> None:
+    """#1275's review: bounce --help names origin as the source of its `* -> backlog`
+    gates, as claim --help does (#1260)."""
+    result = CliRunner().invoke(main, ["bounce", "--help"])
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split()).lower()
+    assert re.search(r"origin's\W+\*\s*->\s*backlog\W+gates", text), text
