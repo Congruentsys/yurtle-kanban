@@ -21,6 +21,7 @@ from ._click import Group, pull_note, refuse, safe
 from ._logging import escape_nonprintable
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, fold_id, yaml_flow_list
 from .service import KanbanService
+from .sync import HALTED
 from .template_engine import TemplateEngine
 
 console = Console()
@@ -102,7 +103,8 @@ def _links(related: object, epic_id: str) -> bool:
     malformed `related:` such as a number or a mapping never does (#188)."""
     if not isinstance(related, list):
         return False
-    return fold_id(epic_id) in {fold_id(str(r)) for r in related}
+    # `VOY-1` is `VOY-001`, as `--push` matches it (#795, #1258)
+    return KanbanService._dup_key(epic_id) in {KanbanService._dup_key(str(r)) for r in related}
 
 
 def _update_item_related(service, item_id: str, epic_id: str) -> bool:
@@ -356,7 +358,7 @@ def _do_add(epic_id: str, item_id: str, push: bool = False):
     service = _get_service()
     if push:  # every refusal comes back as an outcome (#825), as `update --push`
         outcome = service.link_related_push(fold_id(item_id), fold_id(epic_id))
-        if (code := 8 if outcome.halted else int(outcome.exit_code)) != 0:
+        if (code := HALTED if outcome.halted else int(outcome.exit_code)) != 0:
             refuse(outcome.message, console=console, exit_code=code)
         console.print(f"[green]{safe(outcome.message)}[/green]", soft_wrap=True)
         return
@@ -366,7 +368,15 @@ def _do_add(epic_id: str, item_id: str, push: bool = False):
     if epic_item is None:
         raise click.ClickException(f"{escape_nonprintable(fold_id(epic_id))} not found")
     epic_id = epic_item.id
+    if epic_item.item_type not in set(_EPIC_TYPES.values()):  # (#1258)
+        raise click.ClickException(
+            f"{escape_nonprintable(epic_id)} is a "
+            f"{escape_nonprintable(epic_item.item_type.value)}, "
+            "not an epic or voyage; not linked"
+        )
     if (item := service.get_item(item_id)) is not None:
+        if KanbanService._dup_key(item.id) == KanbanService._dup_key(epic_id):  # (#1258)
+            raise click.ClickException(f"Can't link {escape_nonprintable(epic_id)} to itself")
         try:  # refused, exit 1, before anything is written (#754)
             service.refuse_duplicate(item, "a link")
         except ValueError as e:
