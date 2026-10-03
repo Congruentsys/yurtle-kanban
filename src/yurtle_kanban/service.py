@@ -7336,14 +7336,25 @@ class KanbanService:
                 return found
             rel, text, item = found
             link = target[2].id  # the epic's own spelling (#868)
-            if any(self._dup_key(str(r)) == self._dup_key(link) for r in item.related):
-                return NoOp(f"{item.id} is already linked to {link}")
-            try:
-                new_text, _ = self._edited_text(
-                    item, text, _Edits(related=[*map(str, item.related), link])
+            # `related:` as written, as plain `epic add` reads it: entries keep their
+            # spelling (r1 B2); a mapping or a number is not a list of IDs (#188, r1 B1)
+            fm = self._parse_frontmatter(text)
+            related = (fm.get("related") if isinstance(fm, dict) else None) or []
+            if isinstance(related, str):
+                related = [r.strip() for r in related.split(",") if r.strip()]
+            elif not isinstance(related, list):
+                return Refuse(
+                    f"{item.id}'s `related:` is a {type(related).__name__}, "
+                    "not a list of IDs; not linked"
                 )
-            except ValueError as e:
-                return Refuse(str(e))
+            related = [str(r) for r in related]
+            if any(self._dup_key(r) == self._dup_key(link) for r in related):
+                return NoOp(f"{item.id} is already linked to {link}")
+            # the shared writer: `"a, b"` stays one element (#121, #148), and the
+            # whole old value is replaced, block-list lines included (#169)
+            new_text = self._add_or_update_frontmatter_field(
+                text, "related", yaml_flow_list([*related, link])
+            )
             return Change({rel: new_text}, f"Link {item.id} → {link}")
 
         outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)

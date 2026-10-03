@@ -452,3 +452,41 @@ def test_help_lists_push(group) -> None:
 
     assert result.exit_code == 0, result.output
     assert "--push" in result.output, result.output
+
+
+# --- r1 (review of 47010adc): related: as written, as plain `epic add` -----------------------
+
+
+@pytest.mark.parametrize(
+    "written,expected",
+    [
+        ('[exp-001, "M-V17-002a", "https://x.org/A"]',
+         ["exp-001", "M-V17-002a", "https://x.org/A", "VOY-001"]),
+        ('["a, b"]', ["a, b", "VOY-001"]),
+        ("[EXP-001, exp-001]", ["EXP-001", "exp-001", "VOY-001"]),
+    ],
+    ids=["spelling-kept", "comma-element-kept", "case-twins-kept"],
+)
+def test_existing_related_entries_are_kept_as_written(world, monkeypatch, written, expected):
+    """r1 B2: only the link is added; every entry keeps its spelling, as plain
+    `epic add` keeps it (no folding, no dedupe)."""
+    b_push(world, {ITEM: item(related=written)})
+
+    result = invoke(world, monkeypatch, ["epic", "add", EPIC, ITEM_ID, "--push"])
+
+    assert result.exit_code == 0, output_of(result)
+    assert frontmatter(remote_bytes(world, ITEM).decode())["related"] == expected
+
+
+@pytest.mark.parametrize("written", ["{EXP-001: parent}", "5"], ids=["mapping", "number"])
+def test_non_list_related_is_refused_nothing_pushed(world, monkeypatch, written) -> None:
+    """r1 B1 (#188): a mapping or a number isn't a list of IDs; plain `epic add`
+    refuses it, and so does `--push`, rather than overwriting it."""
+    b_push(world, {ITEM: item(related=written)})
+    base = world.remote_sha()
+
+    result = invoke(world, monkeypatch, ["epic", "add", EPIC, ITEM_ID, "--push"])
+
+    assert result.exit_code == 1, output_of(result)
+    assert "not a list of IDs" in output_of(result)
+    assert world.remote_sha() == base, "something was pushed"
