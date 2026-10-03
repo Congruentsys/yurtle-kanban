@@ -988,8 +988,11 @@ def move(
     With --push (#1251) the move is made to the item as origin's default branch has
     it — the halt, the holder, legality, WIP limits and gates all judged there, by
     origin's own config — and pushed as one commit (a kanban-only commit); your
-    checkout is not touched. Exit codes as update --push's: 0 moved (or already
-    there), 1 refused, 4 remote unreachable, 5 remote busy, 6 push refused, 8 halted.
+    checkout is not touched. A move to the status origin already has is a noop
+    (exit 0, nothing pushed), so a retried push is safe; plain move refuses it as
+    illegal. Exit codes: 0 moved (or already there), 1 refused, 3 lost to a holder
+    (after a rejected push), 4 remote unreachable, 5 remote busy, 6 push refused,
+    8 halted.
     """
     if push:  # contradictory before anything else (#1251)
         for flag, given in (("--no-commit", no_commit), ("--export-board", export_board)):

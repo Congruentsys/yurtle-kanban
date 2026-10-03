@@ -5328,7 +5328,8 @@ class KanbanService:
             if refusal:
                 return Refuse(refusal, wip=True)  # the marker `claim --next` reads (#990)
             blocking = [
-                r for r in self._evaluate_gates(proposed, old_status, in_progress, {})
+                # origin's gates, by origin's config, as `move --push` (#865, #1260)
+                r for r in judge._evaluate_gates(proposed, old_status, in_progress, {})
                 if not r.passed and r.severity == "blocking"
             ]
             if blocking:
