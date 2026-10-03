@@ -317,7 +317,9 @@ def test_two_clones_allocating_at_once_both_land(tmp_path, monkeypatch, capsys) 
         assert not any(t.is_alive() for t in threads), "an allocator hung"
         monkeypatch.setattr(subprocess, "run", _ORIG_RUN)
 
-        if any(e for e in gate.said):
+        # a round collided when a push was refused as a lost race, not when git
+        # merely spoke (a landed push prints `To …` too) (#1274)
+        if any(_lost_race(e) for e in gate.said):
             collided += 1
         for who in ("A", "B"):
             got = results.get(who)
@@ -341,3 +343,6 @@ def test_two_clones_allocating_at_once_both_land(tmp_path, monkeypatch, capsys) 
     ).stdout
     missing = [i for i in seen if i not in allocations]
     assert not missing, f"allocated ids not recorded on origin: {missing}\n{allocations}"
+    # a runner whose pushes never collided proved nothing about the race (#1274)
+    if collided == 0:
+        pytest.skip(f"no lost-race refusal in {ROUNDS} rounds on this runner (#1274)")
