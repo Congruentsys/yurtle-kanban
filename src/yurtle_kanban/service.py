@@ -7898,6 +7898,50 @@ class KanbanService:
 
         return item
 
+    def rank_item_push(
+        self,
+        item_id: str,
+        rank: int,
+        value_summary: str | None = None,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """`rank_item` as one compare-and-swap commit on origin's default branch
+        (#1251), made to the item as the FETCHED tree has it, the way `update --push`
+        is (#574 §5): a rival's change to another line survives. An item origin
+        already ranks so is `noop`; refusals are `refused`. `seam`, `sleep` and
+        `jitter` are `sync_and_push`'s."""
+        if rank < 1:
+            return Outcome("refused", f"Rank must be >= 1, got {rank}")
+        try:
+            self._check_text(value_summary=value_summary)  # before any fetch (#219)
+        except ValueError as e:
+            return Outcome("refused", str(e))
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            found = self._item_target(read, item_id, "a rank")
+            if isinstance(found, Refuse):
+                return found
+            rel, text, item = found
+            if item.priority_rank == rank and (
+                value_summary is None or item.value_summary == value_summary
+            ):
+                return NoOp(f"{item.id} is already ranked #{rank}: no changes")
+            new = self._add_or_update_frontmatter_field(text, "priority_rank", str(rank))
+            if value_summary is not None:
+                new = self._add_or_update_frontmatter_field(
+                    new, "value_summary", yaml_quote(value_summary)
+                )
+            return Change({rel: new}, f"Rank {item.id} as #{rank}")  # the file's spelling
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        return outcome
+
     def get_ranked_items(self, status: WorkItemStatus | None = None) -> list[WorkItem]:
         """Get items sorted by priority_rank (ranked items first, then by priority_score).
 

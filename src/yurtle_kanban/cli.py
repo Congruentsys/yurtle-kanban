@@ -1693,7 +1693,12 @@ def roadmap(
 @click.argument("rank_number", type=int)
 @click.option("--summary", "-s", help="Brief value statement for this item")
 @click.option("--no-commit", is_flag=True, help="Don't create git commit")
-def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
+@click.option(
+    "--push",
+    is_flag=True,
+    help="Rank the item as origin's default branch has it and push, as `update --push` does",
+)
+def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool, push: bool):
     """Set the priority rank for a work item.
 
     Lower rank = higher priority (1 = top of the queue).
@@ -1702,9 +1707,15 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool):
     Examples:
         yurtle-kanban rank EXP-1019 1
         yurtle-kanban rank EXP-1022 2 --summary "Unblocks Paper 127"
-        yurtle-kanban rank CHORE-078 3
+        yurtle-kanban rank CHORE-078 3 --push
     """
+    if push and no_commit:
+        _refuse(ValueError("--push commits and pushes: it can't be used with --no-commit"))
     service = get_service()
+    if push:  # every refusal comes back as an outcome (#825)
+        _print_outcome(
+            service.rank_item_push(fold_id(item_id), rank_number, value_summary=summary)
+        )
     try:
         item = service.rank_item(
             fold_id(item_id),
