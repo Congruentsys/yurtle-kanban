@@ -1115,9 +1115,9 @@ def claim(item_id: str | None, agent: str | None, take_over: bool, next_: bool):
     The fetched item is judged by origin's own config at the fetched commit
     (.kanban/config.yaml, the theme files under .kanban/themes/ and the
     workflows under .kanban/workflows/): how the item parses, whether the move
-    is legal, the status name written, WIP limits, board paths, ignore
-    patterns and the gates checked (#831, #865, #1260). With no config on
-    origin, the local config judges.
+    is legal, the status name written, WIP limits, board paths and ignore
+    patterns (#831, #865). Gate checks run origin's gates too, as move --push
+    does (#1260). With no config on origin, the local config judges.
 
     Examples:
         YURTLE_AGENT=Claude-M5 yurtle-kanban claim EXP-123
