@@ -10,7 +10,8 @@ Found in the PR #1025 (#578) review.
 2. ``cli.py``'s module usage line for ``bounce`` leaves out ``[--take-over]``.
 3. ``validate`` doesn't check ``bounced_at``/``bounced_by``.
 
-Item 1 was ruled out ([steer] on #1041: gates stay local, #865), so readings a-c
+Item 1 was first ruled out ([steer] on #1041: gates stay local, #865), then landed by
+#1260 (claim and bounce judge gates by origin's config, as move --push). Readings a-c
 below describe the retired gate tests; their scaffolding was removed (#1051).
 
 Readings the test partner chose (the driver may challenge them):

@@ -568,7 +568,7 @@ def test_parent_ignored_by_origins_config_is_missing(world, tmp_path, monkeypatc
     assert MISSING_LINE in out, f"--push did not call PAPER-130 missing:\n{out}"
 
 
-# --- 4. controls: no config on origin, and gates stay local --------------------------------
+# --- 4. controls: no config on origin, and gates are origin's (#1260) ---------------------
 
 
 def test_control_no_origin_config_local_workflow_judges(world) -> None:
@@ -601,20 +601,18 @@ def test_control_no_origin_config_local_theme_parses(world) -> None:
     assert_one_claim_commit(world, base, {"underway", "in_progress"})
 
 
-def test_control_gate_only_in_local_config_still_refuses(world) -> None:
-    """Gates stay local: a blocking gate only A's config has refuses the claim, though
-    origin's config (which judges WIP, paths and now legality) has no gate."""
+def test_control_gate_only_in_local_config_no_longer_refuses(world) -> None:
+    """Gates are origin's too (#1260): a blocking gate only A's config has no longer
+    refuses the claim, since origin's config (which judges WIP, paths, legality and
+    now gates) has none. A gate only on origin refusing is test_1260's."""
+    # ruled edit (#1260): this control pinned "gates stay local"; #1260 moved claim's
+    # gates to origin's config, as move --push judges them (#1257)
     (world.a / CONFIG).write_text(GATED_CONFIG)
     assert "gates" not in world.remote_show(CONFIG)
-    base = world.remote_sha()
 
     out = claim(world.a, A)
 
-    assert out.kind == "refused", (
-        f"the local-only gate must still run: {out.kind}: {out.message}"
-    )
-    assert "Gate check failed" in out.message, out.message
-    assert world.remote_sha() == base
+    assert out.kind == "won", f"a local-only gate must not block: {out.kind}: {out.message}"
 
 
 def test_non_md_or_non_utf8_file_in_origins_workflows_is_skipped(world) -> None:

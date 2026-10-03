@@ -988,8 +988,11 @@ def move(
     With --push (#1251) the move is made to the item as origin's default branch has
     it — the halt, the holder, legality, WIP limits and gates all judged there, by
     origin's own config — and pushed as one commit (a kanban-only commit); your
-    checkout is not touched. Exit codes as update --push's: 0 moved (or already
-    there), 1 refused, 4 remote unreachable, 5 remote busy, 6 push refused, 8 halted.
+    checkout is not touched. A move to the status origin already has is a noop
+    (exit 0, nothing pushed), so a retried push is safe; plain move refuses it as
+    illegal. Exit codes: 0 moved (or already there), 1 refused, 3 lost to a holder
+    (after a rejected push), 4 remote unreachable, 5 remote busy, 6 push refused,
+    8 halted.
     """
     if push:  # contradictory before anything else (#1251)
         for flag, given in (("--no-commit", no_commit), ("--export-board", export_board)):
@@ -1113,8 +1116,8 @@ def claim(item_id: str | None, agent: str | None, take_over: bool, next_: bool):
     (.kanban/config.yaml, the theme files under .kanban/themes/ and the
     workflows under .kanban/workflows/): how the item parses, whether the move
     is legal, the status name written, WIP limits, board paths and ignore
-    patterns (#831, #865). With no config on origin, the local config judges.
-    Gate checks still read the local working tree.
+    patterns (#831, #865). Gate checks run origin's gates too, as move --push
+    does (#1260). With no config on origin, the local config judges.
 
     Examples:
         YURTLE_AGENT=Claude-M5 yurtle-kanban claim EXP-123
