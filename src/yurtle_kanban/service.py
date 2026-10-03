@@ -5257,11 +5257,10 @@ class KanbanService:
         (`won` or `local`), for the winner only. `seam`, `sleep` and `jitter` are
         `sync_and_push`'s.
 
-        WIP limits, board paths and ignore patterns (#831), and the item's parse,
-        the move's legality (theme and workflows) and the status written (#865),
-        are judged by origin's config at the fetched commit (`_judge_at`), or the
-        local one when origin has none; gate checks still read the local working
-        tree."""
+        WIP limits, board paths and ignore patterns (#831), the item's parse, the
+        move's legality (theme and workflows) and the status written (#865), and
+        the gates checked (#1260), are judged by origin's config at the fetched
+        commit (`_judge_at`), or the local one when origin has none."""
         actor = check_identity(actor, "--agent")
 
         def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:

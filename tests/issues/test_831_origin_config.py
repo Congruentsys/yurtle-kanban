@@ -412,5 +412,8 @@ def test_claim_help_says_gates_are_origins() -> None:
     # judges claim's gates by origin's config, as move --push does (#1257)
     doc = " ".join((main.commands["claim"].help or "").split()).lower()
     assert "config" in doc, f"claim's help doesn't mention the config: {doc!r}"
-    assert "gates" in doc and "#1260" in doc, f"claim's help doesn't name gates: {doc!r}"
+    # ruled edit (#1275): the meaning, not the literal "#1260"
+    assert re.search(r"gate[^.]*origin|origin[^.]*gate", doc), (
+        f"claim's help doesn't say gates are origin's: {doc!r}"
+    )
     assert "local working tree" not in doc, f"claim's help keeps the old carve-out: {doc!r}"
