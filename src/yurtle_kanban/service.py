@@ -359,7 +359,8 @@ def _local_allocations_text(lock_file: Path) -> str | None:
 # git's per-ref refusal line: ` ! [rejected] main -> main (fetch first)` (#1262)
 _REFUSAL_LINE_RE = re.compile(r"\s*! \[(rejected|remote rejected)\][^(]*\((.*)\)\s*$")
 # older git (before ~2.50) names the lost ref-lock race on its own `remote:` line (#1262)
-_OLD_GIT_LOCK_RE = re.compile(r"\s*remote: error: cannot lock ref .* but expected ")
+# (`remote: ` as git's transports prefix it; a transport that doesn't still counts, #1274)
+_OLD_GIT_LOCK_RE = re.compile(r"\s*(?:remote: )?error: cannot lock ref .* but expected ")
 
 
 def _lost_race(err: str) -> bool:
@@ -371,7 +372,10 @@ def _lost_race(err: str) -> bool:
     rejected] … (incorrect old value provided)` / `(cannot lock ref … but expected …)`
     / `(cannot lock ref … File exists)` (#1255), or older git's `(failed to update
     ref)` beside a `remote: error: cannot lock ref … but expected …` line (#1262). Any
-    other refusal (a hook, a protected branch, a lock git can't take) is not."""
+    other refusal (a hook, a protected branch, a lock git can't take) is not. A ref
+    lock someone holds too long (git 2.54 says `(reference already exists)`, with
+    `File exists` only on its `remote:` lines) is refused, not retried: a stale lock
+    needs a person (#1274)."""
     lines = err.splitlines()
     old_git_lock = any(_OLD_GIT_LOCK_RE.match(line) for line in lines)
     for line in lines:
