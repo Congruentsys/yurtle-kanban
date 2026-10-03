@@ -55,7 +55,8 @@ MODES = [
 
 
 def argv(group: str, target: str, item_id: str, push: bool) -> list[str]:
-    return [group, "add", target, item_id, *(["--push"] if push else [])]
+    # ruled edit (#1279): pushing is now the default with an origin; "plain" is --no-push
+    return [group, "add", target, item_id, "--push" if push else "--no-push"]
 
 
 def state(world: World) -> tuple[str, dict[str, bytes]]:
