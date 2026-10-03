@@ -118,7 +118,6 @@ def test_yurtle_fence_in_body_does_not_change_status(world, monkeypatch) -> None
     assert after == before, after
 
 
-
 def test_yurtle_fence_in_body_is_on_disk_not_in_comment_text(world, monkeypatch) -> None:
     """#644's ruling (item 2) through --push (#1267): knowledge fences are stripped from
     comment text, as from description (documented on add_comment); the pasted block
