@@ -161,7 +161,7 @@ def _twin(tmp_path_factory, monkeypatch, old: list[str], new: list[str]):
     old tree, new tree). The aging clock is frozen for both boards, seeding and
     run alike: `list --json`'s `age_seconds` (and `since`, `stale`, `clock_skew`)
     is measured from it, so two runs a second apart must not differ (#1259)."""
-    frozen = datetime.now().astimezone()
+    frozen = datetime.now().astimezone().replace(microsecond=0)  # stamps are whole seconds
     monkeypatch.setattr(service, "_now", lambda: frozen)
     a = _make_repo(tmp_path_factory.mktemp("old"))
     b = _make_repo(tmp_path_factory.mktemp("new"))

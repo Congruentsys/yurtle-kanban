@@ -118,6 +118,25 @@ def test_yurtle_fence_in_body_does_not_change_status(world, monkeypatch) -> None
     assert after == before, after
 
 
+
+def test_yurtle_fence_in_body_is_on_disk_not_in_comment_text(world, monkeypatch) -> None:
+    """#644's ruling (item 2) through --push (#1267): knowledge fences are stripped from
+    comment text, as from description (documented on add_comment); the pasted block
+    stays on disk, inside the comment."""
+    pasted = HISTORY.replace("kb:status kb:ready", "kb:status kb:done")
+    body = f"look at this:\n\n{pasted}\n"
+
+    result = invoke(
+        world.a, monkeypatch, ["comment", ITEM_ID, "--agent", "A", "--body", body, "--push"]
+    )
+
+    assert result.exit_code == 0, output_of(result)
+    assert pasted.strip() in remote_text(world)
+    comments = parsed_on_origin(world, ITEM).comments  # type: ignore[attr-defined]
+    mine = [(c.author, c.content) for c in comments if c.author == "A"]
+    assert mine == [("A", "look at this:")], [(c.author, c.content) for c in comments]
+
+
 # --- 2. the #1230 deprecated forms with --push -----------------------------------------------
 
 
@@ -175,4 +194,4 @@ def test_push_refusal_on_stderr_only(world, monkeypatch) -> None:
 def test_harness_plain_item_has_no_comments(world) -> None:
     """Harness check: EXP-002 starts with no comments, so test 1's count is exact."""
     assert parsed_on_origin(world, PLAIN).comments == []  # type: ignore[attr-defined]
-    assert Path(world.a / PLAIN).exists()
+    assert (world.a / PLAIN).exists()
