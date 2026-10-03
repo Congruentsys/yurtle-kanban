@@ -3,8 +3,8 @@
 
 Decided shape, for plain ``epic add``, ``epic add --push`` and ``voyage add``:
 
-1. A target that isn't an epic or voyage is refused. Which type counts comes from the
-   theme (``_detect_epic_type``): nautical links to ``voyage``, software to ``epic``.
+1. A target that isn't an epic or voyage is refused. Either type counts on any theme
+   (a board can mix presets, #1269); the tests run on nautical, linking to ``voyage``.
    Linking to an expedition, feature or bug exits 1 with a message naming the target
    and its type; nothing is written or pushed.
 2. A self-link (``epic add VOY-001 VOY-001``) exits 1; nothing is written or pushed.

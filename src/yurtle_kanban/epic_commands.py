@@ -99,7 +99,7 @@ def _detect_epic_type(service) -> tuple[WorkItemType, str]:
 
 
 def _links(related: object, epic_id: str) -> bool:
-    """True when `related` lists epic_id under any spelling (`fold_id`, #868); a
+    """True when `related` lists epic_id under any spelling (`_dup_key`, #868, #1258); a
     malformed `related:` such as a number or a mapping never does (#188)."""
     if not isinstance(related, list):
         return False
