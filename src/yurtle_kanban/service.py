@@ -340,6 +340,21 @@ def _local_allocations_text(lock_file: Path) -> str | None:
     return _allocations_text(raw, str(lock_file))
 
 
+def _lost_race(err: str) -> bool:
+    """A push refused because origin moved first: a lost race, retried on a fresh base
+    (#574). Either `[rejected] … (fetch first)` / `(non-fast-forward)`, or, when two
+    clones push at the same instant, the remote's `[remote rejected] … (incorrect old
+    value provided)` / `(cannot lock ref …)` (#1255). Any other refusal (a hook, a
+    protected branch) is not."""
+    if "[rejected]" in err and ("fetch first" in err or "non-fast-forward" in err):
+        return True
+    return any(
+        "[remote rejected]" in line
+        and ("incorrect old value provided" in line or "cannot lock ref" in line)
+        for line in err.splitlines()
+    )
+
+
 def _twin_key(name: str) -> str:
     """A path as a case- and normalization-insensitive filesystem (APFS) compares
     it (#869): NFC, case folded, NFC again. `Café` NFC and NFD are one name, and
@@ -2794,9 +2809,7 @@ class KanbanService:
             )
             if push.returncode != 0:
                 err = last_err = push.stderr.strip()
-                if "[rejected]" not in err or not (
-                    "fetch first" in err or "non-fast-forward" in err
-                ):
+                if not _lost_race(err):  # (#574, #1255)
                     return failed(
                         f"The remote refused the push to origin/{branch}: {err} "
                         "(nothing was created)"
@@ -3014,7 +3027,7 @@ class KanbanService:
                 if push.returncode == 0:
                     return self._won(branch, sha, result, attempt + 1)
                 err = self._git_output(push)
-                if "[rejected]" in err and ("fetch first" in err or "non-fast-forward" in err):
+                if _lost_race(err):  # (#574, #1255)
                     rejected = True
                     logger.warning(
                         f"Push to origin/{branch} rejected (attempt {attempt + 1}): {err}"
