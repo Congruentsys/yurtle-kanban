@@ -404,12 +404,13 @@ def test_same_config_add_dep_on_origin_item_still_resolves(upd_world, monkeypatc
     assert_one_item_commit(world, base)
 
 
-# --- the documented carve-out: gate file reads stay local ----------------------------------
+# --- gates are origin's too (#1260 retired the "gate reads stay local" carve-out) ---------
 
 
-def test_claim_help_says_gate_reads_stay_local() -> None:
+def test_claim_help_says_gates_are_origins() -> None:
+    # ruled edit (#1260): this pinned "gate checks read the local working tree"; #1260
+    # judges claim's gates by origin's config, as move --push does (#1257)
     doc = " ".join((main.commands["claim"].help or "").split()).lower()
     assert "config" in doc, f"claim's help doesn't mention the config: {doc!r}"
-    assert re.search(r"gate[^.]*local|local[^.]*gate", doc), (
-        f"claim's help doesn't say gate checks read the local working tree: {doc!r}"
-    )
+    assert "gates" in doc and "#1260" in doc, f"claim's help doesn't name gates: {doc!r}"
+    assert "local working tree" not in doc, f"claim's help keeps the old carve-out: {doc!r}"

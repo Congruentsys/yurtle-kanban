@@ -5429,7 +5429,8 @@ class KanbanService:
         old_status, backlog = item.status, WorkItemStatus.BACKLOG
         proposed = replace(item, status=backlog, assignee=None, updated=datetime.now())
         blocking = [
-            r for r in self._evaluate_gates(proposed, old_status, backlog, {})
+            # origin's gates, by origin's config, as claim and move --push (#1260)
+            r for r in judge._evaluate_gates(proposed, old_status, backlog, {})
             if not r.passed and r.severity == "blocking"
         ]
         if blocking:
