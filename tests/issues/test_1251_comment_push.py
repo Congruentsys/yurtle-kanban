@@ -432,7 +432,10 @@ def test_control_comment_without_push_commits_locally_only(world, monkeypatch) -
     base = world.remote_sha()
     head_before = git(world.a, "rev-parse", "HEAD").strip()
 
-    result = invoke(world.a, monkeypatch, ["comment", ITEM_ID, "--agent", "A", "--body", "here"])
+    # ruled edit (#1279): pushing is now the default with an origin; this pins the plain path
+    result = invoke(
+        world.a, monkeypatch, ["comment", ITEM_ID, "--agent", "A", "--body", "here", "--no-push"]
+    )
 
     assert result.exit_code == 0, output_of(result)
     assert world.remote_sha() == base, "comment without --push pushed"

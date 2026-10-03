@@ -438,7 +438,8 @@ def test_control_add_without_push_writes_worktree_only(world, monkeypatch, group
     head_before = git(world.a, "rev-parse", "HEAD").strip()
     old = (world.a / ITEM).read_bytes()
 
-    result = invoke(world, monkeypatch, [group, "add", EPIC, ITEM_ID])
+    # ruled edit (#1279): pushing is now the default with an origin; this pins the plain path
+    result = invoke(world, monkeypatch, [group, "add", EPIC, ITEM_ID, "--no-push"])
 
     assert result.exit_code == 0, output_of(result)
     assert world.remote_sha() == base, f"{group} add without --push pushed"

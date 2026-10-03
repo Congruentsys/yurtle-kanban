@@ -304,7 +304,8 @@ def test_hook_refusal_leaves_item_edit_in_place(sw, monkeypatch, name, expected)
     """Choice: the edit is kept in the working tree (not reverted), uncommitted."""
     repo, _remote = sw
     _refusing_hook(repo)
-    result = _run(repo, monkeypatch, SW_CMDS[name][0])
+    # ruled edit (#1279): the plain path is the one that edits the working tree
+    result = _run(repo, monkeypatch, [*SW_CMDS[name][0], "--no-push"])
     assert result.exit_code != 0, result.output
     assert expected in (repo / ITEM).read_text()
 

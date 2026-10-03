@@ -17,7 +17,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from ._click import Group, pull_note, refuse, safe
+from ._click import Group, pull_note, refuse, resolve_push, safe
 from ._logging import escape_nonprintable
 from .models import PRIORITIES, WorkItemStatus, WorkItemType, fold_id, yaml_flow_list
 from .service import KanbanService
@@ -352,11 +352,13 @@ def _do_show(epic_id: str):
         render_research_interlinks(linked_items, console)
 
 
-def _do_add(epic_id: str, item_id: str, push: bool = False):
+def _do_add(epic_id: str, item_id: str, push: bool | None = None):
     """Link an item to an epic/voyage by adding it to the item's related field.
-    With `push`, one compare-and-swap commit on origin's item (#1251)."""
+    Pushed (by default with an origin remote, #1279), one compare-and-swap commit on
+    origin's item (#1251)."""
     service = _get_service()
-    if push:  # every refusal comes back as an outcome (#825), as `update --push`
+    # every refusal comes back as an outcome (#825), as `update --push`
+    if resolve_push(push, service):
         outcome = service.link_related_push(fold_id(item_id), fold_id(epic_id))
         if (code := HALTED if outcome.halted else int(outcome.exit_code)) != 0:
             refuse(outcome.message, console=console, exit_code=code)
@@ -428,11 +430,13 @@ def epic_show(epic_id: str):
 @click.argument("epic_id")
 @click.argument("item_id")
 @click.option(
-    "--push",
-    is_flag=True,
-    help="Link the item as origin's default branch has it and push, as `update --push` does",
+    "--push/--no-push",
+    default=None,
+    help="Link the item as origin's default branch has it and push, as `update --push` does."
+    " Pushing is the default when the repo has an origin remote; --no-push edits"
+    " locally (#1279)",
 )
-def epic_add(epic_id: str, item_id: str, push: bool):
+def epic_add(epic_id: str, item_id: str, push: bool | None):
     """Link an item to an epic."""
     _do_add(epic_id, item_id, push)
 
@@ -473,10 +477,12 @@ def voyage_show(epic_id: str):
 @click.argument("epic_id")
 @click.argument("item_id")
 @click.option(
-    "--push",
-    is_flag=True,
-    help="Link the item as origin's default branch has it and push, as `update --push` does",
+    "--push/--no-push",
+    default=None,
+    help="Link the item as origin's default branch has it and push, as `update --push` does."
+    " Pushing is the default when the repo has an origin remote; --no-push edits"
+    " locally (#1279)",
 )
-def voyage_add(epic_id: str, item_id: str, push: bool):
+def voyage_add(epic_id: str, item_id: str, push: bool | None):
     """Link an item to a voyage."""
     _do_add(epic_id, item_id, push)

@@ -117,10 +117,11 @@ yurtle-kanban export --format json
 | `list` | List work items with optional filters (`--pickable` for what `--agent` may pick up now, in pick order; `--explain` also shows each ready item that isn't pickable, and why); aging: `--older-than DURATION`, `--stale`, `--stale-after DURATION` (default `24h`; `m/h/d/w`), and `--json` rows carry `since`, `since_source`, `age_seconds`, `stale`, `clock_skew`, `board`; `--resolution R`: a done item with none counts as `completed` |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
 | `claim` | Claim an item race-free: move it to in progress, held by you (`--agent`, `--take-over`); `claim --next` claims the first pickable item you win (exit 7 when none) |
-| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`, `--resolution completed\|superseded\|duplicate\|wont_do`, `--superseded-by ID`); a move to a status that is not finished clears the resolution |
+| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`, `--resolution completed\|superseded\|duplicate\|wont_do`, `--superseded-by ID`); a move to a status that is not finished clears the resolution. Pushed to origin by default when the repo has an `origin` remote; `--no-push` moves it locally |
 | `bounce` | Give an ill-defined item back (`--reason TEXT` or `--reason-file PATH\|-`; `--agent`, `--take-over`): to backlog, unassigned, not pickable until its body is edited |
 | `control` | Emergency stop: `control halt (--reason TEXT \| --reason-file PATH\|-) [--agent A]`, `control resume`, `control status [--json]`; a halt refuses `claim` and a move to in progress (exit 8), `next` and `list --pickable` exit 8, holders may still finish; one repo-wide `.kanban/control.yaml` on origin's default branch |
 | `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
+| `comment`, `rank`, `epic add`, `voyage add` | Like `move`, pushed to origin by default when the repo has an `origin` remote (one race-free commit on origin's copy); `--no-push` edits locally (#1279) |
 | `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |
 | `states` | Each board's lifecycle: status → legal next statuses (`--board`, `--type`, `--json` with gate ids); gates, WIP and workflow rules can still refuse |
 | `board` | Display kanban board (`board research`, `board --all`, `board --campaign VOY-XXX`) |

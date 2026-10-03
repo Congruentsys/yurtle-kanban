@@ -45,6 +45,7 @@ from ._click import (
     json_refusal,
     pull_note,
     refuse,
+    resolve_push,
     safe,
 )
 from ._logging import escape_nonprintable
@@ -944,9 +945,11 @@ def create(
     "in-progress item with no holder moves without it (claim refuses one)",
 )
 @click.option(
-    "--push",
-    is_flag=True,
-    help="Move the item as origin has it, judged there, and push one commit (#1251)",
+    "--push/--no-push",
+    default=None,
+    help="Move the item as origin has it, judged there, and push one commit (#1251)."
+    " Pushing is the default when the repo has an origin remote; --no-push edits"
+    " locally (#1279)",
 )
 def move(
     item_id: str,
@@ -964,7 +967,7 @@ def move(
     skip_gates: bool,
     self_reviewed: bool,
     take_over: bool,
-    push: bool,
+    push: bool | None,
 ):
     """Move a work item to a new status.
 
@@ -985,7 +988,10 @@ def move(
     An item someone else holds in progress is refused unless you are its holder
     (--agent / $YURTLE_AGENT) or pass --take-over; --force does not override that.
 
-    With --push (#1251) the move is made to the item as origin's default branch has
+    In a repo with an origin remote the move is pushed by default (#1279); --no-push
+    (or --no-commit, --export-board) moves it here only, as before.
+
+    Pushed (#1251), the move is made to the item as origin's default branch has
     it — the halt, the holder, legality, WIP limits and gates all judged there, by
     origin's own config — and pushed as one commit (a kanban-only commit); your
     checkout is not touched. A move to the status origin already has is a noop
@@ -994,7 +1000,7 @@ def move(
     (after a rejected push), 4 remote unreachable, 5 remote busy, 6 push refused,
     8 halted.
     """
-    if push:  # contradictory before anything else (#1251)
+    if push is True:  # contradictory before anything else (#1251)
         for flag, given in (("--no-commit", no_commit), ("--export-board", export_board)):
             if given:
                 _refuse(ValueError(
@@ -1003,6 +1009,7 @@ def move(
     old_assign = {"-a": old_a}
     assign = deprecated("move", "--assign", assign, old_assign)
     service = get_service()
+    push = resolve_push(push, service, no_commit, export_board)
     try:
         if assign is not None:
             # named as given, a deprecated alias included (#1239)
@@ -1734,11 +1741,15 @@ def roadmap(
 @click.option("--summary", "-s", help="Brief value statement for this item")
 @click.option("--no-commit", is_flag=True, help="Don't create git commit")
 @click.option(
-    "--push",
-    is_flag=True,
-    help="Rank the item as origin's default branch has it and push, as `update --push` does",
+    "--push/--no-push",
+    default=None,
+    help="Rank the item as origin's default branch has it and push, as `update --push` does."
+    " Pushing is the default when the repo has an origin remote; --no-push (or"
+    " --no-commit) ranks locally (#1279)",
 )
-def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool, push: bool):
+def rank(
+    item_id: str, rank_number: int, summary: str | None, no_commit: bool, push: bool | None
+):
     """Set the priority rank for a work item.
 
     Lower rank = higher priority (1 = top of the queue).
@@ -1747,12 +1758,15 @@ def rank(item_id: str, rank_number: int, summary: str | None, no_commit: bool, p
     Examples:
         yurtle-kanban rank EXP-1019 1
         yurtle-kanban rank EXP-1022 2 --summary "Unblocks Paper 127"
-        yurtle-kanban rank CHORE-078 3 --push
+        yurtle-kanban rank CHORE-078 3 --no-push
+
+    In a repo with an origin remote the rank is pushed by default (#1279); --no-push
+    (or --no-commit) ranks it here only.
     """
-    if push and no_commit:
+    if push is True and no_commit:
         _refuse(ValueError("--push commits and pushes: it can't be used with --no-commit"))
     service = get_service()
-    if push:  # every refusal comes back as an outcome (#825)
+    if resolve_push(push, service, no_commit):  # every refusal is an outcome (#825)
         _print_outcome(
             service.rank_item_push(fold_id(item_id), rank_number, value_summary=summary)
         )
@@ -2009,10 +2023,12 @@ def update(
     help="Who is commenting; default $YURTLE_AGENT, then git user.name",
 )
 @click.option(
-    "--push",
-    is_flag=True,
+    "--push/--no-push",
+    default=None,
     help="Add the comment to the item as origin's default branch has it and push, "
-    "as `update --push` does",
+    "as `update --push` does."
+    " Pushing is the default when the repo has an origin remote; --no-push edits"
+    " locally (#1279)",
 )
 # 2.x forms, deprecated until 4.0 (#1230)
 @click.option("--author", "old_author", hidden=True)
@@ -2025,7 +2041,7 @@ def comment(
     agent: str | None,
     old_author: str | None,
     old_a: str | None,
-    push: bool,
+    push: bool | None,
 ):
     """Add a comment to a work item.
 
@@ -2034,6 +2050,9 @@ def comment(
         yurtle-kanban comment EXP-123 --body-file - <<'EOF'
         ...comment text...
         EOF
+
+    In a repo with an origin remote the comment is pushed by default (#1279);
+    --no-push adds it here only.
     """
     text = deprecated(
         "comment", "ID --body TEXT", body if body is not None else body_file,
@@ -2059,7 +2078,7 @@ def comment(
         author = resolve_actor(
             agent, cwd=service.repo_root, flag=given_flag("--agent", old_agent)
         )
-        if push:  # every refusal comes back as an outcome (#825)
+        if resolve_push(push, service):  # every refusal is an outcome (#825)
             _print_outcome(service.add_comment_push(fold_id(item_id), text, author))
         item = service.add_comment(fold_id(item_id), text, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
