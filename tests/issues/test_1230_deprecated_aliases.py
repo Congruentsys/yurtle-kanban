@@ -28,12 +28,13 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result
 
-from yurtle_kanban import cli
+from yurtle_kanban import cli, service
 from yurtle_kanban.cli import main
 from yurtle_kanban.config import KanbanConfig, PathConfig
 
@@ -157,7 +158,11 @@ JSON_ROWS = [
 
 def _twin(tmp_path_factory, monkeypatch, old: list[str], new: list[str]):
     """Run `old` and `new` on two identical boards: (old result, new result,
-    old tree, new tree)."""
+    old tree, new tree). The aging clock is frozen for both boards, seeding and
+    run alike: `list --json`'s `age_seconds` (and `since`, `stale`, `clock_skew`)
+    is measured from it, so two runs a second apart must not differ (#1259)."""
+    frozen = datetime.now().astimezone()
+    monkeypatch.setattr(service, "_now", lambda: frozen)
     a = _make_repo(tmp_path_factory.mktemp("old"))
     b = _make_repo(tmp_path_factory.mktemp("new"))
     _seed(a, monkeypatch)
