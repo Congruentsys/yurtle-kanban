@@ -729,7 +729,9 @@ def test_control_move_still_commits_locally_without_pushing(world, monkeypatch) 
     base = world.remote_sha()
 
     result = invoke(
-        world, monkeypatch, ["move", ITEM_ID, "in_progress", "--assign", A, "--agent", A]
+        world, monkeypatch,
+        # ruled edit (#1279): pushing is now the default with an origin; plain move here
+        ["move", ITEM_ID, "in_progress", "--assign", A, "--agent", A, "--no-push"],
     )
 
     assert result.exit_code == 0, output_of(result)

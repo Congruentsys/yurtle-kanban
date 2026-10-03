@@ -246,3 +246,14 @@ def given_flag(new: str, old: dict[str, Any]) -> str:
     a later refusal to name (#1239): the old spelling that carried it, else `new`.
     `old` is the map passed to `deprecated` (which has already refused two)."""
     return next((name for name, v in old.items() if v is not None), new)
+
+
+def resolve_push(push: bool | None, service: Any, *local_only: object) -> bool:
+    """`--push/--no-push` as given; with neither, push when the repo has an `origin`
+    remote, unless a local-only option (`--no-commit`, `--export-board`) was given
+    (#1279)."""
+    if push is not None:
+        return push
+    if any(local_only):
+        return False
+    return service.has_origin()

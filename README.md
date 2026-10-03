@@ -117,7 +117,7 @@ yurtle-kanban export --format json
 | `list` | List work items with optional filters (`--pickable` for what `--agent` may pick up now, in pick order; `--explain` also shows each ready item that isn't pickable, and why); aging: `--older-than DURATION`, `--stale`, `--stale-after DURATION` (default `24h`; `m/h/d/w`), and `--json` rows carry `since`, `since_source`, `age_seconds`, `stale`, `clock_skew`, `board`; `--resolution R`: a done item with none counts as `completed` |
 | `create` | Create a new work item (`--push` for atomic multi-agent safety) |
 | `claim` | Claim an item race-free: move it to in progress, held by you (`--agent`, `--take-over`); `claim --next` claims the first pickable item you win (exit 7 when none) |
-| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`, `--resolution completed\|superseded\|duplicate\|wont_do`, `--superseded-by ID`); a move to a status that is not finished clears the resolution |
+| `move` | Move item to new status (with `--assign`, `--agent`, `--force`, `--closed-by`, `--resolution completed\|superseded\|duplicate\|wont_do`, `--superseded-by ID`); a move to a status that is not finished clears the resolution. Pushed to origin by default when the repo has an `origin` remote; `--no-push` moves it locally |
 | `bounce` | Give an ill-defined item back (`--reason TEXT` or `--reason-file PATH\|-`; `--agent`, `--take-over`): to backlog, unassigned, not pickable until its body is edited |
 | `control` | Emergency stop: `control halt (--reason TEXT \| --reason-file PATH\|-) [--agent A]`, `control resume`, `control status [--json]`; a halt refuses `claim` and a move to in progress (exit 8), `next` and `list --pickable` exit 8, holders may still finish; one repo-wide `.kanban/control.yaml` on origin's default branch |
 | `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
@@ -133,12 +133,12 @@ yurtle-kanban export --format json
 | `next` | Suggest next item to work on (`--agent`; `--json`: `{"id", "kind", "reason"}`, or `null` and exit 7 when nothing is left) |
 | `next-id` | **Allocate next ID atomically (prevents duplicates!)** |
 | `blocked` | Status- and dependency-blocked items, each once, with a tree of what they wait on (`--board`, `--all`, `--json`); hdd `implements`: `hdd critical-path --dev-blockers` |
-| `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`) |
+| `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`); pushed to origin by default with an `origin` remote, `--no-push` adds it locally |
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
 | `validate` | Check for ID mismatches, duplicate IDs across boards, dependency cycles and dangling `depends_on` targets |
 | `upgrade-check` | Read-only, heuristic scan of a repo (`[PATH]`, default the repo root) for 2.x usages 3.x changed: options 3.0 removed in scripts, docs and skills (`move -a`, `comment --author`, `comment ID TEXT`, …), `--resolution obsolete\|merged`, raw status checks a nautical/hdd/spec board's native names break, `comment`/`move` calls with no `--agent`; names what it does not check (see UPGRADING.md); `--json`; exit 1 with findings, 3 if the scan fails |
-| `voyage/epic` | Campaign management: `create`, `show`, `add` |
+| `voyage/epic` | Campaign management: `create`, `show`, `add` (`add` is pushed to origin by default with an `origin` remote; `--no-push` links locally) |
 | `idea` | HDD: Create research/feature ideas |
 | `literature` | HDD: Create literature reviews |
 | `paper` | HDD: Create research papers |
@@ -146,7 +146,7 @@ yurtle-kanban export --format json
 | `experiment` | HDD: `create`, `run` (timestamped runs), `status` (run history) |
 | `measure` | HDD: Create metrics/measures |
 | `hdd` | HDD: `backfill` (turtle blocks), `registry` (cross-ref index), `validate` (link checking) |
-| `rank` | Set priority rank and value summary on items |
+| `rank` | Set priority rank and value summary on items; pushed to origin by default with an `origin` remote, `--no-push` ranks locally |
 
 ### Identity and free text
 

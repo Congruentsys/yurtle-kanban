@@ -456,7 +456,8 @@ def test_control_plain_rank_commits_locally_only(world, monkeypatch) -> None:
     base = world.remote_sha()
     head_before = git(world.a, "rev-parse", "HEAD").strip()
 
-    result = invoke(world, monkeypatch, ["rank", ITEM_ID, "2"])
+    # ruled edit (#1279): pushing is now the default with an origin; this pins the plain path
+    result = invoke(world, monkeypatch, ["rank", ITEM_ID, "2", "--no-push"])
 
     assert result.exit_code == 0, output_of(result)
     assert world.remote_sha() == base, "rank without --push pushed"

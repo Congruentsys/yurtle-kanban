@@ -2420,6 +2420,11 @@ class KanbanService:
 
         return item
 
+    def has_origin(self) -> bool:
+        """Whether this repository has an `origin` remote: `comment`, `rank`, `epic
+        add` and `move` push by default when it does (#1279)."""
+        return self._has_remote()
+
     def _has_remote(self) -> bool:
         """Check if git remote 'origin' is configured."""
         try:

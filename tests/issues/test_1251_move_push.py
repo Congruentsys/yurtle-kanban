@@ -783,7 +783,8 @@ def test_hooks_do_not_fire_on_refusal(world, monkeypatch, tmp_path) -> None:
 def test_control_plain_move_commits_locally_without_pushing(world, monkeypatch) -> None:
     base = world.remote_sha()
 
-    result = invoke(world, monkeypatch, ["move", ITEM_ID, "in_progress", "--agent", A])
+    # ruled edit (#1279): pushing is now the default with an origin; this pins the plain path
+    result = invoke(world, monkeypatch, ["move", ITEM_ID, "in_progress", "--agent", A, "--no-push"])
 
     assert result.exit_code == 0, output_of(result)
     assert world.remote_sha() == base, "move without --push pushed"

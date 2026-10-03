@@ -176,9 +176,15 @@ def hdd(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
 
 # Commands that commit, per repo kind. Values: (argv, paths the commit may touch).
 SW_CMDS: dict[str, tuple[list[str], str]] = {
-    "move": (["move", "FEAT-001", "in_progress", "--force"], "work/"),
-    "comment": (["comment", "FEAT-001", "--body", "hello 584"], "work/"),
-    "rank": (["rank", "FEAT-001", "3"], "work/"),
+    # ruled edit (#1279): pushing is now the default with an origin; #584's risk (a
+    # staged file swept into the kanban commit) lives on the local path, so these pin it
+    # with --no-push, and the -push entries keep the push path covered too
+    "move": (["move", "FEAT-001", "in_progress", "--force", "--no-push"], "work/"),
+    "comment": (["comment", "FEAT-001", "--body", "hello 584", "--no-push"], "work/"),
+    "rank": (["rank", "FEAT-001", "3", "--no-push"], "work/"),
+    "move-push": (["move", "FEAT-001", "in_progress", "--force", "--push"], "work/"),
+    "comment-push": (["comment", "FEAT-001", "--body", "hello 584", "--push"], "work/"),
+    "rank-push": (["rank", "FEAT-001", "3", "--push"], "work/"),
     "create-push": (["create", "feature", "New thing", "--push"], "work/"),
     "next-id": (["next-id", "FEAT"], LOCK),
 }
@@ -304,6 +310,7 @@ def test_hook_refusal_leaves_item_edit_in_place(sw, monkeypatch, name, expected)
     """Choice: the edit is kept in the working tree (not reverted), uncommitted."""
     repo, _remote = sw
     _refusing_hook(repo)
+    # the plain path (--no-push, #1279) is the one that edits the working tree
     result = _run(repo, monkeypatch, SW_CMDS[name][0])
     assert result.exit_code != 0, result.output
     assert expected in (repo / ITEM).read_text()
