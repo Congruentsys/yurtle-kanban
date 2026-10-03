@@ -26,7 +26,7 @@ CHANGELOG_URL = "https://github.com/Congruentsys/yurtle-kanban/blob/v{version}/C
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _section(text: str, version: str) -> tuple[str, str]:
+def section(text: str, version: str) -> tuple[str, str]:
     """(the `## [version] …` heading, its body up to the next `## [`)."""
     lines = text.splitlines()
     starts = [i for i, line in enumerate(lines) if line.startswith(f"## [{version}]")]
@@ -39,7 +39,7 @@ def _section(text: str, version: str) -> tuple[str, str]:
     return lines[start], "\n".join(lines[start + 1 : end]).strip("\n")
 
 
-def _subsections(body: str) -> dict[str, list[str]]:
+def subsections(body: str) -> dict[str, list[str]]:
     """`### Name` -> its top-level entries, each with its indented continuation."""
     found: dict[str, list[str]] = {}
     entries: list[str] | None = None
@@ -75,10 +75,10 @@ def _anchor(heading: str) -> str:
 def release_notes(changelog_text: str, version: str, *, limit: int = LIMIT) -> str:
     """The notes for `version`: its whole section when it fits in `limit`, else the
     condensed notes. Raises ValueError for an unknown version or notes that can't fit."""
-    heading, body = _section(changelog_text, version)
+    heading, body = section(changelog_text, version)
     if len(body) <= limit:
         return body
-    sections = _subsections(body)
+    sections = subsections(body)
     counts = ", ".join(f"{len(sections[s])} {s}" for s in SECTIONS if sections.get(s))
     breaking = [e for items in sections.values() for e in items if "**Breaking" in e]
     parts = [

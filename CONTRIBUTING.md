@@ -86,7 +86,9 @@ first, needs the Captain's explicit ruling.
 
 For a major, the release runs `python scripts/check_upgrade_guide.py X.Y.Z`. It fails
 unless every `### Removed` entry, and every `**Breaking` entry, of the version's
-changelog section has its issue number (`#N`) in `UPGRADING.md`.
+changelog section has its first issue number (`#N`) in `UPGRADING.md`. So every removal
+must be listed under `### Removed` or marked `**Breaking`: a removal written anywhere else
+escapes the check. Pre-releases (`4.0.0rc1`) are not checked; the final X.0.0 is.
 
 ### License
 

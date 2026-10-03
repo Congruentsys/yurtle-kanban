@@ -8,7 +8,8 @@ deprecated, and every removal reaches users through the upgrade guide, UPGRADING
 For a major (X.0.0, X >= 1) every top-level entry of the version's `### Removed` section,
 and every entry anywhere in it marked `**Breaking`, must have its first `#N` issue
 reference in the guide. An entry with no `#N` can't be checked and is a problem too.
-A minor or patch has nothing to check. Exit 0 when there are no problems, else 1 with
+A minor or patch has nothing to check, and neither has a pre-release (`4.0.0rc1`):
+the check runs on the final X.0.0 (#1247). Exit 0 when there are no problems, else 1 with
 each problem on stderr.
 """
 
@@ -23,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE = "UPGRADING.md"
 VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-ISSUE = re.compile(r"#(\d+)")
+ISSUE = re.compile(r"(?<![\w&])#(\d+)")  # `&#39;` is an HTML entity, not #39 (#1247)
 
 
 def _release_notes():
@@ -46,10 +47,10 @@ def check(changelog_text: str, version: str, guide_text: str | None) -> list[str
     """The problems with `version`'s upgrade-guide coverage; empty means OK. Raises
     ValueError when `version` isn't in the changelog."""
     notes = _release_notes()
-    _, body = notes._section(changelog_text, version)  # ValueError: not in the changelog
+    _, body = notes.section(changelog_text, version)  # ValueError: not in the changelog
     if not is_major(version):
         return []
-    sections = notes._subsections(body)
+    sections = notes.subsections(body)
     needed = list(sections.get("Removed", []))
     needed += [
         e for name, items in sections.items() if name != "Removed"
@@ -65,7 +66,7 @@ def check(changelog_text: str, version: str, guide_text: str | None) -> list[str
         m = ISSUE.search(entry)
         if m is None:
             problems.append(f"no issue number to check against {GUIDE}; give it one: {first}")
-        elif not re.search(rf"(?<![\w#])#{m.group(1)}(?!\d)", guide_text):
+        elif not re.search(rf"(?<![\w#&])#{m.group(1)}(?!\d)", guide_text):
             problems.append(f"#{m.group(1)} is not in {GUIDE}: {first}")
     return problems
 
