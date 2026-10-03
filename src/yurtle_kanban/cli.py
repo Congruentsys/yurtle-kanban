@@ -1164,11 +1164,12 @@ def bounce(
 
     One compare-and-swap commit on origin's default branch, as claim makes: the
     item moves to its theme's backlog status (exempt from the transition table and
-    WIP limits; `* -> backlog` gates still apply), the frontmatter records
-    bounce_sha (the body hash), bounced_by, bounced_at and bounces, and the reason
-    is added as a comment. claim, next and list --pickable skip the item until its
-    body (title line included) changes. Only an item that is unassigned or yours,
-    unless --take-over; never a finished one. Exit codes as claim's.
+    WIP limits; origin's `* -> backlog` gates still apply, #1260), the frontmatter
+    records bounce_sha (the body hash), bounced_by, bounced_at and bounces, and
+    the reason is added as a comment. claim, next and list --pickable skip the
+    item until its body (title line included) changes. Only an item that is
+    unassigned or yours, unless --take-over; never a finished one. Exit codes as
+    claim's.
 
     Examples:
         yurtle-kanban bounce EXP-123 --reason "Which endpoint?" --agent Claude-M5
