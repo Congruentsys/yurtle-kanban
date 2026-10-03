@@ -237,8 +237,10 @@ def test_cli_unknown_version_exits_one_with_message(tmp_path: Path) -> None:
 def test_script_reuses_release_notes_section_parsing() -> None:
     assert SCRIPT.exists(), f"{SCRIPT.relative_to(ROOT)} does not exist"
     src = SCRIPT.read_text(encoding="utf-8")
-    assert "release_notes" in src, "reuse scripts/release_notes.py's _section/_subsections"
-    assert "_subsections" in src and "_section" in src
+    assert "release_notes" in src, "reuse scripts/release_notes.py's section/subsections"
+    # ruled edit (#1247): the helpers are public, `section`/`subsections`
+    assert ".subsections(" in src and ".section(" in src
+    assert "._subsections(" not in src and "._section(" not in src
 
 
 # --- docs --------------------------------------------------------------------------------
