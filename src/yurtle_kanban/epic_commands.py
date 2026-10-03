@@ -434,7 +434,7 @@ def epic_show(epic_id: str):
     default=None,
     help="Link the item as origin's default branch has it and push, as `update --push` does."
     " Pushing is the default when the repo has an origin remote; --no-push edits"
-    " locally (#1279)",
+    " locally, e.g. offline (#1279)",
 )
 def epic_add(epic_id: str, item_id: str, push: bool | None):
     """Link an item to an epic."""
@@ -481,7 +481,7 @@ def voyage_show(epic_id: str):
     default=None,
     help="Link the item as origin's default branch has it and push, as `update --push` does."
     " Pushing is the default when the repo has an origin remote; --no-push edits"
-    " locally (#1279)",
+    " locally, e.g. offline (#1279)",
 )
 def voyage_add(epic_id: str, item_id: str, push: bool | None):
     """Link an item to a voyage."""

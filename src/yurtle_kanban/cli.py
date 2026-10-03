@@ -949,7 +949,7 @@ def create(
     default=None,
     help="Move the item as origin has it, judged there, and push one commit (#1251)."
     " Pushing is the default when the repo has an origin remote; --no-push edits"
-    " locally (#1279)",
+    " locally, e.g. offline (#1279)",
 )
 def move(
     item_id: str,
@@ -1745,7 +1745,7 @@ def roadmap(
     default=None,
     help="Rank the item as origin's default branch has it and push, as `update --push` does."
     " Pushing is the default when the repo has an origin remote; --no-push (or"
-    " --no-commit) ranks locally (#1279)",
+    " --no-commit) ranks locally, e.g. offline (#1279)",
 )
 def rank(
     item_id: str, rank_number: int, summary: str | None, no_commit: bool, push: bool | None
@@ -2028,7 +2028,7 @@ def update(
     help="Add the comment to the item as origin's default branch has it and push, "
     "as `update --push` does."
     " Pushing is the default when the repo has an origin remote; --no-push edits"
-    " locally (#1279)",
+    " locally, e.g. offline (#1279)",
 )
 # 2.x forms, deprecated until 4.0 (#1230)
 @click.option("--author", "old_author", hidden=True)

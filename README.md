@@ -121,7 +121,6 @@ yurtle-kanban export --format json
 | `bounce` | Give an ill-defined item back (`--reason TEXT` or `--reason-file PATH\|-`; `--agent`, `--take-over`): to backlog, unassigned, not pickable until its body is edited |
 | `control` | Emergency stop: `control halt (--reason TEXT \| --reason-file PATH\|-) [--agent A]`, `control resume`, `control status [--json]`; a halt refuses `claim` and a move to in progress (exit 8), `next` and `list --pickable` exit 8, holders may still finish; one repo-wide `.kanban/control.yaml` on origin's default branch |
 | `update` | Edit fields and dependencies: `--title`, `--priority`, `--tag/--untag`, `--body/--body-file`, `--depends-on/--add-dep/--rm-dep`, `--related`, `--allow-unknown`, `--no-commit` |
-| `comment`, `rank`, `epic add`, `voyage add` | Like `move`, pushed to origin by default when the repo has an `origin` remote (one race-free commit on origin's copy); `--no-push` edits locally (#1279) |
 | `show` | Show item details, including `Can move to` (`--json`: `next_statuses`, `next_status_labels`) |
 | `states` | Each board's lifecycle: status → legal next statuses (`--board`, `--type`, `--json` with gate ids); gates, WIP and workflow rules can still refuse |
 | `board` | Display kanban board (`board research`, `board --all`, `board --campaign VOY-XXX`) |
@@ -134,12 +133,12 @@ yurtle-kanban export --format json
 | `next` | Suggest next item to work on (`--agent`; `--json`: `{"id", "kind", "reason"}`, or `null` and exit 7 when nothing is left) |
 | `next-id` | **Allocate next ID atomically (prevents duplicates!)** |
 | `blocked` | Status- and dependency-blocked items, each once, with a tree of what they wait on (`--board`, `--all`, `--json`); hdd `implements`: `hdd critical-path --dev-blockers` |
-| `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`) |
+| `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`); pushed to origin by default with an `origin` remote, `--no-push` adds it locally |
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
 | `validate` | Check for ID mismatches, duplicate IDs across boards, dependency cycles and dangling `depends_on` targets |
 | `upgrade-check` | Read-only, heuristic scan of a repo (`[PATH]`, default the repo root) for 2.x usages 3.x changed: options 3.0 removed in scripts, docs and skills (`move -a`, `comment --author`, `comment ID TEXT`, …), `--resolution obsolete\|merged`, raw status checks a nautical/hdd/spec board's native names break, `comment`/`move` calls with no `--agent`; names what it does not check (see UPGRADING.md); `--json`; exit 1 with findings, 3 if the scan fails |
-| `voyage/epic` | Campaign management: `create`, `show`, `add` |
+| `voyage/epic` | Campaign management: `create`, `show`, `add` (`add` is pushed to origin by default with an `origin` remote; `--no-push` links locally) |
 | `idea` | HDD: Create research/feature ideas |
 | `literature` | HDD: Create literature reviews |
 | `paper` | HDD: Create research papers |
@@ -147,7 +146,7 @@ yurtle-kanban export --format json
 | `experiment` | HDD: `create`, `run` (timestamped runs), `status` (run history) |
 | `measure` | HDD: Create metrics/measures |
 | `hdd` | HDD: `backfill` (turtle blocks), `registry` (cross-ref index), `validate` (link checking) |
-| `rank` | Set priority rank and value summary on items |
+| `rank` | Set priority rank and value summary on items; pushed to origin by default with an `origin` remote, `--no-push` ranks locally |
 
 ### Identity and free text
 
