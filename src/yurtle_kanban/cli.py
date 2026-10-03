@@ -1968,6 +1968,12 @@ def update(
     "--agent",
     help="Who is commenting; default $YURTLE_AGENT, then git user.name",
 )
+@click.option(
+    "--push",
+    is_flag=True,
+    help="Add the comment to the item as origin's default branch has it and push, "
+    "as `update --push` does",
+)
 # 2.x forms, deprecated until 4.0 (#1230)
 @click.option("--author", "old_author", hidden=True)
 @click.option("-a", "old_a", hidden=True)
@@ -1979,6 +1985,7 @@ def comment(
     agent: str | None,
     old_author: str | None,
     old_a: str | None,
+    push: bool,
 ):
     """Add a comment to a work item.
 
@@ -2012,6 +2019,8 @@ def comment(
         author = resolve_actor(
             agent, cwd=service.repo_root, flag=given_flag("--agent", old_agent)
         )
+        if push:  # every refusal comes back as an outcome (#825)
+            _print_outcome(service.add_comment_push(fold_id(item_id), text, author))
         item = service.add_comment(fold_id(item_id), text, author)
         console.print(f"[green]Added comment to {escape(item.id)}[/green]")
     except ValueError as e:

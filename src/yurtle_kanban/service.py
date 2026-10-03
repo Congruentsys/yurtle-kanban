@@ -6380,6 +6380,43 @@ class KanbanService:
 
         return item
 
+    def add_comment_push(
+        self,
+        item_id: str,
+        content: str,
+        author: str,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """`add_comment` as one compare-and-swap commit on origin's default branch
+        (#1251): the comment is appended to the item as the FETCHED tree has it, the
+        way `update --push` edits it (#574 §5), so two agents commenting on one item
+        both land, in order, with no conflict. The comment, its time included, is
+        fixed once before the loop: a lost race appends the same comment to the new
+        base. Refusals are `refused`. `seam`, `sleep` and `jitter` are
+        `sync_and_push`'s."""
+        try:
+            self._check_text(comment=content, author=author)  # before any fetch (#219)
+        except ValueError as e:
+            return Outcome("refused", str(e))
+        comment = Comment(content=content, author=author, created_at=datetime.now())
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            found = self._item_target(read, item_id, "a comment")
+            if isinstance(found, Refuse):
+                return found
+            rel, text, item = found
+            # the file's spelling of the ID (#751)
+            return Change({rel: self._with_comment(text, comment)}, f"Add comment to {item.id}")
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        return outcome
+
     def _update_item_with_comment(self, item: WorkItem, comment: Comment) -> None:
         """Update item file to include new comment."""
         content, eol = self._read_item_text(item.file_path)
