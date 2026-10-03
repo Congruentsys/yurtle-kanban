@@ -7590,11 +7590,18 @@ class KanbanService:
             target = self._item_target(read, target_id, "a link")
             if isinstance(target, Refuse):
                 return target
+            epic = target[2]
+            if epic.item_type not in (WorkItemType.EPIC, WorkItemType.VOYAGE):  # (#1258)
+                return Refuse(
+                    f"{epic.id} is a {epic.item_type.value}, not an epic or voyage; not linked"
+                )
             found = self._item_target(read, item_id, "a link")
             if isinstance(found, Refuse):
                 return found
             rel, text, item = found
-            link = target[2].id  # the epic's own spelling (#868)
+            link = epic.id  # the epic's own spelling (#868)
+            if self._dup_key(item.id) == self._dup_key(link):
+                return Refuse(f"Can't link {link} to itself")  # (#1258)
             # `related:` as written, as plain `epic add` reads it: entries keep their
             # spelling (r1 B2); a mapping or a number is not a list of IDs (#188, r1 B1)
             fm = self._parse_frontmatter(text)
