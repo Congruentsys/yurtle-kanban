@@ -346,3 +346,7 @@ def test_two_clones_pushing_at_once_both_land(world, monkeypatch, capsys) -> Non
             f"failures {len(failures)}"
         )
     assert not failures, "\n".join(failures)
+    # ruled edit (#1262): a runner whose pushes never collided proved nothing about
+    # the ref-lock race; say so instead of passing vacuously
+    if ref_lock_rounds == 0:
+        pytest.skip(f"no ref-lock collision in {ROUNDS} rounds on this runner (#1262)")

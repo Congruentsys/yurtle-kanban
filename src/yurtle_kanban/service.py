@@ -356,19 +356,42 @@ def _local_allocations_text(lock_file: Path) -> str | None:
     return _allocations_text(raw, str(lock_file))
 
 
+# git's per-ref refusal line: ` ! [rejected] main -> main (fetch first)` (#1262)
+_REFUSAL_LINE_RE = re.compile(r"\s*! \[(rejected|remote rejected)\][^(]*\((.*)\)\s*$")
+# older git (before ~2.50) names the lost ref-lock race on its own `remote:` line (#1262)
+_OLD_GIT_LOCK_RE = re.compile(r"\s*remote: error: cannot lock ref .* but expected ")
+
+
 def _lost_race(err: str) -> bool:
     """A push refused because origin moved first: a lost race, retried on a fresh base
-    (#574). Either `[rejected] … (fetch first)` / `(non-fast-forward)`, or, when two
-    clones push at the same instant, the remote's `[remote rejected] … (incorrect old
-    value provided)` / `(cannot lock ref …)` (#1255). Any other refusal (a hook, a
-    protected branch) is not."""
-    if "[rejected]" in err and ("fetch first" in err or "non-fast-forward" in err):
-        return True
-    return any(
-        "[remote rejected]" in line
-        and ("incorrect old value provided" in line or "cannot lock ref" in line)
-        for line in err.splitlines()
-    )
+    (#574). Only git's own per-ref refusal lines count, a line starting `! [rejected]`
+    or `! [remote rejected]`, with the reason on that line, so text a hook echoes on a
+    `remote:` line is never one (#1262): `[rejected] … (fetch first)` /
+    `(non-fast-forward)`; or, when two clones push at the same instant, `[remote
+    rejected] … (incorrect old value provided)` / `(cannot lock ref … but expected …)`
+    / `(cannot lock ref … File exists)` (#1255), or older git's `(failed to update
+    ref)` beside a `remote: error: cannot lock ref … but expected …` line (#1262). Any
+    other refusal (a hook, a protected branch, a lock git can't take) is not."""
+    lines = err.splitlines()
+    old_git_lock = any(_OLD_GIT_LOCK_RE.match(line) for line in lines)
+    for line in lines:
+        m = _REFUSAL_LINE_RE.match(line)
+        if not m:
+            continue
+        kind, reason = m.group(1), m.group(2)
+        if kind == "rejected":
+            if reason in ("fetch first", "non-fast-forward"):
+                return True
+        elif (
+            reason == "incorrect old value provided"
+            or (
+                reason.startswith("cannot lock ref")
+                and ("but expected" in reason or "File exists" in reason)
+            )
+            or (reason == "failed to update ref" and old_git_lock)
+        ):
+            return True
+    return False
 
 
 def _twin_key(name: str) -> str:
@@ -2723,8 +2746,9 @@ class KanbanService:
         Each attempt fetches `origin/<default>`, calls `build(base)` for the files to
         write (repo-relative path -> text) and the commit message, commits them on
         `base` in a temporary index (the user's worktree, index and branch are never
-        touched) and pushes `<sha>:refs/heads/<default>`. Only a lost race (a
-        non-fast-forward rejection) is retried, on a fresh base; any other refusal,
+        touched) and pushes `<sha>:refs/heads/<default>`. Only a lost race (`_lost_race`:
+        a non-fast-forward rejection, or the remote rejected / cannot lock ref race of
+        two simultaneous pushes, #1255) is retried, on a fresh base; any other refusal,
         an unreachable remote or a timeout fails at once with git's own words and
         leaves nothing behind. Once the push lands, a checkout on the default branch
         is fast-forwarded and `landed(branch, local)` makes the result."""
@@ -2973,7 +2997,9 @@ class KanbanService:
         Each attempt fetches `origin/<default>` and calls `mutate(read, attempt)`,
         where `read(path)` is that base's LF text (None when absent). A `Change` is
         committed on the base in a temporary index (`_commit_on`), `seam(attempt)`
-        runs, and the commit is pushed. A non-fast-forward rejection sleeps
+        runs, and the commit is pushed. A lost race (`_lost_race`: a non-fast-forward
+        rejection, or the remote rejected / cannot lock ref race of two simultaneous
+        pushes, #1255) sleeps
         `jitter(0.1, 1.0) * (attempt + 1)` and retries on a fresh base; after
         `attempts` it is "busy". A `Refuse` with a holder after such a rejection is
         "lost". Any other refusal is "push_refused" and a remote that can't be
