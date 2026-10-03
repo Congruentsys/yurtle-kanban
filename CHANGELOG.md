@@ -10,6 +10,36 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-10-03
+
+### Added
+
+- `scripts/py_delta.py` (fail-closed: which tests can a change affect) with this repo's `scripts/py-delta.conf`, and `scripts/check_delta.sh`, a local fast check that runs only those tests and falls back to the full suite; CI still runs the full suite (#1248).
+- `comment --push` publishes a comment with the same compare-and-swap as `update --push` (#1251).
+- `epic add --push` / `voyage add --push` publish the link with the same compare-and-swap as `update --push` (#1251).
+- **`move --push`** publishes a move with the same compare-and-swap as `update --push`, its
+  legality, WIP limits and gates judged on origin's copy (#1251).
+- `rank --push` publishes a rank with the same compare-and-swap as `update --push` (#1251).
+
+### Changed
+
+- The deprecation policy names the first-`#N` rule and requires every removal to be listed under Removed or marked `**Breaking`; `scripts/release_notes.py`'s section helpers are public (`section`, `subsections`); `scripts/check_upgrade_guide.py` ignores HTML entities such as `&#39;` (#1247).
+- Internal: tests pin comment --push's #605/#644 handling, its deprecated forms and its stderr-only refusals (#1256).
+- Internal: test_1230's old-vs-new comparison of list --json no longer depends on when each run happened (#1259).
+- `claim` and `bounce` judge gates by origin's config, as `move --push` does: a gate only in your uncommitted local config no longer blocks a pushed write, and one on origin does. This retires the "gate checks read the local working tree" note in `claim --help` (#1260). `move --help` lists exit 3 and the same-status noop.
+- Internal: the `comment --push` #644 pin checks the parsed comment against #644's ruling (fences stay on disk, not in comment text), test_1230's frozen clock is whole seconds, and CONTRIBUTING says the upgrade-guide check keys on a bare `#N` (#1267).
+- Internal: #1258's test docstring, the `_links` docstring and its changelog entry match what the code does (#1269).
+- Internal: `claim_item`'s docstring and `bounce --help` say gates are origin's (#1260), and test_831 pins that meaning rather than the literal issue number (#1275).
+- Internal: a test pins `bounce --help` naming origin's `* -> backlog` gates (#1275 review).
+- **Breaking:** `comment`, `rank`, `epic add`, `voyage add` and `move` push by default in a repo with an `origin` remote: one race-free commit on origin's copy, as `--push` did. `--no-push` (or `--no-commit`, and `move --export-board`) edits locally as before. A repo with no remote is unchanged. Offline (origin unreachable), these now exit 4: pass `--no-push` to edit locally (#1279).
+
+### Fixed
+
+- A push rejected because two clones pushed at the same instant (git's "cannot lock ref" / "incorrect old value provided") is retried as a lost race, not reported as push refused (#1255).
+- `epic/voyage add` refuse a target that isn't an epic/voyage and a self-link, and treat a padded ID as already linked (#1258).
+- A `--push` write retries the simultaneous-push race on older git too (`(failed to update ref)` beside `cannot lock ref … but expected`), and only git's own `! [rejected]` / `! [remote rejected]` lines count, so text a hook echoes is never taken for a lost race (#1262).
+- A `--push` write also retries older git's ref-lock race when its `error: cannot lock ref … but expected …` line has no `remote: ` prefix. `_lost_race` documents that a held (stale) ref lock is refused, not retried, and the allocation concurrency test counts only real lost-race refusals (#1274).
+
 ## [3.3.0] - 2026-10-02
 
 ### Added
