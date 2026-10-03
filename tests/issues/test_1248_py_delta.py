@@ -784,3 +784,93 @@ def test_gate_ignored_file_is_not_dirt(clone: Path, tmp_path: Path) -> None:
     (clone / "__pycache__" / "x.pyc").write_bytes(b"\0")
     line, out = _gate(clone, tmp_path, base)
     assert line.startswith("check-delta: SUBSET "), out
+
+
+# --- driver addition (#1248 r1): every test that names a routed document is in its subset -----
+#
+# The subsets in scripts/py-delta.conf are hand-maintained, so a new test that reads a document
+# could be left off its line and the local check would skip it (r1: test_1247 read CONTRIBUTING.md
+# and was missing). Any change adding such a test touches tests/*, which routes FULL, so this guard
+# runs wherever it is needed.
+#
+# LIMIT: it catches DIRECT mentions only — a source line that names the document (`"README.md"`,
+# `"docs"`, `.claude`, ...) together with a repo-root anchor (`__file__`, or a module name bound to
+# an expression using `__file__` or imported from another test module). It cannot see a document
+# read indirectly, e.g. by a script the test runs with its default paths. Helper modules (not
+# `test_*.py`) that name a document make every test importing them a required member.
+
+_ANCHOR_DEF = re.compile(r"^([A-Z][A-Z0-9_]*)\s*(?::[^=\n]*)?=[^\n]*__file__", re.M)
+_ANCHOR_IMPORT = re.compile(r"^\s*from\s+tests(?:\.\w+)*\s+import\s+\(?([^)\n]+)", re.M)
+_TESTS_DIR = ROOT / "tests"
+
+
+def _routed_documents() -> list[tuple[str, set[str]]]:
+    """(path glob, listed test files) for every rule of the real conf that names tests."""
+    rules: list[tuple[str, set[str]]] = []
+    for raw in CONF.read_text(encoding="utf-8").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        glob, targets = (part.strip() for part in line.split("->"))
+        if targets.split() not in (["FULL"], ["NONE"]):
+            rules.append((glob, set(targets.split())))
+    return rules
+
+
+def _document_needle(glob: str) -> re.Pattern[str]:
+    """How a test names the document: `docs/*` as a `docs` path part, a file by its name."""
+    if glob.endswith("/*"):
+        top = re.escape(glob.split("/", 1)[0])
+        return re.compile(rf"(?<![\w.-]){top}(?=[\"'/])")
+    return re.compile(re.escape(glob))
+
+
+def _anchors(src: str) -> set[str]:
+    names = set(_ANCHOR_DEF.findall(src))
+    for group in _ANCHOR_IMPORT.findall(src):
+        for part in group.split(","):
+            name = part.strip().split(" as ")[-1].strip()
+            if name.isupper():
+                names.add(name)
+    return names
+
+
+def _names_document(src: str, needle: re.Pattern[str]) -> bool:
+    anchors = _anchors(src)
+    for line in src.splitlines():
+        if "tmp" in line or not needle.search(line):
+            continue  # a tmp_path fixture file of the same name is not the repo's document
+        if "__file__" in line or any(re.search(rf"\b{a}\b", line) for a in anchors):
+            return True
+    return False
+
+
+def _module(path: Path) -> str:
+    return ".".join(path.relative_to(ROOT).with_suffix("").parts)
+
+
+def test_every_test_naming_a_routed_document_is_in_its_subset() -> None:
+    sources = {
+        p: p.read_text(encoding="utf-8")
+        for p in sorted(_TESTS_DIR.rglob("*.py"))
+        if p.name != Path(__file__).name
+    }
+    missing: list[str] = []
+    for glob, listed in _routed_documents():
+        needle = _document_needle(glob)
+        for path, src in sources.items():
+            if not _names_document(src, needle):
+                continue
+            readers = [path]
+            if not path.name.startswith("test_"):  # a helper: its importers read the document
+                mod = re.compile(rf"\b{re.escape(_module(path))}\b|import {path.stem}\b")
+                readers = [p for p, s in sources.items() if p.name.startswith("test_")
+                           and mod.search(s)]
+            for reader in readers:
+                rel = reader.relative_to(ROOT).as_posix()
+                if rel not in listed:
+                    missing.append(f"{glob}: {rel}")
+    assert not missing, (
+        "tests that name a routed document but are not in its subset in "
+        "scripts/py-delta.conf:\n" + "\n".join(sorted(set(missing)))
+    )

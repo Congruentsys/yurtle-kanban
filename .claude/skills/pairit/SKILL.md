@@ -19,7 +19,8 @@ Tests written first by another context, from the issue, do not.
 the tests `scripts/py_delta.py` vouches for (routed by `scripts/py-delta.conf`) on the commits since the merge
 base, then ruff. It falls back to the full suite whenever py_delta cannot vouch for a subset (a dirty tree, a
 code change, any doubt). It is local only: GitHub CI still runs the full suite on every Python, and the merge
-gate is unchanged.
+gate is unchanged. It runs the branch's own `py_delta.py` and `py-delta.conf`, so a branch that edits them
+vouches for itself; CI's full suite stays the authority.
 
 pytest's `pythonpath = ["src"]` means a worktree's tests import that worktree's `src`, even with the shared
 `.venv`. To run the CLI from a worktree, use `PYTHONPATH=/tmp/yk-<N>/src .venv/bin/yurtle-kanban …`.
