@@ -621,6 +621,9 @@ def clone(tmp_path: Path) -> Path:
         pytest.skip("not a git checkout")
     dest = tmp_path / "clone"
     subprocess.run(["git", "clone", "-q", str(ROOT), str(dest)], check=True, capture_output=True)
+    # ruled edit (#1248 CI): CI checks a PR out at a detached HEAD, and so is its clone;
+    # put the clone on a branch so tests that leave HEAD and come back can
+    _git(dest, "checkout", "-q", "-B", "py-delta-under-test")
     for src in (SCRIPT, CONF, GATE):
         assert src.is_file(), f"{src.relative_to(ROOT)} does not exist"
         shutil.copy2(src, dest / "scripts" / src.name)
