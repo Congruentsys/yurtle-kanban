@@ -19,7 +19,7 @@ A workflow management system where:
 yurtle           ->  Turtle RDF in Markdown specification
 yurtle-rdflib    ->  RDFlib parser/serializer plugin
 yurtle-kanban    ->  This project: file-based workflow management
-nusy-nano        ->  Optional: neurosymbolic reasoning
+nusy-nano        ->  Teaching example (archived)
 ```
 
 ## Installation
@@ -716,6 +716,39 @@ jobs:
 
 ## Changelog
 
+The full history, with every change, is in [CHANGELOG.md](CHANGELOG.md); the 3.x
+summaries below are drawn from it.
+
+### v3.4.0 (2026-10-03)
+
+`comment`, `rank`, `epic add`, `voyage add` and `move` push by default in a repo with an
+`origin` remote (one race-free compare-and-swap commit on origin's copy; `--no-push` edits
+locally). **Breaking** for scripts that expected local-only edits.
+
+### v3.3.0 (2026-10-02)
+
+`yurtle-kanban upgrade-check` scans a repo for 2.x usages that 3.x changed. The 2.x forms
+3.0.0 removed work again, with a deprecation warning, until 4.0.
+
+### v3.2.0 (2026-10-01)
+
+The external-PR process; the release skill split in two; PyPI project links point at
+`Congruentsys/yurtle-kanban`.
+
+### v3.1.0 (2026-10-01)
+
+`scripts/release_notes.py X.Y.Z` prints GitHub release notes for a version.
+
+### v3.0.0 (2026-09-30)
+
+The 3.x line: CHANGELOG fragments, `states`, one "can I pick this up?" answer for `claim`,
+`next`, `list --pickable` and MCP, `update ID`, a dependency-aware `blocked`, and the 2.x
+breaks listed in [UPGRADING.md](UPGRADING.md).
+
+### v2.2.0 (2026-08-30)
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ### v2.0.0 (2026-03-05)
 
 **Queryable knowledge graph — SPARQL, semantic search, and hybrid NL queries.**
@@ -875,7 +908,7 @@ yurtle-kanban query "not-done expeditions above 700 that improve brain functioni
 
 - [Yurtle Specification](https://github.com/hankh95/yurtle) - Turtle RDF in Markdown
 - [yurtle-rdflib](https://github.com/hankh95/yurtle-rdflib) - RDFlib parser plugin
-- [nusy-nano](https://github.com/hankh95/nusy-nano) - Neurosymbolic reasoning
+- [nusy-nano](https://github.com/hankh95/nusy-nano) - Teaching example (archived)
 
 ## License
 
