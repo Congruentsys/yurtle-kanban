@@ -109,8 +109,8 @@ HYPOTHESIS -> EXPERIMENT (on branch) -> RESULTS
 | **REFUTED** | Don't merge | Document learnings, close | No change, but we learned |
 | **NEEDS-MORE-DATA** | Extend | Keep open | Continue experiment |
 
-**Only validated enhancements ship.** We don't merge code we can't prove works. This
-keeps the codebase clean and ensures every feature has evidence behind it.
+**The rule: ship only validated enhancements.** We aim not to merge code we cannot show
+works. The rule is meant to keep the codebase clean and to put evidence behind every feature.
 
 ---
 
@@ -139,14 +139,15 @@ L3 is Apply. L4 is Analyze. And so on up to Create.
 The discovery that mattered: **no existing LLM benchmark tests L2, L3, or L4.** They
 all test L1 recall with different question formats.
 
-Hypothesis:
+Hypothesis (an illustration of the method; it is not ACF's H122.1, which is a different
+hypothesis):
 
-> H122.1: "Bloom-based assessment captures understanding gaps that standard
-> benchmarks miss."
+> "Bloom-based assessment captures understanding gaps that standard benchmarks miss."
 
 Experiment: assess the same agent on the same material with both approaches.
 
-Results:
+*Illustration only: the table below is invented to show the shape of such a result. Its
+values were not measured, and no run or artifact produced them.*
 
 | Level | Standard Benchmark | Bloom Assessment |
 |-------|-------------------|-----------------|
@@ -155,12 +156,10 @@ Results:
 | L3 (Apply) | *not tested* | 54% |
 | L4 (Analyze) | *not tested* | 41% |
 
-An agent scoring 92% on recall demonstrates actual understanding 67% of the time.
-Applies knowledge in novel situations barely half the time. The standard benchmark
-had zero visibility into any of this.
-
-Hypothesis validated. That capability came from a 30-second idea, an afternoon of
-literature review, and one well-designed experiment.
+Read as an illustration: if an agent scored 92% on recall but 67% on understanding and
+54% on application, the standard benchmark would have no visibility into the gap. The
+point is the method: a 30-second idea, an afternoon of literature review, and one
+well-designed experiment that could have come out either way.
 
 ### When Four Out of Five Hypotheses Fail
 
@@ -604,7 +603,7 @@ data, and the experiment protocol defines the exact commands.
 
 ## What We've Learned Running HDD in Production
 
-After 18 months of HDD across 29 research papers and 80+ formal measures:
+What running HDD on our own research has taught us:
 
 **Pre-registration prevents wishful thinking.** Before HDD, we'd run the system, look
 at the data, and declare success based on whatever looked good. Now we state targets
@@ -614,8 +613,8 @@ first. It's uncomfortable. It's honest.
 processing was more productive than many successes. Each failure pointed to a specific
 missing mechanism.
 
-**Metrics should be boring.** Fleet dashboard shows: approval rate 86%, spawn
-success 95%, targets met. No excitement. That's the point.
+**Metrics should be boring.** A fleet dashboard should show rates and whether targets
+were met. No excitement. That's the point.
 
 **Speed demands structure.** Agentic development is *fast* — three agents can ship
 four features before lunch. That speed is intoxicating and dangerous. HDD prevents
