@@ -62,8 +62,8 @@ Multiple Claude Code agents may work on this project. Each machine has its own `
 | Agent | GitHub | Platform |
 |-------|--------|----------|
 | **M5** | hankh95 | MacBook Pro M5 |
-| **DGX** | hankh959 | DGX Spark |
-| **Mini** | hankh1844 | Mac Mini M4 |
+| **DGX** | `<user>` | DGX Spark |
+| **Mini** | `<user>` | Mac Mini M4 |
 
 ## Related Projects
 

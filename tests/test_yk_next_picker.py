@@ -16,7 +16,7 @@ import pytest
 REPO = Path(__file__).parent.parent
 SCRIPT = REPO / ".claude/skills/yk-next/yk_next.py"
 PAIRIT = REPO / ".claude/skills/pairit/SKILL.md"
-ME = "hankh1844"
+ME = "test-agent"
 PEER = "hankh95"
 
 

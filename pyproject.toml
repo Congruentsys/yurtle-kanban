@@ -10,7 +10,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    { name = "Hank Head", email = "hankh1844@gmail.com" }
+    { name = "Hank Head", email = "237287+hankh95@users.noreply.github.com" }
 ]
 keywords = [
     "kanban",
