@@ -21,7 +21,7 @@ yurtle-kanban is the work-tracking CLI the fleet runs on. In priority order:
 ## The classifier (apply to every pending decision, in order)
 
 1. **Bucket 1 — could a measurement settle it?** → **measure.** Scan the fleet repos READ ONLY
-   (`/Users/hankh19/Projects/{carclaw,noesis-ship,noesis-ships-comm,nusy-product-team,rachael-lab}` — never
+   (`<home>/Projects/{carclaw,noesis-ship,noesis-ships-comm,nusy-product-team,rachael-lab}` — never
    write there), time it, count it, reproduce it. The data decides; "no consumer has this shape" is data.
 2. **Bucket 2 — do the goals, or an EXISTING user ruling, settle it?** → **decide now.** Pick the option that best serves
    G1, then G2, then G3, weighing impact × reversibility. Applying an existing ruling (for example #109's "each
