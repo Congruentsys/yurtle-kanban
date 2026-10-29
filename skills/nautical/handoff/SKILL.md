@@ -121,6 +121,13 @@ If the work is paused, optionally move to a waiting status:
 yurtle-kanban move EXP-XXX blocked --agent <your-agent-name>
 ```
 
+If no particular agent is taking it over, give the claim back instead, so any agent may
+claim it at once (back to ready, `assignee: null`, no bounce lock; #1287):
+
+```bash
+yurtle-kanban release EXP-XXX --agent <your-agent-name> --reason "Handed off: see the handoff note"
+```
+
 ### 7. Confirm Handoff
 
 Show summary:

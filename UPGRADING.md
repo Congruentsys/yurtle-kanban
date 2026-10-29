@@ -65,10 +65,10 @@ The *actor* (a comment's author, `kb:by` on a status change) resolves in one ord
 then the `YURTLE_AGENT` environment variable, then git `user.name`. A command that records an
 actor (`comment`, `move`, `control`, `create --push`, `next-id` when it commits an allocation)
 refuses with `No actor` when none resolves; `next` and `list --pickable` still run without one.
-The 3.x-only `claim`, `bounce` and `move --take-over` need `--agent` or `YURTLE_AGENT`: they
-never fall back to git `user.name`. The 2.x defaults `"cli"`, `"agent"` and `"unknown"` are
-gone, and a set but blank `YURTLE_AGENT` is an error. `kb:by` is now the actor, not the
-assignee.
+The 3.x-only `claim`, `bounce`, `release` and `move --take-over` need `--agent` or
+`YURTLE_AGENT`: they never fall back to git `user.name`. The 2.x defaults `"cli"`, `"agent"`
+and `"unknown"` are gone, and a set but blank `YURTLE_AGENT` is an error. `kb:by` is now the
+actor, not the assignee.
 
 The *assignee* is never defaulted: only `--assign` sets it. Identity values (`--agent`,
 `YURTLE_AGENT`, `--assign`, `list --assignee`) are refused when empty, whitespace-only or
@@ -76,6 +76,18 @@ holding a control character; `list --assignee ""` no longer matches every item.
 
 **To do:** set `YURTLE_AGENT` in agents' and CI environments (or pass `--agent`), and pass
 `--assign` where a 2.x script relied on a default assignee.
+
+### Giving a claim back: `release` (#1287)
+
+A holder that cannot finish a well-defined item gives it back with
+`yurtle-kanban release ID --agent HOLDER [--reason TEXT | --reason-file PATH|-] [--to STATUS]`:
+one compare-and-swap commit on origin that moves it to ready (or `--to`, never in progress or
+finished), sets `assignee:` to `null` and records `kb:releasedBy`/`kb:releasedAt`. Unlike
+`bounce` it sets no `bounce_sha`, so any agent may claim the item at once. `move ID ready`
+keeps the holder as `assignee:`, and nobody else can then claim the item.
+
+**To do:** where a script or skill gives a claim back with `move … ready` (or with `bounce`
+followed by a body edit), use `release`.
 
 ### Status names: themes write their own (#604, #633)
 

@@ -5510,8 +5510,138 @@ class KanbanService:
         jitter: Callable[[float, float], float] = random.uniform,
         seam: Callable[[int], None] | None = None,
     ) -> Outcome:
-        """Give a claim back (#1287): NOT IMPLEMENTED (test partner's stub)."""
-        raise NotImplementedError("release_item (#1287)")
+        """Give a claim back (#1287), the inverse of `claim`: move `item_id` to its
+        theme's ready status (or `to`, a non-terminal status as the CLI names it),
+        unassigned, recording `kb:releasedBy`/`kb:releasedAt`, and add `reason` as a
+        comment when given. Unlike `bounce` there is no body-hash lock: the item is
+        pickable at once. One compare-and-swap commit through `sync_and_push`,
+        judged on the fetched item (`_release_change`); STATUS_CHANGE fires once it
+        has landed (`won` or `local`), when the status changed."""
+        actor = check_identity(actor, "--agent")
+        if reason is not None:
+            self._check_text(reason=reason)
+
+        def mutate(read: Read, attempt: int) -> Change | NoOp | Refuse:
+            return self._release_change(read, item_id, actor, reason, to, take_over)
+
+        outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
+        if outcome.kind == "local":  # the working tree changed under the cache
+            self._items.clear()
+            self._board = None
+        released = outcome.data
+        if outcome.kind in ("won", "local") and isinstance(released, _Claimed) and (
+            released.old_status != released.new_status
+        ):
+            self._hook_engine.trigger(
+                HookEvent.STATUS_CHANGE,
+                HookContext(
+                    event=HookEvent.STATUS_CHANGE,
+                    item_id=released.item_id,
+                    item_type=released.item_type,
+                    title=released.title,
+                    old_status=released.old_status,
+                    new_status=released.new_status,
+                    assignee=None,
+                ),
+            )
+        return outcome
+
+    def _release_change(
+        self, read: Read, item_id: str, actor: str, reason: str | None, to: str | None,
+        take_over: bool,
+    ) -> Change | NoOp | Refuse:
+        """`release`'s `mutate` (#1287): refuse a finished item; an unassigned item
+        out of progress is already released (a no-op); one held by another, or in
+        progress with no holder, is refused unless `take_over` (recorded as
+        `kb:takenOverFrom`; refused on a halted board, as `claim --take-over` is: a
+        halt lets a holder finish, never take work). The target (ready, or `to`)
+        must be a status of the item's theme that is neither finished nor in
+        progress; a change of status answers to the transition table, workflow
+        rules and origin's gates (#1260), never to WIP limits (a release frees a
+        slot). Then clear the assignee and append the reason as a comment."""
+        found = self._item_target(read, item_id, "a release")
+        if isinstance(found, Refuse):
+            return found
+        rel, text, item = found
+        judge = self if read.rev is None else self._judge_at(read.rev)
+        if judge.is_finished(item):
+            return Refuse(
+                f"{item.id} is {judge.status_label(item)}: a finished item can't be released"
+            )
+        old_status, in_progress = item.status, WorkItemStatus.IN_PROGRESS
+        held = item.assignee
+        holder = (held if isinstance(held, str) else str(held or "")).strip()
+        mine = bool(holder) and same_actor(holder, actor)
+        if not holder and old_status != in_progress:
+            return NoOp(
+                f"{item.id} is already unassigned ({judge.status_label(item)}): nothing to release"
+            )
+        if holder and not mine and not take_over:
+            return Refuse(
+                f"{item.id} is held by {holder}; to take it over use release --take-over",
+                holder=holder,
+            )
+        if not holder and not take_over:
+            return Refuse(
+                f"{item.id} is in progress with no holder; use release --take-over"
+            )
+        # recorded only when the take-over overrode something, as for claim (#823)
+        taken = None if mine else holder
+        if taken is not None:
+            control = self._control_at(read)  # the fetched tree's halt (#582)
+            if control.halted:
+                return Refuse(f"Can't release {item.id}: {control.refusal()}", halted=True)
+
+        if to is None:
+            target = WorkItemStatus.READY
+        else:
+            resolved = judge.resolve_status_name(item, to)
+            if resolved is None:
+                valid = ", ".join(judge.listed_status_names(item))
+                return Refuse(f"Unknown status: {to}; valid statuses: {valid}")
+            target = resolved
+        proposed = replace(item, status=target, assignee=None, updated=datetime.now())
+        if target == in_progress or judge.is_finished(proposed):
+            return Refuse(
+                f"Can't release {item.id} to {judge.status_label(proposed)}: a release "
+                "goes to a status that is neither in progress nor finished"
+            )
+        if target != old_status:
+            try:
+                valid_move, error = judge._validate_transition(
+                    replace(proposed, status=old_status), target
+                )
+            except _TreeUnreadableError as e:  # origin's workflows (#865)
+                return Refuse(str(e))
+            if not valid_move:
+                return Refuse(error)
+            blocking = [
+                # origin's gates, by origin's config, as claim and bounce (#1260)
+                r for r in judge._evaluate_gates(proposed, old_status, target, {})
+                if not r.passed and r.severity == "blocking"
+            ]
+            if blocking:
+                return Refuse(
+                    f"Gate check failed: {'; '.join(r.message for r in blocking)}"
+                )
+
+        new_text = judge._history_text(  # origin's name for the target (#865)
+            text, proposed, target, actor=actor, taken_over_from=taken, released=True
+        )
+        if holder:
+            new_text = self._add_or_update_frontmatter_field(new_text, "assignee", "null")
+        if reason is not None:
+            notice = f"[release by {actor}] {reason}"
+            new_text = self._with_comment(new_text, Comment(content=notice, author=actor))
+        message = f"Release {item.id} to {judge.status_label(proposed)}"
+        if taken is not None:
+            message += f" (taken over from {taken or 'no holder'})"
+        released = _Claimed(
+            item_id=item.id, item_type=item.item_type.value, title=item.title,
+            old_status=old_status.value, new_status=target.value, assignee=None,
+            old_assignee=holder,
+        )
+        return Change({rel: new_text}, message, data=released)
 
     def _item_target(
         self, read: Read, item_id: str, action: str
@@ -6133,6 +6263,7 @@ class KanbanService:
         gates_skipped: bool = False,
         taken_over_from: str | None = None,
         bounced: bool = False,
+        released: bool = False,
         resolution: tuple[str | None, list[str]] | None = None,
         cleared_resolution: str | None = None,
     ) -> str:
@@ -6141,7 +6272,8 @@ class KanbanService:
         `_update_item_file_with_history` writes, text to text, so `claim` makes the
         same edit to a fetched file (#574). `taken_over_from` records
         `kb:takenOverFrom` (`""`: there was no holder); `bounced`, `kb:bounced`
-        (#578). `resolution` (value, targets) sets or removes the `resolution` and
+        (#578); `released`, `kb:releasedBy`/`kb:releasedAt` (the actor, now; #1287).
+        `resolution` (value, targets) sets or removes the `resolution` and
         `superseded_by` keys, recording `kb:resolution`/`kb:supersededBy`;
         `cleared_resolution` records `kb:clearedResolution` (#581)."""
         # Determine board-native status name (e.g., 'active' for HDD), on a single
@@ -6186,6 +6318,9 @@ class KanbanService:
                     f"Invalid value for closed_by: contains disallowed characters: {closed_by!r}"
                 )
             ttl_entry += f'\n    kb:closedBy <{closed_by}> ;'
+        if released:
+            ttl_entry += f'\n    kb:releasedBy "{_turtle_string(actor)}" ;'
+            ttl_entry += f'\n    kb:releasedAt "{timestamp}"^^xsd:dateTime ;'
         if taken_over_from is not None:
             ttl_entry += f'\n    kb:takenOverFrom "{_turtle_string(taken_over_from)}" ;'
         if resolution is not None and resolution[0]:

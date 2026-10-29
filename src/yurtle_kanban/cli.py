@@ -1200,14 +1200,67 @@ def bounce(
     _print_outcome(outcome)
 
 
-@main.command(
-    context_settings={"ignore_unknown_options": True, "allow_extra_args": True}
-)
+@main.command()
 @click.argument("item_id")
-@click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def release(item_id: str, args: tuple[str, ...]) -> None:
-    """Give a claim back (#1287): NOT IMPLEMENTED (test partner's stub)."""
-    raise NotImplementedError("release (#1287)")
+@click.option("--agent", help="Who is releasing it; default $YURTLE_AGENT (never git user.name)")
+@click.option(
+    "--reason",
+    help="Why it goes back, added as a comment (prefer --reason-file: no shell expansion)",
+)
+@click.option(
+    "--reason-file",
+    help="Read the reason from PATH, or from stdin with '-' (pipe it: a quoted heredoc <<'EOF')",
+)
+@click.option(
+    "--to", "to",
+    help="The status it goes to (default: the theme's ready); never in progress or finished",
+)
+@click.option(
+    "--take-over",
+    is_flag=True,
+    help="Release an item someone else holds, or one in progress with no holder "
+    "(recorded as kb:takenOverFrom); refused on a halted board",
+)
+def release(
+    item_id: str, agent: str | None, reason: str | None, reason_file: str | None,
+    to: str | None, take_over: bool,
+):
+    """Give a claim back (#1287): the item goes to ready, unassigned, and is
+    claimable by anyone at once.
+
+    The inverse of claim, in one compare-and-swap commit on origin's default
+    branch: the item moves from in progress to its theme's ready status (or the
+    non-terminal status given with --to; a change of status answers to the
+    transition table and origin's gates, never to WIP limits), assignee: becomes
+    null, the status change records kb:releasedBy and kb:releasedAt, and the
+    reason, when given, is added as a comment. Unlike bounce there is no body-hash
+    lock: claim, next and list --pickable offer the item again at once. Only the
+    holder may release it, unless --take-over; never a finished item. A holder's
+    release goes through on a halted board (a holder may still finish);
+    --take-over is refused there (exit 8). Exit codes: 0 released (or already
+    unassigned), 1 refused, 3 lost to another agent, 4 remote unreachable, 5
+    remote busy, 6 push refused by the remote, 8 halted.
+
+    Examples:
+        yurtle-kanban release EXP-123 --agent Claude-M5
+        yurtle-kanban release EXP-123 --reason "Needs a GPU host" --agent Claude-M5
+        yurtle-kanban release EXP-123 --to blocked --reason-file - --agent Claude-M5 <<'EOF'
+    """
+    # the whole text is read before any subprocess can touch stdin (#580)
+    try:
+        text = read_text_option(reason, reason_file, "reason")
+    except ValueError as e:
+        _refuse(e)
+    service = get_service()
+    try:
+        # every session on a machine shares git user.name: no fallback (#574)
+        actor = resolve_actor(agent, allow_git_fallback=False, cwd=service.repo_root)
+        outcome = service.release_item(
+            fold_id(item_id), actor=actor, reason=text, to=to, take_over=take_over
+        )
+    except InputRefused as e:
+        _refuse(e)
+    _print_outcome(outcome)
 
 
 @main.group(cls=Group)
