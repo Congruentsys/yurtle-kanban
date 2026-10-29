@@ -35,10 +35,10 @@ d. "already unassigned" (exit 0, nothing written) is pinned for an item that is
    ready and unassigned. An unassigned item IN PROGRESS is not pinned.
 e. A ready item that the actor holds (pre-assigned) is released too: assignee
    cleared, still ready, one commit.
-f. The halt (exit 8) is pinned because the issue lists "8 halted" for release.
-   NOTE: ``control --help`` says a holder may still move its item to ready under a
-   halt, and ``bounce`` is allowed under a halt; this test follows the issue, and
-   the driver should confirm it.
+f. The halt (driver's ruling): a halt stops new work, but a holder may still
+   finish (``control --help``), so the HOLDER's release under a halt goes through
+   (exit 0); ``release --take-over`` under a halt is refused with exit 8, as
+   ``claim --take-over`` is.
 g. ``--to`` is tested with ``blocked`` (legal from in progress in the nautical
    table) and refused with ``done``. Whether ``--to`` answers to the transition
    table otherwise is not pinned.
@@ -519,7 +519,10 @@ def test_release_retries_past_an_unrelated_commit(world, monkeypatch) -> None:
 # --- 8. exit codes: halted, unreachable, no remote ------------------------------------------------
 
 
-def test_release_on_a_halted_board_exits_8(world, monkeypatch) -> None:
+def test_holder_release_on_a_halted_board_is_allowed(world, monkeypatch) -> None:
+    """Driver's ruling: a halt stops new work, but a holder may still finish
+    (control --help: "move its item to ... ready"), so the holder's release goes
+    through as normal."""
     seed(world, "in_progress", A)
     hand_halt(world)
     sync(world.a, world)
@@ -527,10 +530,24 @@ def test_release_on_a_halted_board_exits_8(world, monkeypatch) -> None:
 
     result = release(world, monkeypatch)
 
+    clean_exit(result, 0)
+    assert_released(world, base)
+
+
+def test_take_over_release_on_a_halted_board_exits_8(world, monkeypatch) -> None:
+    """Driver's ruling: --take-over under a halt is refused, exit 8, as
+    claim --take-over is."""
+    seed(world, "in_progress", B)
+    hand_halt(world)
+    sync(world.a, world)
+    base = world.remote_sha()
+
+    result = release(world, monkeypatch, "--take-over")
+
     out = clean_exit(result, 8)
     assert "halted" in out.lower(), out
     assert world.remote_sha() == base
-    assert frontmatter(world.remote_show(ITEM))["assignee"] == A
+    assert frontmatter(world.remote_show(ITEM))["assignee"] == B
 
 
 def test_release_with_unreachable_origin_exits_4(world, monkeypatch, tmp_path) -> None:
