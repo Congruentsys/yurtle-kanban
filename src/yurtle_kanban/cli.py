@@ -1267,10 +1267,11 @@ def release(
 def control() -> None:
     """The board's emergency stop (#582): one mode, halt.
 
-    A halt stops new work: claim, claim --next, claim --take-over and a move to in
-    progress (CLI and MCP) are refused, and next and list --pickable exit 8. A
-    holder may still finish (move its item to review, done, blocked or ready);
-    create, comment, update and bounce are allowed. The state is one repo-wide
+    A halt stops new work: claim, claim --next, claim --take-over, release
+    --take-over and a move to in progress (CLI and MCP) are refused, and next and
+    list --pickable exit 8. A holder may still finish (move its item to review,
+    done, blocked or ready, or release it; #1287); create, comment, update and
+    bounce are allowed. The state is one repo-wide
     .kanban/control.yaml on origin's default branch, written as a kanban-only
     commit (as claim writes); it is read from origin as last fetched (claim
     fetches), else from the working tree. A file that doesn't read counts as a
