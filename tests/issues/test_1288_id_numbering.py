@@ -11,13 +11,13 @@ Pinned readings of the issue (the partner's; see the report):
 - the key sits at the top level of `.kanban/config.yaml`, beside `boards:`;
 - an unknown value is refused by `validate` (non-zero, naming the key) AND by `create`
   (non-zero, naming the key, no item written): it is never silently treated as `per_type`;
-- in `global` mode the next number for ANY prefix is the max over every DASHED id space
-  (`EXP-`, `CHORE-`, `H-`, `M-`, ...) in all three sources, plus one; paper-scoped `H{paper}.{n}`
+- in `global` mode the next number for ANY prefix is the max over every DASHED id space on
+  every board (`EXP-`, `CHORE-`, `H-`, `M-`, `PAPER-`, `EXPR-`, `LIT-`, `IDEA-R-`, ...; driver
+  ruling (a)) in all three sources, plus one; paper-scoped `H{paper}.{n}`
   ids neither take a global number nor raise the global max;
 - an explicit id whose number a DIFFERENT prefix already holds is refused in `global` mode, and
-  the refusal names the holder (e.g. `CHORE-003`); a free explicit number still lands. Whether
-  a free explicit number BELOW the global max is refused is left open (the issue's "checked
-  against the global max" is read as "can't take a number a different prefix holds");
+  the refusal names the holder (e.g. `CHORE-003`); a free explicit number still lands, below
+  the global max too (driver ruling (b));
 - `next-id` says which mode is active (its output names `id_numbering` and the mode), and the
   `create` and `next-id` help texts mention `id_numbering`;
 - the core `create` command has no `--id` option (#634), so explicit ids are driven through
@@ -74,9 +74,10 @@ CREATE = {
     "hazard": ["create", "hazard", "Haz item"],
     "hypothesis": ["hypothesis", "create", "Hyp item"],
     "measure": ["measure", "create", "Measure item", "--unit", "count", "--category", "coverage"],
+    "experiment": ["experiment", "create", "--title", "Expr item"],
 }
 PREFIX = {"expedition": "EXP", "chore": "CHORE", "hazard": "HAZ", "hypothesis": "H",
-          "measure": "M"}
+          "measure": "M", "experiment": "EXPR"}
 TYPE_DIR = {"EXP": "kanban-work/expeditions", "CHORE": "kanban-work/chores",
             "HAZ": "kanban-work/hazards", "H": "research/hypotheses", "M": "research/measures"}
 TYPE_NAME = {"EXP": "expedition", "CHORE": "chore", "HAZ": "hazard", "H": "hypothesis",
@@ -402,6 +403,33 @@ def test_paper_scoped_ids_unaffected_and_do_not_bump_global(tmp_path, monkeypatc
     assert paper_hyp() == "H130.14"  # and the global CHORE-006 did not move the paper space
 
 
+# --- 6b. ruled (driver): every dashed prefix on every board is in the global sequence ---------
+
+OTHER_HDD = {  # id -> (path, type): the HDD prefixes no create above uses
+    "PAPER-130": ("research/papers/PAPER-130-seeded.md", "paper"),
+    "EXPR-130": ("research/experiments/EXPR-130-seeded.md", "experiment"),
+    "LIT-130": ("research/literature/LIT-130-seeded.md", "literature"),
+    "IDEA-R-130": ("research/ideas/IDEA-R-130-seeded.md", "idea"),
+}
+
+
+@pytest.mark.parametrize("held", sorted(OTHER_HDD))
+def test_global_every_dashed_prefix_raises_the_max(tmp_path, monkeypatch, held) -> None:
+    """Driver ruling (a): PAPER-, EXPR-, LIT-, IDEA-R- take part too; PAPER-130 → EXP-131."""
+    repo = make(tmp_path, "global")
+    path, kind = OTHER_HDD[held]
+    repo.seed({path: f'---\nid: {held}\ntitle: "Seeded"\ntype: {kind}\nstatus: draft\n---\n'})
+    assert create(repo, monkeypatch, "expedition") == "EXP-131"
+
+
+@pytest.mark.parametrize("push", [False, True], ids=["local", "push"])
+def test_global_experiment_takes_the_next_global_number(tmp_path, monkeypatch, push) -> None:
+    """Driver ruling (a): an EXPR created in global mode is numbered in the one sequence."""
+    repo = make(tmp_path, "global")
+    got = [create(repo, monkeypatch, k, push) for k in ("expedition", "chore", "experiment")]
+    assert got == ["EXP-001", "CHORE-002", "EXPR-003"], got
+
+
 # --- 7. explicit ids in global mode -----------------------------------------------------------
 
 EXPLICIT_HYP = ["hypothesis", "create", "Explicit hyp", "--id"]
@@ -459,6 +487,17 @@ def test_global_explicit_id_not_clashing_lands(tmp_path, monkeypatch, item_id) -
     result = repo.cli(monkeypatch, *EXPLICIT_HYP, item_id, "--push")
     assert result.exit_code == 0, output_of(result)
     assert item_id in repo.remote_ids()
+
+
+@pytest.mark.parametrize("push", [False, True], ids=["local", "push"])
+def test_global_free_explicit_id_below_the_max_is_allowed(tmp_path, monkeypatch, push) -> None:
+    """Driver ruling (b): refused only when another prefix holds the number; H-004 is free
+    while CHORE-009 is the global max, so it is created."""
+    repo = make(tmp_path, "global")
+    repo.seed_ids("CHORE-009")
+    result = repo.cli(monkeypatch, *EXPLICIT_HYP, "H-004", *(["--push"] if push else []))
+    assert result.exit_code == 0, output_of(result)
+    assert "H-004" in (repo.remote_ids() if push else repo.local_ids())
 
 
 # --- 8. visibility: next-id and help ----------------------------------------------------------
