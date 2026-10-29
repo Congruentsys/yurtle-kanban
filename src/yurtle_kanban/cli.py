@@ -802,6 +802,11 @@ def create(
     creates the file, commits, and pushes in one atomic operation.
     If another agent pushed first, it retries with a new ID.
 
+    The ID's number follows the config's `id_numbering` (#1288): `per_type`
+    (the default) numbers each type on its own (EXP-012 and CHORE-012 can both
+    exist); `global` gives every dashed prefix on every board one sequence
+    (EXP-101, then CHORE-102). Paper-scoped H130.n ids keep their own space.
+
     Examples:
         yurtle-kanban create feature "Add dark mode"
         yurtle-kanban create expedition "Research vectors" --push
@@ -2357,6 +2362,11 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
     onto the default branch with a compare-and-swap push (a lost race retries
     with a new id). Your branch, index and working tree are not touched.
 
+    The number follows the config's `id_numbering` (#1288): `per_type` (the
+    default) counts each prefix on its own; `global` takes the next number of
+    one sequence shared by every dashed prefix on every board. The output names
+    the mode used.
+
     Examples:
         yurtle-kanban next-id EXP       # Allocate next expedition ID
         yurtle-kanban next-id FEAT      # Allocate next feature ID
@@ -2388,6 +2398,8 @@ def next_id(prefix: str, no_sync: bool, no_commit: bool, as_json: bool):
             console.print(f"[green]Allocated: {escape(str(result['id']))}[/green]")
             console.print(f"  Prefix: {escape(str(result['prefix']))}")
             console.print(f"  Number: {result['number']}")
+            if result.get("id_numbering"):  # which sequence it came from (#1288)
+                console.print(f"  id_numbering: {escape(str(result['id_numbering']))}")
             where = {  # where the allocation went (#1159)
                 "pushed": "committed and pushed to remote",
                 "committed": "committed locally, not pushed",
@@ -2441,11 +2453,16 @@ def validate(fix: bool, as_json: bool):
       bounced_at an ISO-8601 time with an offset, bounced_by non-empty)
     - A superseded or duplicate item's superseded_by is on a board, with no cycle
     - .kanban/control.yaml, when present, reads (a mode of halt or running)
+    - id_numbering, when set, is per_type or global
     """
     service = get_service()
     items = service.get_items()
 
     issues = []
+    try:  # an unknown mode: every create refuses (#1288)
+        service.config.id_numbering_mode()
+    except InputRefused as e:
+        issues.append({"type": "bad_id_numbering", "message": f"{e} (#1288)"})
     control = service.control_state(worktree=True)  # (#582)
     if control.error:
         issues.append({
@@ -2613,6 +2630,8 @@ def validate(fix: bool, as_json: bool):
             console.print(
                 f"[yellow]BAD SUPERSESSION:[/yellow] {safe(issue['message'])}", soft_wrap=True
             )
+        elif issue["type"] == "bad_id_numbering":
+            console.print(f"[red]BAD CONFIG:[/red] {safe(issue['message'])}", soft_wrap=True)
         elif issue["type"] == "bad_control_file":
             console.print(
                 f"[red]BAD CONTROL FILE:[/red] {safe(issue['message'])}", soft_wrap=True

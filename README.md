@@ -305,6 +305,33 @@ absolute paths), not `../other/archive/*`. Such a board isn't git-tracked either
 
 Each directory gets a `_TEMPLATE.md` with the correct frontmatter and type-specific sections (e.g., bugs get "Steps to Reproduce", features get "Acceptance Criteria").
 
+### ID numbering: per type or global
+
+`id_numbering` sits at the top level of `.kanban/config.yaml` (beside `boards:` or `kanban:`)
+and picks how new ids are numbered (#1288):
+
+```yaml
+id_numbering: per_type   # the default (also when the key is absent): today's behaviour
+# id_numbering: global   # one number sequence shared by every prefix on every board
+```
+
+- **`per_type`**: each prefix counts on its own, so `EXP-012`, `CHORE-012` and `H-012` can all
+  exist.
+- **`global`**: the next number for any dashed prefix (`EXP-`, `CHORE-`, `HAZ-`, `H-`, `M-`,
+  `EXPR-`, `PAPER-`, `LIT-`, `IDEA-R-`, …, on every board) is one more than the highest number in
+  any of them, read from the same three sources (`_ID_ALLOCATIONS.json`, frontmatter ids and
+  filenames), locally and on origin (`create --push`, `next-id`). So `EXP-101`, then `CHORE-102`,
+  then `H-103`, and a bare number names one item. An explicit id (`hypothesis create --id`,
+  `measure create --id`) whose number another prefix already holds is refused, naming the
+  holder; a free number is still allowed. Paper-scoped hypothesis ids (`H130.4`) keep their own
+  space in both modes and never take or raise the global number.
+- **Switching is safe both ways**: numbers only ever grow within each prefix. `per_type` →
+  `global` continues above every existing id of every type; `global` → `per_type` continues
+  each prefix from its own max (a gap, never a reuse). Nothing is renumbered.
+- Any other value is refused: `validate` reports it and `create` / `next-id` allocate nothing.
+  `next-id` prints the mode it allocated under (`id_numbering` in `--json`). Padding is
+  unchanged: at least three digits, never truncated.
+
 ## Themes
 
 **Software (default):**

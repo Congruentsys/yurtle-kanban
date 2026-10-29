@@ -36,7 +36,13 @@ from rdflib import RDF, RDFS, Graph, Literal, Namespace, URIRef
 
 from ._graph_iri import set_self_iri
 from ._logging import get_logger
-from .config import KanbanConfig, _fold_status_name, _status_names, _under
+from .config import (
+    ID_NUMBERING_GLOBAL,
+    KanbanConfig,
+    _fold_status_name,
+    _status_names,
+    _under,
+)
 from .hooks import HookContext, HookEngine, HookEvent
 from .inputs import GIT_ENV, check_identity, resolve_actor, same_actor
 from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
@@ -2372,6 +2378,8 @@ class KanbanService:
         if item_id is None:
             prefix = self._get_type_prefix(item_type)
             item_id = self._format_id(prefix, self._get_next_id_number(prefix))
+        else:
+            self._refuse_global_holder(item_id)  # before anything is written (#1288)
 
         # Determine file path
         if path is None:
@@ -2558,6 +2566,11 @@ class KanbanService:
         # No remote: allocate, create and commit locally (no push, no retry needed)
         self._items.clear()
         self.scan()
+        if item_id is not None:
+            try:
+                self._refuse_global_holder(item_id)  # (#1288)
+            except InputRefused as e:
+                return self._push_failed(str(e))
         current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
         if render is not None and current_id != item_id_local:
             content = render(current_id)
@@ -2657,6 +2670,19 @@ class KanbanService:
                     f"{item_id} is already taken on the default branch by {rival}; "
                     "nothing was created"
                 )
+            if item_id is not None:
+                try:  # another prefix's number, under `id_numbering: global` (#1288)
+                    held = None  # per_type reads nothing more
+                    if judge.config.id_numbering_mode() == ID_NUMBERING_GLOBAL:
+                        held = judge._global_holder(item_id, judge._ids_at(base)[1])
+                except InputRefused as e:
+                    raise _CasRefusedError(str(e)) from None
+                if held is not None:
+                    raise _CasRefusedError(
+                        f"{item_id}'s number is already held on the default branch by "
+                        f"{held}: under `id_numbering: global` every prefix shares one "
+                        "sequence; nothing was created"
+                    )
             current_id = item_id or self._next_id_at(base, prefix)
             text_in = render(current_id) if render is not None else content
             if render is not None:
@@ -3627,8 +3653,22 @@ class KanbanService:
         frontmatter ids in the id space (`_rev_roots()`: the work paths and every
         placement dir, #1014), plus the allocation records committed there (#585,
         #590)."""
+        globally = self._numbers_globally(prefix)  # an unknown mode raises (#1288)
         top = self._git_toplevel()
         names, ids = self._ids_at(rev)
+        if globally:  # one sequence over every dashed id space (#1288)
+            records: list[dict[str, Any]] = []
+            lock_rel = self._repo_relative(
+                self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", top
+            )
+            if lock_rel is not None:
+                shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}", text=False)
+                if shown.returncode == 0:  # a corrupt file is refused (#1095)
+                    where = f"{lock_rel.as_posix()} at {rev}"
+                    records = _parse_allocations(_allocations_text(shown.stdout, where), where)
+            return self._global_max(
+                records, [found for _, found in ids], [Path(n).stem for n in names]
+            ) + 1
         max_num = 0
         for name in names:
             max_num = max(max_num, self._stem_id(Path(name).stem, prefix) or 0)
@@ -3760,6 +3800,120 @@ class KanbanService:
             default=0,
         )  # one id-space rule for every source (#752, #765, #776)
 
+    def _numbers_globally(self, prefix: str) -> bool:
+        """Whether `prefix` takes its number from the one sequence every dashed
+        prefix shares: `id_numbering: global` and a dashed prefix. A paper-scoped
+        `H130.` keeps its own space in both modes (#1288). An unknown
+        `id_numbering` raises `InputRefused`, for every prefix: nothing is
+        allocated under a mode the config does not name."""
+        global_mode = self.config.id_numbering_mode() == ID_NUMBERING_GLOBAL
+        return global_mode and bool(self._id_sep(prefix))
+
+    @classmethod
+    def _dashed_space(cls, item_id: str) -> str | None:
+        """The dashed id space `item_id` is in (`EXP-003` -> `EXP`, `IDEA-R-004` ->
+        `IDEA-R`), or None: a paper-scoped `H130.2`, a dashless `EXP3`, an id with
+        no number or numbered 0 (#1288), by `_number_in_space`'s rule."""
+        found = cls._id_space(item_id)
+        if found is None or not found[0] or not cls._id_sep(found[0]):
+            return None
+        return found[0] if cls._number_in_space(item_id, found[0]) else None
+
+    @classmethod
+    def _dashed_number(cls, item_id: str) -> int:
+        """`item_id`'s number when it is in a dashed id space, else 0 (#1288)."""
+        space = cls._dashed_space(item_id)
+        return 0 if space is None else cls._number_in_space(item_id, space)
+
+    def _dashed_prefixes(self) -> set[str]:
+        """The dashed id prefixes this config can create, on every board: each
+        type's prefix (a theme's, else the built-in one), every board theme's
+        `id_prefix`, and `IDEA-R`/`IDEA-F` (`idea create`'s own) (#1288). A
+        filename counts in the global sequence only under one of these or a space
+        an id or record names: `notes-2026.md` holds no number."""
+        found = {self._get_type_prefix(t) for t in WorkItemType} | {"IDEA-R", "IDEA-F"}
+        if self.config.is_multi_board:
+            themes = [b.get_theme(self.repo_root, self.config.theme_source)
+                      for b in self.config.boards]
+        else:
+            themes = [self.config.get_theme()]
+        for theme in themes:
+            for type_def in ((theme or {}).get("item_types") or {}).values():
+                pre = type_def.get("id_prefix") if isinstance(type_def, dict) else None
+                if isinstance(pre, str) and pre:
+                    found.add(pre)
+        return {p for p in found if self._id_sep(p)}
+
+    def _global_max(
+        self, records: list[dict[str, Any]], ids: list[str], stems: list[str]
+    ) -> int:
+        """The highest number in any dashed id space across allocation `records`,
+        frontmatter `ids` and filename `stems` (#1288): `id_numbering: global`'s
+        max. Paper-scoped `H130.n` ids neither count nor are counted."""
+        record_ids = [str(r.get("id", "")) for r in records]
+        max_num = max((self._dashed_number(i) for i in [*record_ids, *ids]), default=0)
+        spaces = self._dashed_prefixes() | {
+            space for i in [*record_ids, *ids] if (space := self._dashed_space(i))
+        }
+        for stem in stems:
+            for space in spaces:
+                max_num = max(max_num, self._stem_id(stem, space) or 0)
+        return max_num
+
+    def _scanned_global_max(self) -> int:
+        """`_global_max` as this checkout sees it, over `_scanned_next_id_number`'s
+        three sources (#1288)."""
+        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+        text = _local_allocations_text(lock_file)  # unreadable: refused (#1161)
+        records = [] if text is None else _parse_allocations(text, str(lock_file))
+        stems = []
+        for scan_path in self.config.get_work_paths():
+            full_path = _under(self.repo_root, scan_path)
+            if full_path.exists():
+                stems += [md_file.stem for md_file in full_path.rglob("*.md")]
+        return self._global_max(records, list(self._items.keys()), stems)
+
+    def _global_holder(self, item_id: str, ids: list[tuple[str, str]]) -> str | None:
+        """Under `id_numbering: global`, the id among `ids` ((path, id) pairs) that
+        holds `item_id`'s number in ANOTHER dashed id space, as `CHORE-003 (path)`,
+        else None (#1288). A free number is fine, below the max too; a paper-scoped
+        id, and every id under `per_type`, is never checked."""
+        space = self._dashed_space(item_id)
+        if space is None or not self._numbers_globally(space):  # unknown mode raises
+            return None
+        number = self._number_in_space(item_id, space)
+        folded = fold_id(space)
+        for path, other in ids:
+            theirs = self._dashed_space(other)
+            if (
+                theirs is not None and fold_id(theirs) != folded
+                and self._number_in_space(other, theirs) == number
+            ):
+                return f"{other} ({path})"
+        return None
+
+    def _refuse_global_holder(self, item_id: str) -> None:
+        """Refuse an explicit `item_id` whose number another prefix already holds,
+        under `id_numbering: global` (#1288): in this checkout's items, or on the
+        fetched origin/<default>. Raises `InputRefused` naming the holder, and
+        for an unknown `id_numbering`; under `per_type` it reads nothing."""
+        if self.config.id_numbering_mode() != ID_NUMBERING_GLOBAL:
+            return
+        if not self._items:
+            self.scan()
+        ids = [(str(item.file_path), i) for i, item in self._items.items()]
+        holder = self._global_holder(item_id, ids)
+        if holder is None:
+            with suppress(subprocess.TimeoutExpired, OSError):
+                ref = self._fetched_default()
+                if ref is not None:
+                    holder = self._global_holder(item_id, self._ids_at(ref)[1])
+        if holder is not None:
+            raise InputRefused(
+                f"{item_id}'s number is already held by {holder}: under `id_numbering: "
+                "global` every prefix shares one sequence; nothing was created"
+            )
+
     def _fetched_default(self) -> str | None:
         """The already-fetched `refs/remotes/origin/<default>`, when this clone has
         one; read locally, never from the network (#641). `origin/HEAD` names it
@@ -3807,10 +3961,15 @@ class KanbanService:
         2. Item IDs from frontmatter (via self._items)
         3. Filenames directly (to catch files without proper frontmatter)
 
-        Returns max across all sources + 1.
+        Returns max across all sources + 1. With `id_numbering: global` and a
+        dashed prefix, the max is over every dashed id space in the three sources,
+        not `prefix`'s alone (#1288).
         """
+        globally = self._numbers_globally(prefix)  # an unknown mode raises (#1288)
         if not self._items:
             self.scan()
+        if globally:
+            return self._scanned_global_max() + 1
 
         max_num = 0
 
@@ -4570,8 +4729,10 @@ class KanbanService:
 
         Returns:
             dict with 'success', 'id', 'prefix', 'number', 'message' and, on
-            success, 'recorded' ('pushed', 'committed' or 'none'; #1159), plus
-            'note' when the checkout wasn't fast-forwarded (#995)
+            success, 'recorded' ('pushed', 'committed' or 'none'; #1159) and
+            'id_numbering' (the mode it was allocated under: 'per_type' or
+            'global'; #1288), plus 'note' when the checkout wasn't fast-forwarded
+            (#995)
 
         Refusals (#847, #1162, #1170): a malformed prefix raises `InputRefused`, and
         so does a corrupt allocations file in this checkout when allocating locally
@@ -4586,6 +4747,7 @@ class KanbanService:
         # a malformed prefix allocates nothing (#802); one NFC spelling (#817)
         # the one fold, NFC(upper(NFC)): upper-casing can undo NFC (`ΐ`) (#817)
         prefix = fold_id(self._check_prefix(prefix))
+        mode = self.config.id_numbering_mode()  # an unknown one allocates nothing (#1288)
         actor = ""
         if commit_allocation:
             # the record names who allocated: no actor, nothing is written (#620)
@@ -4602,6 +4764,8 @@ class KanbanService:
 
             def build(base: str) -> tuple[dict[Path, str], str]:
                 made["id"] = self._next_id_at(base, prefix)
+                # the mode origin's config allocated under, for `next-id` (#1288)
+                made["mode"] = self._judge_at(base).config.id_numbering_mode()
                 blobs = self._allocation_blob(base, made["id"], actor)
                 # the record's folders are guarded as a create's are (#870)
                 twin = self._folder_twin_refusal(
@@ -4621,6 +4785,7 @@ class KanbanService:
                     "number": num,
                     "message": f"Allocated {made['id']} on origin/{branch}",
                     "recorded": "pushed",  # where the allocation went (#1159)
+                    "id_numbering": made.get("mode", mode),  # (#1288)
                 }
                 # on the branch, yet not fast-forwarded (a diverged main): say so
                 # here, once, without git's advice (#995); never a failure (#603)
@@ -4680,6 +4845,7 @@ class KanbanService:
             "number": next_num,
             "message": f"Allocated {item_id}",
             "recorded": "committed" if commit_allocation else "none",  # (#1159)
+            "id_numbering": mode,  # the mode it was allocated under (#1288)
         }
 
     def move_item(
