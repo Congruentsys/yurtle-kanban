@@ -42,6 +42,12 @@ ThemeSource = Callable[[str], "tuple[str, str] | None"]
 CONFIG_VERSION_SINGLE = "1.0"
 CONFIG_VERSION_MULTI = "2.0"
 
+# `id_numbering:` (#1288): one number sequence per id prefix (the default), or one
+# shared by every dashed prefix on every board
+ID_NUMBERING_PER_TYPE = "per_type"
+ID_NUMBERING_GLOBAL = "global"
+ID_NUMBERING_MODES = (ID_NUMBERING_PER_TYPE, ID_NUMBERING_GLOBAL)
+
 
 _PROJECT_NAME = re.compile(r"""^\s*name\s*=\s*["']yurtle-kanban["']\s*(#.*)?$""", re.MULTILINE)
 _TABLE_HEADER = re.compile(r"^\s*\[", re.MULTILINE)
@@ -743,6 +749,9 @@ class KanbanConfig:
     boards: list[BoardConfig] = field(default_factory=list)
     namespace: str | None = None  # RDF namespace for graph-queryable items
     default_board: str | None = None  # Name of default board
+    # `id_numbering:` as the config says it, unchecked: None when absent. Read it
+    # through `id_numbering_mode()`, which refuses an unknown value (#1288)
+    id_numbering: Any = None
     # the repo this config belongs to (set by load); themes resolve there first (#287)
     repo_root: Path | None = field(default=None, repr=False, compare=False)
     # where the repo's `.kanban/themes/` is read when not the working tree: a
@@ -753,6 +762,19 @@ class KanbanConfig:
     def is_multi_board(self) -> bool:
         """Check if this is a multi-board configuration."""
         return self.version == CONFIG_VERSION_MULTI and len(self.boards) > 0
+
+    def id_numbering_mode(self) -> str:
+        """`per_type` (the default, an absent or bare key) or `global` (#1288). Any
+        other value is refused, never read as `per_type`: an allocation under it
+        could take a number the project meant to be unique across prefixes."""
+        value = self.id_numbering
+        if value is None:
+            return ID_NUMBERING_PER_TYPE
+        if isinstance(value, str) and value in ID_NUMBERING_MODES:
+            return value
+        raise InputRefused(
+            f"`id_numbering` must be {' or '.join(ID_NUMBERING_MODES)}, got {_shape(value)}"
+        )
 
     def get_board(self, name: str) -> BoardConfig | None:
         """Get a board by name."""
@@ -842,6 +864,16 @@ class KanbanConfig:
         cls, data: dict[str, Any], repo_root: Path, theme_source: ThemeSource | None
     ) -> "KanbanConfig":
         """`from_text`'s config from the parsed mapping."""
+        config = cls._from_mapping(data, repo_root, theme_source)
+        # top level, beside `boards:` (or `kanban:`); checked where it is used (#1288)
+        config.id_numbering = data.get("id_numbering")
+        return config
+
+    @classmethod
+    def _from_mapping(
+        cls, data: dict[str, Any], repo_root: Path, theme_source: ThemeSource | None
+    ) -> "KanbanConfig":
+        """`_from_data`'s config, all but `id_numbering`."""
         # Check for v2 multi-board config
         # a bare `version:` (null) is its default, like an absent one (#220, #900)
         version = _version(_or_default(data, "version", CONFIG_VERSION_SINGLE))
@@ -1001,6 +1033,9 @@ class KanbanConfig:
         if self.gates:
             data["kanban"]["gates"] = self.gates
 
+        if self.id_numbering is not None:  # kept on a rewrite (#1288)
+            data["id_numbering"] = self.id_numbering
+
         return data
 
     def _to_dict_v2(self) -> dict[str, Any]:
@@ -1015,6 +1050,9 @@ class KanbanConfig:
 
         if self.default_board:
             data["default_board"] = self.default_board
+
+        if self.id_numbering is not None:  # kept on a rewrite (#1288)
+            data["id_numbering"] = self.id_numbering
 
         return data
 
