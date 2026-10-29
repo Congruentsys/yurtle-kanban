@@ -5498,6 +5498,21 @@ class KanbanService:
         )
         return Change({rel: new_text}, message, data=bounced)
 
+    def release_item(
+        self,
+        item_id: str,
+        *,
+        actor: str,
+        reason: str | None = None,
+        to: str | None = None,
+        take_over: bool = False,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[float, float], float] = random.uniform,
+        seam: Callable[[int], None] | None = None,
+    ) -> Outcome:
+        """Give a claim back (#1287): NOT IMPLEMENTED (test partner's stub)."""
+        raise NotImplementedError("release_item (#1287)")
+
     def _item_target(
         self, read: Read, item_id: str, action: str
     ) -> tuple[str, str, WorkItem] | Refuse:

@@ -1200,6 +1200,16 @@ def bounce(
     _print_outcome(outcome)
 
 
+@main.command(
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True}
+)
+@click.argument("item_id")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def release(item_id: str, args: tuple[str, ...]) -> None:
+    """Give a claim back (#1287): NOT IMPLEMENTED (test partner's stub)."""
+    raise NotImplementedError("release (#1287)")
+
+
 @main.group(cls=Group)
 def control() -> None:
     """The board's emergency stop (#582): one mode, halt.
