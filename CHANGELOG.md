@@ -10,6 +10,27 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-10-30
+
+### Added
+
+- **`release` gives a claim back** (#1287): `release ID --agent HOLDER [--reason TEXT |
+  --reason-file PATH|-] [--to STATUS] [--take-over]` moves the item to its theme's ready
+  status (or a non-terminal `--to`), sets `assignee:` to `null` and records
+  `kb:releasedBy`/`kb:releasedAt`, in one compare-and-swap commit on origin's default branch,
+  as `claim` and `bounce` make. There is no bounce lock: any agent may claim the item at once.
+  Only the holder may release, unless `--take-over` (recorded as `kb:takenOverFrom`, refused
+  on a halted board with exit 8); a finished item is refused. Exit codes as `claim`'s. The
+  stock `/handoff` skills use it.
+- **`id_numbering` in `.kanban/config.yaml`: one number sequence for every item type, or one
+  per type** (#1288). `per_type` (the default, and the behaviour when the key is absent) is
+  unchanged. `global` numbers every dashed prefix on every board from one sequence (`EXP-101`,
+  then `CHORE-102`, then `H-103`), over allocations, frontmatter ids and filenames, locally and on
+  origin's compare-and-swap path (`create --push`, `next-id`). Paper-scoped `H{paper}.{n}` ids keep
+  their own space. An explicit id whose number another prefix holds is refused in `global` mode,
+  naming the holder. Switching either way never reuses a number. An unknown value is refused by
+  `validate` and by every create; `next-id` names the mode it allocated under.
+
 ## [3.4.0] - 2026-10-03
 
 ### Added
