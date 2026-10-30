@@ -556,6 +556,14 @@ def test_readme_or_reference_documents_id_numbering() -> None:
 
 
 def test_changelog_fragment_exists() -> None:
+    """The #1288 changelog entry: its fragment, or, once a release has assembled the
+    fragments away, its bullet in CHANGELOG.md (#1188, #1224)."""
     fragment = ROOT / "changelog.d" / "1288.md"
-    assert fragment.is_file(), f"missing {fragment}"
-    assert "id_numbering" in fragment.read_text(encoding="utf-8")
+    if fragment.exists():
+        entry = fragment.read_text(encoding="utf-8")
+    else:
+        bullets = re.split(r"\n(?=- )", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+        found = [b for b in bullets if "#1288" in b]
+        assert found, "the #1288 entry is in neither changelog.d/1288.md nor CHANGELOG.md"
+        entry = found[0]
+    assert "id_numbering" in entry, entry
