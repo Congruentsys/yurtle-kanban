@@ -45,6 +45,14 @@ gh pr create --title "feat(exp-XXX): Title" --body "..."
 yurtle-kanban move EXP-XXX review --agent <your-agent-name>   # the holder moves it
 ```
 
+## Numbered Registers
+
+```bash
+yurtle-kanban register alloc decisions --title "Title" --agent <your-agent-name>   # prints D7: take it BEFORE any doc names it
+yurtle-kanban register fill decisions 7 --text-file ruling.md --agent <your-agent-name>
+yurtle-kanban register cites decisions 7     # who cites D7
+```
+
 ## Review Work
 
 ```bash
