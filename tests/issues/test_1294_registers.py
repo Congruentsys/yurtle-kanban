@@ -667,16 +667,39 @@ def test_validate_refuses_a_stale_or_edited_index(reg, monkeypatch) -> None:
     push_files(reg, {INDEX: good}, "restore")
     ok(validate(reg, monkeypatch))
 
-    # planted: the register moved on, the committed index did not
-    sync(reg.a)
-    ok(yk(reg.a, monkeypatch, "register", "set", "decisions", "2", "--status", "open",
-          "--title", "Renamed second", "--agent", A))
+    # ruled edit (driver, #1294 r1 M2): verbs now carry the index; staleness is planted by hand
+    # planted: the register moved on (a valid title event appended by hand, committed
+    # directly), the committed index did not
+    path = reg.entry(2)
+    text = reg.show(path)
+    fence = text.rfind("```\n")
+    assert fence > 0, text
+    hand_event = (
+        "<> kb:statusChange [\n"
+        "    kb:status kb:open ;\n"
+        '    kb:title "Renamed by hand" ;\n'
+        '    kb:at "2026-11-11T09:00:00+00:00"^^xsd:dateTime ;\n'
+        '    kb:by "planter" ;\n'
+        "  ] .\n"
+    )
+    push_files(reg, {path: text[:fence] + hand_event + text[fence:]}, "hand title event")
+    assert "Renamed by hand" in show(reg, monkeypatch, 2), "the planted event did not take"
     res = validate(reg, monkeypatch)
     assert res.exit_code != 0 and INDEX in flat(res.output), flat(res.output)
     sync(reg.a)
     ok(yk(reg.a, monkeypatch, "register", "index", "decisions", "--write"))
     publish(reg, "regenerate")
     ok(validate(reg, monkeypatch))
+
+    # positive control: a retitle through the verb carries the index in its own commit
+    sync(reg.a)
+    ok(yk(reg.a, monkeypatch, "register", "set", "decisions", "2", "--status", "open",
+          "--title", "Renamed second", "--agent", A))
+    assert "Renamed second" in reg.show(INDEX), "the verb's commit did not regenerate the index"
+    fresh = reg.tmp / "fresh-after-set"
+    git(reg.tmp, "clone", "-q", str(reg.remote), str(fresh))
+    res = yk(fresh, monkeypatch, "validate")
+    assert res.exit_code == 0, flat(res.output)
 
 
 # --- cites and exemptions ---------------------------------------------------------------------
