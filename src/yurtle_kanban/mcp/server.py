@@ -31,7 +31,7 @@ from ..models import (
     fold_id,
     unknown_priority_message,
 )
-from ..service import KanbanService
+from ..service import KanbanService, _Moved
 from ..sync import HALTED, ExitCode, Outcome
 
 logger = get_logger("yurtle-kanban-mcp")  # escapes control characters (#215)
@@ -610,13 +610,26 @@ class KanbanMCPServer:
             if outcome.halted:
                 reply["halted"] = True
             return reply
-        return {
+        # the canonical id, the file's spelling, as the local path replies it:
+        # origin's (the landed change's `data`), else the checkout's (review r1)
+        data = outcome.data
+        canonical = data.item_id if isinstance(data, _Moved) else data
+        try:
+            item = self.service.get_item(canonical if isinstance(canonical, str) else item_id)
+        except ValueError:  # e.g. a duplicate in the checkout: the write still landed
+            item = None
+        if not isinstance(canonical, str):
+            canonical = item.id if item is not None else item_id
+        reply = {
             "success": True,
-            "item_id": item_id,
+            "item_id": canonical,
             "pushed": outcome.kind == "won",
             "sha": outcome.sha,
             "message": outcome.message,
         }
+        if item is not None:  # as `kanban_get_item` returns it (review r1)
+            reply["item"] = item.to_dict()
+        return reply
 
     def _move_item(self, args: dict[str, Any]) -> dict[str, Any]:
         """Move a work item to a new status: pushed to origin by default, like the
@@ -653,6 +666,7 @@ class KanbanMCPServer:
 
         return {
             "success": True,
+            "item_id": item.id,
             "item": item.to_dict(),
             "message": f"Moved {item.id} to {new_status.value}",
         }

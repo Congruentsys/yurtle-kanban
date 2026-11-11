@@ -6983,7 +6983,11 @@ class KanbanService:
                 return found
             rel, text, item = found
             # the file's spelling of the ID (#751)
-            return Change({rel: self._with_comment(text, comment)}, f"Add comment to {item.id}")
+            # `data`: the item's canonical id, as origin's file spells it (#1283)
+            return Change(
+                {rel: self._with_comment(text, comment)}, f"Add comment to {item.id}",
+                data=item.id,
+            )
 
         outcome = self.sync_and_push(mutate, sleep=sleep, jitter=jitter, seam=seam)
         if outcome.kind == "local":  # the working tree changed under the cache

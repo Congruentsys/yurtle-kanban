@@ -430,6 +430,9 @@ default, as the CLI's `move` and `comment` do (#1279, #1283): the change is made
 as origin's default branch has it and pushed as one race-free commit; a clean checkout on the
 default branch is fast-forwarded, any other checkout is left untouched. Pass `"push": false`
 to edit the local checkout only, as before. A repo with no remote commits locally either way.
+A successful pushed reply carries `success`, `item_id` (the item's own spelling, `EXP-001`
+for `exp-1`), `item` (as `kanban_get_item` returns it then; on a checkout the push did not
+fast-forward, that is the checkout's copy), `pushed`, `sha` and `message`.
 
 A pushed write that is refused replies `{"error": "..."}`, as before; any other failure adds
 `exit_code`, the CLI's: `3` lost to a holder, `4` origin unreachable (nothing is written

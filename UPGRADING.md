@@ -156,8 +156,8 @@ remove it; a missing file starts a fresh list.
   (`YURTLE_AGENT`, then git `user.name`); the `"agent"` default is gone.
 - `kanban_move_item` and `kanban_add_comment` push to origin by default in a repo with an
   `origin` remote, like the CLI's `move` and `comment` (#1283; the CLI since #1279). Pass
-  `"push": false` to edit locally. Offline, they reply `{"error": ..., "exit_code": 4}` and write
-  nothing.
+  `"push": false` to edit locally. A successful reply still carries `item` (plus `item_id`,
+  `pushed`, `sha`). Offline, they reply `{"error": ..., "exit_code": 4}` and write nothing.
 
 ### Removed APIs
 
