@@ -319,6 +319,8 @@ class Entry:
     front_allocated_for: str | None = None  # the frontmatter's `allocated_for`
 
 
+_REGULAR = ("100644", "100755")
+_HEAD_BYTES = 64 * 1024  # a frontmatter is read from a file's first bytes
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)^---[^\n]*\n", re.S | re.M)
 _TEXT_HEADING = "\n## Text\n\n"
 _BLOCK_OPEN = "```yurtle\n"
@@ -567,6 +569,30 @@ class Registers:
         )
         return sorted(n for n in listed.stdout.split("\0") if n.endswith(".md"))
 
+    def _modes(self, rev: str, *paths: str) -> dict[str, str]:
+        """git path -> blob mode of every file at `rev` under `paths` (all: none)."""
+        listed = self.service._git_z("ls-tree", "-r", "-z", "--full-tree", rev, "--", *paths)
+        out = {}
+        for record in listed.stdout.split("\0"):
+            meta, _, name = record.partition("\t")
+            if name:
+                out[name] = meta.split(" ", 1)[0]
+        return out
+
+    def _irregular(self, reg: Register, rev: str | None) -> list[str]:
+        """Git paths under the register's folder that are not regular files: a blob
+        whose mode at `rev` (None: HEAD, and the working tree) is not 100644/100755,
+        such as a symlink. Never an entry, never skipped silently."""
+        folder = self._git_rel(reg.path)
+        modes = self._modes(rev or "HEAD", folder)
+        bad = {n for n, mode in modes.items() if mode not in _REGULAR}
+        if rev is None:
+            base = self.service._git_toplevel() / folder
+            if base.is_dir():
+                bad |= {f"{folder}/{p.relative_to(base).as_posix()}"
+                        for p in base.rglob("*") if p.is_symlink()}
+        return sorted(bad)
+
     def _number_of_name(self, reg: Register, name: str) -> int | None:
         stem = name.rsplit("/", 1)[-1]
         m = re.match(rf"{re.escape(reg.id_prefix)}-0*([1-9][0-9]*)(?![0-9])", stem, re.I)
@@ -586,7 +612,10 @@ class Registers:
         found: dict[int, list[Entry]] = {}
         strays: list[str] = []
         top = self.service._git_toplevel()
+        irregular = set(self._irregular(reg, None))
         for name in self._names(reg, None):
+            if name in irregular:
+                continue  # `problems` names it
             rel = self._root_rel(name)
             try:
                 content = (top / name).read_text(encoding="utf-8")
@@ -767,6 +796,9 @@ class Registers:
         out: list[str] = []
         for reg in self.registers:
             entries, strays = self.entries(reg)
+            for name in self._irregular(reg, None):
+                out.append(f"{self._root_rel(name)} is in register '{reg.name}''s folder but "
+                           "is not a regular file (a symlink?): an entry is a plain file")
             for rel in strays:
                 out.append(f"{rel} is in register '{reg.name}''s folder but is no "
                            f"{reg.id_prefix}-<n> entry")
@@ -806,24 +838,28 @@ class Registers:
         return out
 
     def _stray_entry_files(self) -> list[str]:
-        """Each tracked `type: register-entry` file outside every register folder:
-        it is on no board and in no register, so it would vanish unreported."""
-        svc = self.service
-        grep = svc._git_z("grep", "-z", "-n", "-I", "-E", "--full-name",
-                          "^type: register-entry", "--", "*.md")
+        """Each committed `type: register-entry` file outside every register folder:
+        it is on no board and in no register, so it would vanish unreported. Every
+        `.md` file HEAD holds is listed and its frontmatter parsed: nothing
+        `.gitattributes` says can hide one."""
         folders = [self._git_rel(reg.path) + "/" for reg in self.registers]
+        top = self.service._git_toplevel()
         out = []
-        top = svc._git_toplevel()
-        seen: set[str] = set()
-        for line in grep.stdout.split("\n"):
-            name = line.split("\0", 1)[0]
-            if not name or name in seen or any(name.startswith(f) for f in folders):
+        for name, mode in sorted(self._modes("HEAD").items()):
+            if (not name.endswith(".md") or mode not in _REGULAR
+                    or any(name.startswith(f) for f in folders)):
                 continue
-            seen.add(name)
             try:
-                head = _FRONTMATTER_RE.match((top / name).read_text(encoding="utf-8"))
-                front = yaml.safe_load(head.group(1)) if head else None
-            except (OSError, UnicodeDecodeError, yaml.YAMLError):
+                with (top / name).open("rb") as f:
+                    head_bytes = f.read(_HEAD_BYTES)
+            except OSError:
+                continue
+            if b"register-entry" not in head_bytes:
+                continue
+            m = _FRONTMATTER_RE.match(head_bytes.decode("utf-8", "replace").replace("\r\n", "\n"))
+            try:
+                front = yaml.safe_load(m.group(1)) if m else None
+            except yaml.YAMLError:
                 continue
             if isinstance(front, dict) and front.get("type") == ENTRY_TYPE:
                 out.append(f"{self._root_rel(name)} is a register entry outside every "
@@ -914,12 +950,14 @@ class Registers:
         return out
 
     def _since(self, rev: str) -> list[str]:
-        """Each entry file that existed at `rev`, under a folder of the registers
-        `rev`'s own config names, and is not now that file grown only as an entry
-        may grow (`_append_only_violation`). A file gone from its path is accepted
-        only as a pure move: the same id under the same register's current folder,
-        append-only against the `rev` file. A register `rev` had and today's config
-        lacks is an error when it held entries at `rev`."""
+        """`rev`'s entries judged by identity, under the registers `rev`'s own config
+        names: each (register, id) at `rev` must be held by exactly one file in that
+        register's CURRENT folder, append-only against the `rev` file
+        (`_append_only_violation`), wherever it now lives (a pure move or rename is
+        fine). A `rev` path still present that is not that holder is "left behind";
+        a path that was not a regular file at `rev` is an error, never skipped. A
+        register `rev` had and today's config lacks is an error when it held
+        entries at `rev`."""
         svc = self.service
         ok = svc._git_run("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
         if ok.returncode != 0:
@@ -937,41 +975,45 @@ class Registers:
             if cur is None and names:  # an empty register may go: it removes nothing
                 out.append(f"register '{old_reg.name}' held entries at {rev} and is gone "
                            "from the config now: a register's entries are never removed")
-            moved = self.entries(cur)[0] if cur is not None else {}
+            held = self.entries(cur)[0] if cur is not None else {}
+            for name in self._irregular(old_reg, rev):
+                out.append(f"{self._root_rel(name)}: not a regular file at {rev} (a "
+                           f"symlink?) in register '{old_reg.name}''s folder: an entry is a "
+                           "plain file, so nothing since can be measured against it")
+            irregular = set(self._irregular(old_reg, rev))
             for name in names:
+                if name in irregular:
+                    continue
                 old = svc._git_run("show", f"{rev}:{name}").stdout
                 old_entry = parse_entry(old_reg, name, old)
                 if old_entry is None:
                     continue  # no entry at `rev`: the stray check's business then
                 rel = self._root_rel(name)
-                path = top / name
-                if path.is_file():
+                holders = [e for e in held.get(old_entry.number, [])
+                           if e.item_id == old_entry.item_id]
+                if len(holders) != 1:
+                    shown = ", ".join(e.path for e in holders) or "none"
+                    out.append(f"{rel}: {old_entry.item_id} must be held by exactly one file "
+                               f"in register '{old_reg.name}''s folder now, as at {rev}; "
+                               f"held by: {shown}")
+                else:
+                    holder = holders[0]
                     try:
-                        new = path.read_text(encoding="utf-8")
+                        new = (self.root / holder.path).read_text(encoding="utf-8")
                     except (OSError, UnicodeDecodeError):
                         new = ""
                     why = _append_only_violation(old, new)
                     if why is not None:
-                        out.append(f"{rel}: changed since {rev} other than by appending to "
-                                   f"its yurtle block (an entry is append-only): {why}")
-                    continue
-                candidates = [e for e in moved.get(old_entry.number, [])
-                              if e.item_id == old_entry.item_id]
-                passed = False
-                for cand in candidates:
-                    try:
-                        new = (self.root / cand.path).read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        continue
-                    if _append_only_violation(old, new) is None:
-                        passed = True
-                        break
-                if not passed:
-                    where = (" (" + ", ".join(c.path for c in candidates)
-                             + " holds its id but is not that file grown append-only)"
-                             if candidates else "")
-                    out.append(f"{rel}: an entry file was deleted or renamed since {rev}"
-                               + where)
+                        moved = "" if holder.path == rel else f" (moved to {holder.path})"
+                        out.append(f"{holder.path}: {old_entry.item_id} changed since {rev} "
+                                   f"other than by appending to its yurtle block (an entry "
+                                   f"is append-only; at {rev} it was {rel}){moved}: {why}")
+                path = top / name
+                if (path.exists() or path.is_symlink()) and not (
+                    len(holders) == 1 and holders[0].path == rel
+                ):
+                    out.append(f"{rel}: left behind: {old_entry.item_id}'s file at {rev} is "
+                               "still here but is not the entry's file now")
         return out
 
     def _registers_at(self, rev: str) -> list[Register]:

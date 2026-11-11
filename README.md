@@ -383,7 +383,9 @@ yurtle-kanban register import decisions --from OLD.md --pattern '^## (?P<n>\d+) 
   existing, older entries; no cycle), every cite the `scan` finds (an exemption row clears one;
   a row whose line no longer holds the cite is stale, an error), and that a committed `index`
   equals the generated one. `validate --since REV` also refuses an entry file changed since
-  `REV` other than by inserted lines.
+  `REV` other than by inserted lines. `validate --since` checks a change for ordinary
+  non-append edits to entries; it is not a defence against a committer who subverts git
+  itself (history rewrites, hooks, a forged `REV`).
 
 ## Themes
 
