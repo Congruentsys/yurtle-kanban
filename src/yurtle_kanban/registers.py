@@ -593,35 +593,49 @@ class Registers:
                         for p in base.rglob("*") if p.is_symlink()}
         return sorted(bad)
 
-    def _blob(self, rev: str, name: str) -> str | None:
-        """The committed bytes of `name` at `rev`, as git stores them (no filter,
-        no working tree), decoded as UTF-8; None when absent or undecodable."""
-        shown = self.service._git_run("cat-file", "blob", f"{rev}:{name}", text=False)
-        if shown.returncode != 0:
-            return None
-        out = shown.stdout
+    def _snapshot(
+        self, rev: str, folders: list[str]
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """Commit `rev` as git stores it (never the working tree, no filter): every
+        path's mode (one `ls-tree`), and the text of each regular `.md` blob under
+        `folders` (one `cat-file --batch`; a non-UTF-8 blob is left out). Two git
+        processes whatever the number of entries."""
+        listed = self.service._git_z("ls-tree", "-r", "-z", "--full-tree", rev)
+        modes: dict[str, str] = {}
+        oids: dict[str, str] = {}
+        prefixes = tuple(f + "/" for f in folders)
+        for record in listed.stdout.split("\0"):
+            meta, _, name = record.partition("\t")
+            if not name:
+                continue
+            fields = meta.split(" ")
+            modes[name] = fields[0]
+            if (len(fields) == 3 and fields[0] in _REGULAR and name.endswith(".md")
+                    and name.startswith(prefixes)):
+                oids[name] = fields[2]
         try:
-            return out.decode("utf-8") if isinstance(out, bytes) else out
-        except UnicodeDecodeError:
-            return None
+            blobs = self.service._blobs_at(rev, oids)
+        except Exception as e:  # git failed: fail closed, never a partial judgement
+            raise InputRefused(str(e)) from None
+        return modes, blobs
 
     def _committed(
-        self, reg: Register, rev: str
+        self, reg: Register, modes: dict[str, str], blobs: dict[str, str]
     ) -> tuple[dict[int, list[Entry]], list[str], list[str]]:
-        """`reg`'s entries as commit `rev` stores them (blobs, never the working
-        tree): entries by number, the git paths of regular `.md` blobs that parse as
-        no entry of `reg`, and the git paths that are not regular files."""
-        folder = self._git_rel(reg.path)
+        """`reg`'s entries in a `_snapshot`: entries by number, the git paths of
+        `.md` blobs that parse as no entry of `reg`, and the git paths that are not
+        regular files."""
+        folder = self._git_rel(reg.path) + "/"
         found: dict[int, list[Entry]] = {}
         unparsed: list[str] = []
         irregular: list[str] = []
-        for name, mode in sorted(self._modes(rev, folder).items()):
-            if not name.endswith(".md"):
+        for name, mode in sorted(modes.items()):
+            if not name.startswith(folder) or not name.endswith(".md"):
                 continue
             if mode not in _REGULAR:
                 irregular.append(name)
                 continue
-            content = self._blob(rev, name)
+            content = blobs.get(name)
             entry = None if content is None else parse_entry(reg, self._root_rel(name), content)
             if entry is None:
                 unparsed.append(name)
@@ -1011,35 +1025,41 @@ class Registers:
         if head.returncode != 0:
             return [f"--since {rev}: there is no HEAD commit to measure"]
         tip = head.stdout.strip()
-        head_tree = self._modes(tip)
+        try:  # each side read once, as git stores it: a bounded number of processes
+            head_tree, head_blobs = self._snapshot(
+                tip, [self._git_rel(r.path) for r in self.registers])
+            rev_tree, rev_blobs = self._snapshot(rev, [self._git_rel(r.path) for r in then])
+        except InputRefused as e:
+            return [f"--since {rev}: {e}"]
         for cur in self.registers:  # HEAD's side: every blob under a current folder
-            _, unparsed, irregular = self._committed(cur, tip)
+            _, unparsed, irregular = self._committed(cur, head_tree, head_blobs)
             for name in irregular:
                 out.append(f"{self._root_rel(name)}: not a regular file at HEAD (a symlink?) "
                            f"in register '{cur.name}''s folder: an entry is a plain file")
             for name in unparsed:
                 out.append(f"{self._root_rel(name)}: its blob at HEAD is no entry of register "
-                           f"'{cur.name}' (stored through a filter, such as git-lfs?); an "
-                           "entry is stored as its own text")
+                           f"'{cur.name}' (wrong id, or stored through a filter such as "
+                           "git-lfs?); an entry is stored as its own text")
         for old_reg in then:
             cur = now.get(old_reg.name)
-            entries_then, unparsed, irregular = self._committed(old_reg, rev)
+            entries_then, unparsed, irregular = self._committed(old_reg, rev_tree, rev_blobs)
             if cur is None and (entries_then or unparsed or irregular):
                 out.append(f"register '{old_reg.name}' held entries at {rev} and is gone "
                            "from the config now: a register's entries are never removed")
-            held = self._committed(cur, tip)[0] if cur is not None else {}
+            held = (self._committed(cur, head_tree, head_blobs)[0]
+                    if cur is not None else {})
             for name in irregular:
                 out.append(f"{self._root_rel(name)}: not a regular file at {rev} (a "
                            f"symlink?) in register '{old_reg.name}''s folder: an entry is a "
                            "plain file, so nothing since can be measured against it")
             for name in unparsed:
                 out.append(f"{self._root_rel(name)}: its blob at {rev} is no entry of "
-                           f"register '{old_reg.name}' (stored through a filter, such as "
-                           "git-lfs?), so nothing since can be measured against it")
+                           f"register '{old_reg.name}' (wrong id, or stored through a filter "
+                           "such as git-lfs?), so nothing since can be measured against it")
             for olds in entries_then.values():
                 for old_entry in olds:
                     rel = old_entry.path
-                    old = self._blob(rev, self._git_rel(rel)) or ""
+                    old = rev_blobs.get(self._git_rel(rel), "")
                     holders = [e for e in held.get(old_entry.number, [])
                                if e.item_id == old_entry.item_id]
                     if len(holders) != 1:
@@ -1049,8 +1069,12 @@ class Registers:
                                    f"{rev}; held by: {shown}")
                     else:
                         holder = holders[0]
-                        new = self._blob(tip, self._git_rel(holder.path)) or ""
-                        why = _append_only_violation(old, new)
+                        new = head_blobs.get(self._git_rel(holder.path), "")
+                        if ("\r\n" in old) != ("\r\n" in new):
+                            why = "its line endings changed"
+                        else:  # compared as parse_entry reads them (LF)
+                            why = _append_only_violation(old.replace("\r\n", "\n"),
+                                                         new.replace("\r\n", "\n"))
                         if why is not None:
                             moved = "" if holder.path == rel else f" (moved to {holder.path})"
                             out.append(f"{holder.path}: {old_entry.item_id} changed since {rev} "
