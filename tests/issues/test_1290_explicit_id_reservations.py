@@ -414,7 +414,8 @@ def test_other_actor_still_refused_after_own_next_id(tmp_path, monkeypatch, mode
 @pytest.mark.parametrize("remote", [True, False], ids=["origin", "no-remote"])
 def test_service_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode, remote) -> None:
     repo = make(tmp_path, mode)
-    repo.seed({}, [record(reserved_for(mode, "EXP-003"), by=RESERVER)])
+    # ruled edit (driver, #1290 review r1 ruling 3): the exemption is per id space under global
+    repo.seed({}, [record("EXP-003", by=RESERVER)])
     if not remote:
         git(repo.a, "remote", "remove", "origin")
     monkeypatch.setenv("YURTLE_AGENT", RESERVER)
@@ -429,7 +430,8 @@ def test_service_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode, re
 @pytest.mark.parametrize("mode", MODES)
 def test_service_create_item_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode) -> None:
     repo = make(tmp_path, mode)
-    repo.seed({}, [record(reserved_for(mode, "EXP-003"), by=RESERVER)])
+    # ruled edit (driver, #1290 review r1 ruling 3): the exemption is per id space under global
+    repo.seed({}, [record("EXP-003", by=RESERVER)])
     monkeypatch.setenv("YURTLE_AGENT", RESERVER)
     monkeypatch.chdir(repo.a)
     repo.service().create_item(WorkItemType.EXPEDITION, "Explicit exp", item_id="EXP-003")
