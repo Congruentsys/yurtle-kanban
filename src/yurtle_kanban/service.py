@@ -3577,9 +3577,12 @@ class KanbanService:
                 ids.append((path, found.group(1)))
         return names, ids
 
-    def _allocation_blob(self, base: str, current_id: str, actor: str) -> dict[Path, str]:
+    def _allocation_blob(
+        self, base: str, current_id: str, actor: str, *, reserved: bool = False
+    ) -> dict[Path, str]:
         """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
-        `current_id` allocated by `actor`, keyed by its repo-relative path."""
+        `current_id` allocated by `actor` (`reserved` as `_with_allocation` has it),
+        keyed by its repo-relative path."""
 
         lock_rel = self._repo_relative(
             self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", self._git_toplevel()
@@ -3597,7 +3600,9 @@ class KanbanService:
             )
         except InputRefused as e:
             raise _CasRefusedError(str(e)) from None  # nothing is pushed (#818)
-        return {lock_rel: self._with_allocation(allocations, current_id, actor)}
+        return {
+            lock_rel: self._with_allocation(allocations, current_id, actor, reserved=reserved)
+        }
 
     @staticmethod
     def _local_allocations(lock_file: Path) -> list[dict[str, Any]]:
@@ -3723,10 +3728,17 @@ class KanbanService:
         return item, item.to_markdown()
 
     def _with_allocation(
-        self, allocations: list[dict[str, Any]], current_id: str, actor: str
+        self,
+        allocations: list[dict[str, Any]],
+        current_id: str,
+        actor: str,
+        *,
+        reserved: bool = False,
     ) -> str:
         """`allocations` plus a record for `current_id` (last 100), as JSON text,
-        `allocated_by` the resolved `actor` (#620).
+        `allocated_by` the resolved `actor` (#620). `reserved`: true for `next-id`'s
+        record (a number handed out, no item yet), which blocks another actor's
+        explicit id; false for a create's, whose item consumed the number (#1290).
         The record's `prefix` is the id space it was allocated in: the id minus its
         number (`EXP`, `IDEA-R`, `H130.`), for explicit and auto ids alike (#641)."""
         import json
@@ -3740,6 +3752,7 @@ class KanbanService:
                 "number": number,
                 "allocated_at": datetime.now().isoformat(),
                 "allocated_by": actor,
+                "reserved": reserved,
             },
         ]
         return json.dumps(allocations[-100:], indent=2)
@@ -3970,9 +3983,11 @@ class KanbanService:
         where: str = "",
     ) -> None:
         """Refuse an explicit `item_id` whose number an allocation record reserves
-        (#1290): a record of the same number in the same id space (`H-3` reserves
-        `H-003`, `H130.3` reserves `H130.3`), or, under `id_numbering: global`, of
-        the same number in any dashed id space. A record of the same id space
+        (#1290): only `next-id`'s records (`reserved: true`) and legacy ones with no
+        `reserved` field reserve, a create's (`reserved: false`) never does. Such a
+        record reserves its number in its own id space (`H-3` reserves `H-003`,
+        `H130.3` reserves `H130.3`), and under `id_numbering: global` in every
+        dashed id space. A record of the same id space
         `allocated_by` the explicit actor (`_exempt_actor`) does not block: the
         reserver may use its own number, never another prefix's. Records never
         expire; one dropped from the file no longer reserves. Raises
@@ -3985,6 +4000,8 @@ class KanbanService:
         number = self._dashed_number(item_id) if shared else 0
         actor = self._exempt_actor()
         for record in records:
+            if record.get("reserved", True) is not True:
+                continue  # a create's record: its item consumed the number
             rid = str(record.get("id", ""))
             by = record.get("allocated_by")
             same_space = self._id_key(rid) == key
@@ -4868,7 +4885,7 @@ class KanbanService:
                 made["id"] = self._next_id_at(base, prefix)
                 # the mode origin's config allocated under, for `next-id` (#1288)
                 made["mode"] = self._judge_at(base).config.id_numbering_mode()
-                blobs = self._allocation_blob(base, made["id"], actor)
+                blobs = self._allocation_blob(base, made["id"], actor, reserved=True)
                 # the record's folders are guarded as a create's are (#870)
                 twin = self._folder_twin_refusal(
                     self._tree_names(base), list(blobs), f"allocating {made['id']}"
@@ -4932,7 +4949,9 @@ class KanbanService:
             lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
             allocations = self._local_allocations(lock_file)  # corrupt: refused (#818)
             lock_file.parent.mkdir(parents=True, exist_ok=True)
-            lock_file.write_text(self._with_allocation(allocations, item_id, actor))
+            lock_file.write_text(
+                self._with_allocation(allocations, item_id, actor, reserved=True)
+            )
             try:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
             except GitCommitError as e:
