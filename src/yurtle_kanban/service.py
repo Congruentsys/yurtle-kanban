@@ -44,7 +44,7 @@ from .config import (
     _under,
 )
 from .hooks import HookContext, HookEngine, HookEvent
-from .inputs import GIT_ENV, check_identity, resolve_actor, same_actor
+from .inputs import AGENT_ENV, GIT_ENV, _git_user_name, check_identity, resolve_actor, same_actor
 from .registers import ENTRY_TYPE as REGISTER_ENTRY_TYPE
 from .registers import register_prefixes
 from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
@@ -2385,6 +2385,7 @@ class KanbanService:
             item_id = self._format_id(prefix, self._get_next_id_number(prefix))
         else:
             self._refuse_global_holder(item_id)  # before anything is written (#1288)
+            self._refuse_reserved_here(item_id)  # (#1290)
 
         # Determine file path
         if path is None:
@@ -2574,6 +2575,7 @@ class KanbanService:
         if item_id is not None:
             try:
                 self._refuse_global_holder(item_id)  # (#1288)
+                self._refuse_reserved_here(item_id)  # (#1290)
             except InputRefused as e:
                 return self._push_failed(str(e))
         current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
@@ -2688,6 +2690,12 @@ class KanbanService:
                         f"{held}: under `id_numbering: global` every prefix shares one "
                         "sequence; nothing was created"
                     )
+                try:  # a number base's allocation records reserve (#1290)
+                    judge._refuse_reserved(
+                        item_id, judge._records_at(base), " on the default branch"
+                    )
+                except InputRefused as e:
+                    raise _CasRefusedError(str(e)) from None
             current_id = item_id or self._next_id_at(base, prefix)
             text_in = render(current_id) if render is not None else content
             if render is not None:
@@ -3574,9 +3582,12 @@ class KanbanService:
                 ids.append((path, found.group(1)))
         return names, ids
 
-    def _allocation_blob(self, base: str, current_id: str, actor: str) -> dict[Path, str]:
+    def _allocation_blob(
+        self, base: str, current_id: str, actor: str, *, reserved: bool = False
+    ) -> dict[Path, str]:
         """`_ID_ALLOCATIONS.json` as commit `base` has it, plus a record for
-        `current_id` allocated by `actor`, keyed by its repo-relative path."""
+        `current_id` allocated by `actor` (`reserved` as `_with_allocation` has it),
+        keyed by its repo-relative path."""
 
         lock_rel = self._repo_relative(
             self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", self._git_toplevel()
@@ -3594,7 +3605,9 @@ class KanbanService:
             )
         except InputRefused as e:
             raise _CasRefusedError(str(e)) from None  # nothing is pushed (#818)
-        return {lock_rel: self._with_allocation(allocations, current_id, actor)}
+        return {
+            lock_rel: self._with_allocation(allocations, current_id, actor, reserved=reserved)
+        }
 
     @staticmethod
     def _local_allocations(lock_file: Path) -> list[dict[str, Any]]:
@@ -3720,10 +3733,17 @@ class KanbanService:
         return item, item.to_markdown()
 
     def _with_allocation(
-        self, allocations: list[dict[str, Any]], current_id: str, actor: str
+        self,
+        allocations: list[dict[str, Any]],
+        current_id: str,
+        actor: str,
+        *,
+        reserved: bool = False,
     ) -> str:
         """`allocations` plus a record for `current_id` (last 100), as JSON text,
-        `allocated_by` the resolved `actor` (#620).
+        `allocated_by` the resolved `actor` (#620). `reserved`: true for `next-id`'s
+        record (a number handed out, no item yet), which blocks another actor's
+        explicit id; false for a create's, whose item consumed the number (#1290).
         The record's `prefix` is the id space it was allocated in: the id minus its
         number (`EXP`, `IDEA-R`, `H130.`), for explicit and auto ids alike (#641)."""
         import json
@@ -3737,6 +3757,7 @@ class KanbanService:
                 "number": number,
                 "allocated_at": datetime.now().isoformat(),
                 "allocated_by": actor,
+                "reserved": reserved,
             },
         ]
         return json.dumps(allocations[-100:], indent=2)
@@ -3923,6 +3944,111 @@ class KanbanService:
                 f"{item_id}'s number is already held by {holder}: under `id_numbering: "
                 "global` every prefix shares one sequence; nothing was created"
             )
+
+    def _local_records(self) -> list[dict[str, Any]]:
+        """The checkout's allocation records, read only: none when the file is
+        missing; a corrupt or unreadable one is refused (#1095, #1161)."""
+        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+        return _parse_allocations(_local_allocations_text(lock_file), str(lock_file))
+
+    def _records_at(self, rev: str) -> list[dict[str, Any]]:
+        """The allocation records commit `rev` holds, read only: none when it has no
+        file; a corrupt one is refused (#1095)."""
+        lock_rel = self._repo_relative(
+            self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", self._git_toplevel()
+        )
+        if lock_rel is None:
+            return []
+        shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}", text=False)
+        if shown.returncode != 0:
+            return []
+        where = f"{lock_rel.as_posix()} at {rev}"
+        return _parse_allocations(_allocations_text(shown.stdout, where), where)
+
+    def _exempt_actor(self) -> str | None:
+        """The actor whose own reservations an explicit id may take (#1290): only an
+        explicit one ($YURTLE_AGENT), never git user.name, which every session on a
+        machine shares (`resolve_actor`'s coordination rule); None when unset, and
+        then every record blocks."""
+        try:
+            return resolve_actor(None, allow_git_fallback=False, cwd=self.repo_root)
+        except InputRefused:
+            return None
+
+    def _refuse_reserved_here(self, item_id: str) -> None:
+        """`_refuse_reserved` against the checkout's records and, as
+        `_refuse_global_holder` reads it, the already-fetched origin/<default>'s
+        (no network; a git failure reading it leaves the local check) (#1290)."""
+        self._refuse_reserved(item_id, self._local_records())
+        with suppress(subprocess.TimeoutExpired, OSError):
+            ref = self._fetched_default()
+            if ref is not None:
+                records = self._records_at(ref)
+                self._refuse_reserved(item_id, records, " on the fetched default branch")
+
+    def _refuse_reserved(
+        self,
+        item_id: str,
+        records: list[dict[str, Any]],
+        where: str = "",
+    ) -> None:
+        """Refuse an explicit `item_id` whose number an allocation record reserves
+        (#1290): only `next-id`'s records (`reserved: true`) and legacy ones with no
+        `reserved` field reserve, a create's (`reserved: false`) never does, and a
+        reservation a LATER create's record of the same id consumes no longer does. Such a
+        record reserves its number in its own id space (`H-3` reserves `H-003`,
+        `H130.3` reserves `H130.3`), and under `id_numbering: global` in every
+        dashed id space. A record of the same id space
+        `allocated_by` the explicit actor (`_exempt_actor`) does not block: the
+        reserver may use its own number, never another prefix's. Records never
+        expire; one dropped from the file no longer reserves. Raises
+        `InputRefused` naming the record, who made it and when."""
+        key = self._id_key(item_id)
+        if key is None:
+            return
+        space = self._dashed_space(item_id)
+        shared = space is not None and self._numbers_globally(space)
+        number = self._dashed_number(item_id) if shared else 0
+        actor = self._exempt_actor()
+        consumed: set[tuple[str, int]] = set()  # ids a later create's record holds
+        for record in reversed(records):  # newest first: a later create consumes it
+            rkey = self._id_key(str(record.get("id", "")))
+            if record.get("reserved", True) is not True:
+                if rkey is not None:
+                    consumed.add(rkey)
+                continue  # a create's record: its item consumed the number
+            if rkey in consumed:
+                continue  # the reservation was used by a later create
+            rid = str(record.get("id", ""))
+            by = record.get("allocated_by")
+            same_space = self._id_key(rid) == key
+            if not same_space and not (shared and self._dashed_number(rid) == number):
+                continue
+            if same_space and actor is not None and isinstance(by, str) and same_actor(by, actor):
+                continue
+            raise InputRefused(
+                f"{item_id}'s number is reserved by {by or 'an unnamed actor'} at "
+                f"{record.get('allocated_at') or 'an unrecorded time'} ({rid}'s "
+                f"allocation record{where}"
+                + (": under `id_numbering: global` every prefix shares one sequence"
+                   if shared and self._id_key(rid) != key else "")
+                + "); nothing was created"
+                + self._own_reservation_hint(by)
+            )
+
+    def _own_reservation_hint(self, by: object) -> str:
+        """A hint to set $YURTLE_AGENT when it is unset and the record names this
+        checkout's git user.name: that name may be this session's, but sessions share
+        it, so it never exempts (#1290 review r2); else nothing."""
+        if not isinstance(by, str) or os.environ.get(AGENT_ENV) is not None:
+            return ""
+        name = _git_user_name(self.repo_root)
+        if name is None or not same_actor(by, name):
+            return ""
+        return (
+            f"; if this is your reservation, set ${AGENT_ENV} (sessions share git "
+            "user.name, so it cannot prove the record is yours)"
+        )
 
     def _fetched_default(self) -> str | None:
         """The already-fetched `refs/remotes/origin/<default>`, when this clone has
@@ -4776,7 +4902,7 @@ class KanbanService:
                 made["id"] = self._next_id_at(base, prefix)
                 # the mode origin's config allocated under, for `next-id` (#1288)
                 made["mode"] = self._judge_at(base).config.id_numbering_mode()
-                blobs = self._allocation_blob(base, made["id"], actor)
+                blobs = self._allocation_blob(base, made["id"], actor, reserved=True)
                 # the record's folders are guarded as a create's are (#870)
                 twin = self._folder_twin_refusal(
                     self._tree_names(base), list(blobs), f"allocating {made['id']}"
@@ -4840,7 +4966,9 @@ class KanbanService:
             lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
             allocations = self._local_allocations(lock_file)  # corrupt: refused (#818)
             lock_file.parent.mkdir(parents=True, exist_ok=True)
-            lock_file.write_text(self._with_allocation(allocations, item_id, actor))
+            lock_file.write_text(
+                self._with_allocation(allocations, item_id, actor, reserved=True)
+            )
             try:
                 self._commit_paths([lock_file], f"Allocate ID: {item_id}")
             except GitCommitError as e:
