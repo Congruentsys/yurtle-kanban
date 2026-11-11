@@ -2380,6 +2380,7 @@ class KanbanService:
             item_id = self._format_id(prefix, self._get_next_id_number(prefix))
         else:
             self._refuse_global_holder(item_id)  # before anything is written (#1288)
+            self._refuse_reserved(item_id, self._local_records(), self._actor_or_none())
 
         # Determine file path
         if path is None:
@@ -2569,6 +2570,7 @@ class KanbanService:
         if item_id is not None:
             try:
                 self._refuse_global_holder(item_id)  # (#1288)
+                self._refuse_reserved(item_id, self._local_records(), actor)  # (#1290)
             except InputRefused as e:
                 return self._push_failed(str(e))
         current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
@@ -2683,6 +2685,12 @@ class KanbanService:
                         f"{held}: under `id_numbering: global` every prefix shares one "
                         "sequence; nothing was created"
                     )
+                try:  # a number base's allocation records reserve (#1290)
+                    judge._refuse_reserved(
+                        item_id, judge._records_at(base), actor, " on the default branch"
+                    )
+                except InputRefused as e:
+                    raise _CasRefusedError(str(e)) from None
             current_id = item_id or self._next_id_at(base, prefix)
             text_in = render(current_id) if render is not None else content
             if render is not None:
@@ -3912,6 +3920,70 @@ class KanbanService:
             raise InputRefused(
                 f"{item_id}'s number is already held by {holder}: under `id_numbering: "
                 "global` every prefix shares one sequence; nothing was created"
+            )
+
+    def _local_records(self) -> list[dict[str, Any]]:
+        """The checkout's allocation records, read only: none when the file is
+        missing; a corrupt or unreadable one is refused (#1095, #1161)."""
+        lock_file = self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json"
+        return _parse_allocations(_local_allocations_text(lock_file), str(lock_file))
+
+    def _records_at(self, rev: str) -> list[dict[str, Any]]:
+        """The allocation records commit `rev` holds, read only: none when it has no
+        file; a corrupt one is refused (#1095)."""
+        lock_rel = self._repo_relative(
+            self.repo_root / ".kanban" / "_ID_ALLOCATIONS.json", self._git_toplevel()
+        )
+        if lock_rel is None:
+            return []
+        shown = self._git_run("show", f"{rev}:{lock_rel.as_posix()}", text=False)
+        if shown.returncode != 0:
+            return []
+        where = f"{lock_rel.as_posix()} at {rev}"
+        return _parse_allocations(_allocations_text(shown.stdout, where), where)
+
+    def _actor_or_none(self) -> str | None:
+        """The actor an allocation record would name (`resolve_actor`: $YURTLE_AGENT,
+        then git user.name), or None when there is none (#1290)."""
+        try:
+            return resolve_actor(None, cwd=self.repo_root)
+        except InputRefused:
+            return None
+
+    def _refuse_reserved(
+        self,
+        item_id: str,
+        records: list[dict[str, Any]],
+        actor: str | None,
+        where: str = "",
+    ) -> None:
+        """Refuse an explicit `item_id` whose number an allocation record reserves
+        for another actor (#1290): a record of the same number in the same id space
+        (`H-3` reserves `H-003`, `H130.3` reserves `H130.3`), or, under
+        `id_numbering: global`, of the same number in any dashed id space. A record
+        `allocated_by` the `actor` itself does not block: the reserver may use its
+        own number. Records never expire; one dropped from the file no longer
+        reserves. Raises `InputRefused` naming the record, who made it and when."""
+        key = self._id_key(item_id)
+        if key is None:
+            return
+        space = self._dashed_space(item_id)
+        shared = space is not None and self._numbers_globally(space)
+        number = self._dashed_number(item_id) if shared else 0
+        for record in records:
+            rid = str(record.get("id", ""))
+            by = record.get("allocated_by")
+            if actor is not None and isinstance(by, str) and same_actor(by, actor):
+                continue
+            if self._id_key(rid) != key and not (shared and self._dashed_number(rid) == number):
+                continue
+            raise InputRefused(
+                f"{item_id}'s number is reserved by {by or 'an unnamed actor'} at "
+                f"{record.get('allocated_at') or 'an unrecorded time'} ({rid}'s "
+                f"allocation record{where}"
+                + (": under `id_numbering: global` every prefix shares one sequence"
+                   if shared and self._id_key(rid) != key else "")
+                + "); nothing was created"
             )
 
     def _fetched_default(self) -> str | None:
