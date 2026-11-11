@@ -593,6 +593,42 @@ class Registers:
                         for p in base.rglob("*") if p.is_symlink()}
         return sorted(bad)
 
+    def _blob(self, rev: str, name: str) -> str | None:
+        """The committed bytes of `name` at `rev`, as git stores them (no filter,
+        no working tree), decoded as UTF-8; None when absent or undecodable."""
+        shown = self.service._git_run("cat-file", "blob", f"{rev}:{name}", text=False)
+        if shown.returncode != 0:
+            return None
+        out = shown.stdout
+        try:
+            return out.decode("utf-8") if isinstance(out, bytes) else out
+        except UnicodeDecodeError:
+            return None
+
+    def _committed(
+        self, reg: Register, rev: str
+    ) -> tuple[dict[int, list[Entry]], list[str], list[str]]:
+        """`reg`'s entries as commit `rev` stores them (blobs, never the working
+        tree): entries by number, the git paths of regular `.md` blobs that parse as
+        no entry of `reg`, and the git paths that are not regular files."""
+        folder = self._git_rel(reg.path)
+        found: dict[int, list[Entry]] = {}
+        unparsed: list[str] = []
+        irregular: list[str] = []
+        for name, mode in sorted(self._modes(rev, folder).items()):
+            if not name.endswith(".md"):
+                continue
+            if mode not in _REGULAR:
+                irregular.append(name)
+                continue
+            content = self._blob(rev, name)
+            entry = None if content is None else parse_entry(reg, self._root_rel(name), content)
+            if entry is None:
+                unparsed.append(name)
+            else:
+                found.setdefault(entry.number, []).append(entry)
+        return found, unparsed, irregular
+
     def _number_of_name(self, reg: Register, name: str) -> int | None:
         stem = name.rsplit("/", 1)[-1]
         m = re.match(rf"{re.escape(reg.id_prefix)}-0*([1-9][0-9]*)(?![0-9])", stem, re.I)
@@ -950,12 +986,15 @@ class Registers:
         return out
 
     def _since(self, rev: str) -> list[str]:
-        """`rev`'s entries judged by identity, under the registers `rev`'s own config
+        """Both sides read from git objects, `rev`'s blobs and HEAD's, never the
+        working tree (uncommitted edits are plain `validate`'s concern). `rev`'s
+        entries are judged by identity, under the registers `rev`'s own config
         names: each (register, id) at `rev` must be held by exactly one file in that
         register's CURRENT folder, append-only against the `rev` file
         (`_append_only_violation`), wherever it now lives (a pure move or rename is
-        fine). A `rev` path still present that is not that holder is "left behind";
-        a path that was not a regular file at `rev` is an error, never skipped. A
+        fine). A `rev` path still at HEAD that is not that holder is "left behind";
+        a path that is not a regular file, or a `.md` blob that parses as no entry,
+        at `rev` or under a current folder at HEAD, is an error, never skipped. A
         register `rev` had and today's config lacks is an error when it held
         entries at `rev`."""
         svc = self.service
@@ -968,52 +1007,60 @@ class Registers:
             return [f"--since {rev}: the registers config at {rev} does not load: {e}"]
         now = {reg.name: reg for reg in self.registers}
         out = []
-        top = svc._git_toplevel()
+        head = svc._git_run("rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+        if head.returncode != 0:
+            return [f"--since {rev}: there is no HEAD commit to measure"]
+        tip = head.stdout.strip()
+        head_tree = self._modes(tip)
+        for cur in self.registers:  # HEAD's side: every blob under a current folder
+            _, unparsed, irregular = self._committed(cur, tip)
+            for name in irregular:
+                out.append(f"{self._root_rel(name)}: not a regular file at HEAD (a symlink?) "
+                           f"in register '{cur.name}''s folder: an entry is a plain file")
+            for name in unparsed:
+                out.append(f"{self._root_rel(name)}: its blob at HEAD is no entry of register "
+                           f"'{cur.name}' (stored through a filter, such as git-lfs?); an "
+                           "entry is stored as its own text")
         for old_reg in then:
             cur = now.get(old_reg.name)
-            names = self._names(old_reg, rev)
-            if cur is None and names:  # an empty register may go: it removes nothing
+            entries_then, unparsed, irregular = self._committed(old_reg, rev)
+            if cur is None and (entries_then or unparsed or irregular):
                 out.append(f"register '{old_reg.name}' held entries at {rev} and is gone "
                            "from the config now: a register's entries are never removed")
-            held = self.entries(cur)[0] if cur is not None else {}
-            for name in self._irregular(old_reg, rev):
+            held = self._committed(cur, tip)[0] if cur is not None else {}
+            for name in irregular:
                 out.append(f"{self._root_rel(name)}: not a regular file at {rev} (a "
                            f"symlink?) in register '{old_reg.name}''s folder: an entry is a "
                            "plain file, so nothing since can be measured against it")
-            irregular = set(self._irregular(old_reg, rev))
-            for name in names:
-                if name in irregular:
-                    continue
-                old = svc._git_run("show", f"{rev}:{name}").stdout
-                old_entry = parse_entry(old_reg, name, old)
-                if old_entry is None:
-                    continue  # no entry at `rev`: the stray check's business then
-                rel = self._root_rel(name)
-                holders = [e for e in held.get(old_entry.number, [])
-                           if e.item_id == old_entry.item_id]
-                if len(holders) != 1:
-                    shown = ", ".join(e.path for e in holders) or "none"
-                    out.append(f"{rel}: {old_entry.item_id} must be held by exactly one file "
-                               f"in register '{old_reg.name}''s folder now, as at {rev}; "
-                               f"held by: {shown}")
-                else:
-                    holder = holders[0]
-                    try:
-                        new = (self.root / holder.path).read_text(encoding="utf-8")
-                    except (OSError, UnicodeDecodeError):
-                        new = ""
-                    why = _append_only_violation(old, new)
-                    if why is not None:
-                        moved = "" if holder.path == rel else f" (moved to {holder.path})"
-                        out.append(f"{holder.path}: {old_entry.item_id} changed since {rev} "
-                                   f"other than by appending to its yurtle block (an entry "
-                                   f"is append-only; at {rev} it was {rel}){moved}: {why}")
-                path = top / name
-                if (path.exists() or path.is_symlink()) and not (
-                    len(holders) == 1 and holders[0].path == rel
-                ):
-                    out.append(f"{rel}: left behind: {old_entry.item_id}'s file at {rev} is "
-                               "still here but is not the entry's file now")
+            for name in unparsed:
+                out.append(f"{self._root_rel(name)}: its blob at {rev} is no entry of "
+                           f"register '{old_reg.name}' (stored through a filter, such as "
+                           "git-lfs?), so nothing since can be measured against it")
+            for olds in entries_then.values():
+                for old_entry in olds:
+                    rel = old_entry.path
+                    old = self._blob(rev, self._git_rel(rel)) or ""
+                    holders = [e for e in held.get(old_entry.number, [])
+                               if e.item_id == old_entry.item_id]
+                    if len(holders) != 1:
+                        shown = ", ".join(e.path for e in holders) or "none"
+                        out.append(f"{rel}: {old_entry.item_id} must be held by exactly one "
+                                   f"file in register '{old_reg.name}''s folder at HEAD, as at "
+                                   f"{rev}; held by: {shown}")
+                    else:
+                        holder = holders[0]
+                        new = self._blob(tip, self._git_rel(holder.path)) or ""
+                        why = _append_only_violation(old, new)
+                        if why is not None:
+                            moved = "" if holder.path == rel else f" (moved to {holder.path})"
+                            out.append(f"{holder.path}: {old_entry.item_id} changed since {rev} "
+                                       "other than by appending to its yurtle block (an entry "
+                                       f"is append-only; at {rev} it was {rel}){moved}: {why}")
+                    if self._git_rel(rel) in head_tree and not (
+                        len(holders) == 1 and holders[0].path == rel
+                    ):
+                        out.append(f"{rel}: left behind: {old_entry.item_id}'s file at {rev} "
+                                   "is still at HEAD but is not the entry's file now")
         return out
 
     def _registers_at(self, rev: str) -> list[Register]:
