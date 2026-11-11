@@ -371,7 +371,8 @@ def run_as(repo: Repo, monkeypatch, actor: str, argv: list[str], push: bool):
 @PUSH
 def test_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode, push) -> None:
     repo = make(tmp_path, mode)
-    reserved = reserved_for(mode, "H-003")
+    # ruled edit (driver, #1290 review r1 ruling 3): the exemption is per id space under global
+    reserved = "H-003"
     repo.seed({}, [record(reserved, by=RESERVER)])
     result, out = run_as(repo, monkeypatch, RESERVER, ENTRY["hypothesis"][0]("H-003"), push)
     assert_created(repo, result, out, "H-003", push)
@@ -383,7 +384,8 @@ def test_reserver_may_use_its_own_next_id(tmp_path, monkeypatch, mode, push) -> 
     """End to end: A runs `next-id` as RESERVER, then creates that number with `--id` as the
     same actor."""
     repo = make(tmp_path, mode)
-    reserve_prefix = "H" if mode == "per_type" else "CHORE"
+    # ruled edit (driver, #1290 review r1 ruling 3): the exemption is per id space under global
+    reserve_prefix = "H"
     monkeypatch.setenv("YURTLE_AGENT", RESERVER)
     got = repo.cli(monkeypatch, "next-id", reserve_prefix, "--json")
     assert got.exit_code == 0, output_of(got)
