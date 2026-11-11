@@ -315,6 +315,8 @@ class Entry:
     relations: list[tuple[str, str]] = field(default_factory=list)  # (kind, target id)
     allocated_for: str | None = None
     events: list[dict[str, str]] = field(default_factory=list)
+    allocations: list[str] = field(default_factory=list)  # every kb:allocatedFor
+    front_allocated_for: str | None = None  # the frontmatter's `allocated_for`
 
 
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)^---[^\n]*\n", re.S | re.M)
@@ -387,10 +389,12 @@ def parse_entry(reg: Register, path: str, content: str) -> Entry | None:
     if number is None:
         return None
     created = front.get("created")
+    front_for = front.get("allocated_for")
     entry = Entry(
         number=number, item_id=str(front["id"]), path=path,
         title=str(front.get("title") or reg.cite(number)), status=RESERVED,
         created=None if created is None else str(created),
+        front_allocated_for=None if front_for is None else str(front_for),
     )
     span = _block_span(content)
     heading = content.find(_TEXT_HEADING, m.end() - 1)
@@ -415,6 +419,7 @@ def parse_entry(reg: Register, path: str, content: str) -> Entry | None:
             entry.relations.append((rm.group(1), _value(rm.group(2))))
         elif am := re.fullmatch(r"<>\s+kb:allocatedFor\s+(.+?)\s*\.", stripped):
             entry.allocated_for = _value(am.group(1))
+            entry.allocations.append(entry.allocated_for)
     for ev in entry.events:
         entry.status = ev.get("status", entry.status)
         entry.title = ev.get("title", entry.title)
@@ -836,6 +841,15 @@ class Registers:
             out.append(f"{entry.path}: {cite}'s text does not match its kb:textDigest")
         if entry.digest is None and entry.text is not None:
             out.append(f"{entry.path}: {cite} has text but no kb:textDigest")
+        if len(entry.allocations) > 1:
+            out.append(f"{entry.path}: {cite} has {len(entry.allocations)} kb:allocatedFor "
+                       "facts: a number is allocated once")
+        if entry.allocations[:1] != ([] if entry.front_allocated_for is None
+                                     else [entry.front_allocated_for]):
+            out.append(f"{entry.path}: {cite}'s kb:allocatedFor "
+                       f"({entry.allocations[0] if entry.allocations else 'none'}) and "
+                       f"frontmatter allocated_for ({entry.front_allocated_for or 'none'}) "
+                       "disagree")
         digests = [ev for ev in entry.events if "textDigest" in ev]
         if len(digests) > 1:
             out.append(f"{entry.path}: {cite} has {len(digests)} kb:textDigest events: its "
@@ -900,45 +914,80 @@ class Registers:
         return out
 
     def _since(self, rev: str) -> list[str]:
-        """Each entry file changed since `rev` other than by inserted lines."""
+        """Each entry file that existed at `rev`, under a folder of the registers
+        `rev`'s own config names, and is not now that file grown only as an entry
+        may grow (`_append_only_violation`). A file gone from its path is accepted
+        only as a pure move: the same id under the same register's current folder,
+        append-only against the `rev` file. A register `rev` had and today's config
+        lacks is an error when it held entries at `rev`."""
         svc = self.service
         ok = svc._git_run("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
         if ok.returncode != 0:
             return [f"--since {rev}: not a commit"]
-        folders = [self._git_rel(reg.path) for reg in self.registers]
-        if not folders:
-            return []
-        diff = svc._git_z("diff", "--name-status", "-z", rev, "--", *folders)
-        parts = [p for p in diff.stdout.split("\0") if p]
-        changes: list[tuple[str, str]] = []
-        while parts:
-            status = parts.pop(0)
-            if status[:1] in ("R", "C") and len(parts) >= 2:  # old path, then new
-                old_name, new_name = parts.pop(0), parts.pop(0)
-                if status.startswith("R"):
-                    changes.append(("D", old_name))
-                changes.append(("A", new_name))
-            elif parts:
-                changes.append((status, parts.pop(0)))
+        try:
+            then = self._registers_at(rev)
+        except InputRefused as e:
+            return [f"--since {rev}: the registers config at {rev} does not load: {e}"]
+        now = {reg.name: reg for reg in self.registers}
         out = []
         top = svc._git_toplevel()
-        for status, name in changes:
-            if not name.endswith(".md"):
-                continue
-            rel = self._root_rel(name)
-            if status.startswith("D"):
-                out.append(f"{rel}: an entry file was deleted or renamed since {rev}")
-            elif status.startswith("M") or status.startswith("T"):
+        for old_reg in then:
+            cur = now.get(old_reg.name)
+            names = self._names(old_reg, rev)
+            if cur is None and names:  # an empty register may go: it removes nothing
+                out.append(f"register '{old_reg.name}' held entries at {rev} and is gone "
+                           "from the config now: a register's entries are never removed")
+            moved = self.entries(cur)[0] if cur is not None else {}
+            for name in names:
                 old = svc._git_run("show", f"{rev}:{name}").stdout
-                try:
-                    new = (top / name).read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    new = ""
-                why = _append_only_violation(old, new)
-                if why is not None:
-                    out.append(f"{rel}: changed since {rev} other than by appending to its "
-                               f"yurtle block (an entry is append-only): {why}")
+                old_entry = parse_entry(old_reg, name, old)
+                if old_entry is None:
+                    continue  # no entry at `rev`: the stray check's business then
+                rel = self._root_rel(name)
+                path = top / name
+                if path.is_file():
+                    try:
+                        new = path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        new = ""
+                    why = _append_only_violation(old, new)
+                    if why is not None:
+                        out.append(f"{rel}: changed since {rev} other than by appending to "
+                                   f"its yurtle block (an entry is append-only): {why}")
+                    continue
+                candidates = [e for e in moved.get(old_entry.number, [])
+                              if e.item_id == old_entry.item_id]
+                passed = False
+                for cand in candidates:
+                    try:
+                        new = (self.root / cand.path).read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    if _append_only_violation(old, new) is None:
+                        passed = True
+                        break
+                if not passed:
+                    where = (" (" + ", ".join(c.path for c in candidates)
+                             + " holds its id but is not that file grown append-only)"
+                             if candidates else "")
+                    out.append(f"{rel}: an entry file was deleted or renamed since {rev}"
+                               + where)
         return out
+
+    def _registers_at(self, rev: str) -> list[Register]:
+        """The registers the config at `rev` configures (the config path the repo
+        uses: `.yurtle-kanban/config.yaml`, else `.kanban/config.yaml`)."""
+        for folder in (".yurtle-kanban", ".kanban"):
+            name = self._git_rel(f"{folder}/config.yaml")
+            shown = self.service._git_run("show", f"{rev}:{name}")
+            if shown.returncode != 0:
+                continue
+            try:
+                data = yaml.safe_load(shown.stdout) or {}
+            except yaml.YAMLError as e:
+                raise InputRefused(str(e)) from None
+            return load_registers(data.get("registers") if isinstance(data, dict) else None)
+        return []
 
     # graph
 
