@@ -32,6 +32,7 @@ from ..models import (
     unknown_priority_message,
 )
 from ..service import KanbanService
+from ..sync import HALTED, ExitCode, Outcome
 
 logger = get_logger("yurtle-kanban-mcp")  # escapes control characters (#215)
 
@@ -198,6 +199,15 @@ class KanbanMCPServer:
                                 " or duplicate"
                             ),
                         },
+                        "push": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": (
+                                "Push it to origin as one commit, as the CLI's `move`"
+                                " does (#1279, #1283): true by default in a repo"
+                                " with an origin remote; false moves it here only"
+                            ),
+                        },
                     },
                     "required": ["item_id", "new_status"],
                 },
@@ -290,6 +300,15 @@ class KanbanMCPServer:
                             "description": (
                                 "Who is commenting; omitted = $YURTLE_AGENT, "
                                 "then git user.name"
+                            ),
+                        },
+                        "push": {
+                            "type": "boolean",
+                            "default": True,
+                            "description": (
+                                "Push it to origin as one commit, as the CLI's `comment`"
+                                " does (#1279, #1283): true by default in a repo"
+                                " with an origin remote; false adds it here only"
                             ),
                         },
                     },
@@ -568,12 +587,52 @@ class KanbanMCPServer:
             "message": f"Created {item.id}: {item.title}",
         }
 
+    def _wants_push(self, args: dict[str, Any]) -> bool:
+        """`push` as given; omitted (or null, #728), push when the repo has an
+        `origin` remote, as the CLI's `move` and `comment` do (#1279, #1283)."""
+        push = args.get("push")
+        return self.service.has_origin() if push is None else bool(push)
+
+    def _push_reply(self, outcome: Outcome, item_id: str) -> dict[str, Any]:
+        """A `*_push` Outcome in MCP's shape (#1283): a success carries its message;
+        a plain refusal is the tools' usual `{"error": <its message>}`; any other
+        failure adds the CLI's `exit_code` (3 lost, 4 unreachable, 5 busy, 6 push
+        refused, 8 halted), so an agent can tell an unreachable origin from a
+        refusal, as the CLI's exit code tells it."""
+        if outcome.kind in ("won", "noop"):
+            # a long-lived server: the checkout may have been fast-forwarded (#732)
+            self.service.scan()
+        code = HALTED if outcome.halted else int(outcome.exit_code)
+        if code != 0:
+            reply: dict[str, Any] = {"error": outcome.message}
+            if code != int(ExitCode.REFUSED):
+                reply["exit_code"] = code
+            if outcome.halted:
+                reply["halted"] = True
+            return reply
+        return {
+            "success": True,
+            "item_id": item_id,
+            "pushed": outcome.kind == "won",
+            "sha": outcome.sha,
+            "message": outcome.message,
+        }
+
     def _move_item(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Move a work item to a new status."""
+        """Move a work item to a new status: pushed to origin by default, like the
+        CLI's `move` (#1279, #1283); `push: false` moves it here only."""
+        if error := self._check_booleans(args, "push"):
+            return error
         item_id = fold_id(args["item_id"])
         # the same resolver as the CLI's --agent (#580); a blank `agent` is refused,
         # not treated as absent. It is kb:by and whom the holder guard asks (#574)
         actor = resolve_actor(args.get("agent"), cwd=self.repo_root, flag="agent")
+        if self._wants_push(args):
+            # origin's item and its theme judge it; every refusal is an outcome (#1251)
+            return self._push_reply(self.service.move_item_push(
+                item_id, str(args["new_status"]), actor=actor,
+                resolution=args.get("resolution"), superseded_by=args.get("superseded_by"),
+            ), item_id)
         # a long-lived server: see duplicates as the files are now (#732, #742)
         self.service.scan()
         target = self.service.get_item(item_id)
@@ -658,7 +717,10 @@ class KanbanMCPServer:
         }
 
     def _add_comment(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Add a comment to an item."""
+        """Add a comment to an item: pushed to origin by default, like the CLI's
+        `comment` (#1279, #1283); `push: false` adds it here only."""
+        if error := self._check_booleans(args, "push"):
+            return error
         item_id = fold_id(args["item_id"])
         comment = args["comment"]
         # the same resolver as the CLI's --agent: no "agent" default (#580)
@@ -667,6 +729,9 @@ class KanbanMCPServer:
         # with the public check the CLI uses (#767)
         check_encodable("comment", comment)
         check_encodable("author", author)
+        if self._wants_push(args):
+            outcome = self.service.add_comment_push(item_id, comment, author)
+            return self._push_reply(outcome, item_id)
         self.service.scan()  # see duplicates as the files are now (#732, #742)
 
         item = self.service.add_comment(item_id, comment, author)

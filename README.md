@@ -414,14 +414,27 @@ yurtle-kanban-mcp
 | `kanban_list_items` | List items with optional filters |
 | `kanban_get_item` | Get item by ID |
 | `kanban_create_item` | Create new item |
-| `kanban_move_item` | Move item to new status |
+| `kanban_move_item` | Move item to new status (pushed to origin by default; `push: false` stays local) |
 | `kanban_get_board` | Get full board state |
 | `kanban_get_my_items` | Get items for assignee |
 | `kanban_get_blocked` | Blocked items, as `blocked --json` (optional `board`, `all`) |
 | `kanban_suggest_next` | Suggest next item to work on |
-| `kanban_add_comment` | Add comment to item |
+| `kanban_add_comment` | Add comment to item (pushed to origin by default; `push: false` stays local) |
 | `kanban_update_item` | Update item properties |
 | **`kanban_next_id`** | **Allocate next ID (prevents duplicates!)** |
+
+### Writes push by default
+
+In a repo with an `origin` remote, `kanban_move_item` and `kanban_add_comment` push by
+default, as the CLI's `move` and `comment` do (#1279, #1283): the change is made to the item
+as origin's default branch has it and pushed as one race-free commit; a clean checkout on the
+default branch is fast-forwarded, any other checkout is left untouched. Pass `"push": false`
+to edit the local checkout only, as before. A repo with no remote commits locally either way.
+
+A pushed write that is refused replies `{"error": "..."}`, as before; any other failure adds
+`exit_code`, the CLI's: `3` lost to a holder, `4` origin unreachable (nothing is written
+locally; retry, or pass `"push": false`), `5` remote busy, `6` push refused, `8` halted.
+`kanban_create_item` and `kanban_update_item` do not push.
 
 ### Critical: Using `kanban_next_id` for Multi-Agent Safety
 
