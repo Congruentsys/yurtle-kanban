@@ -10,6 +10,55 @@ and are assembled into a release section by `scripts/assemble_changelog.py`.
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-11-11
+
+### Added
+
+- **Append-only numbered registers, stored as item files** (#1294). A top-level `registers:`
+  list in `.kanban/config.yaml` configures registers (decisions, directives, letter series) with
+  their own id space (under `per_type` and `global`), a cite form and pattern, scan globs,
+  statuses, relations, an optional generated index and an exempt file; `sequence: integer` or
+  `alpha`. The `register` group: `alloc` (one compare-and-swap commit to origin, a reserved
+  entry, prints the number), `fill` (the text once, with `kb:textDigest`, `--narrows` /
+  `--supersedes`), `set` (status/title as appended `kb:statusChange` events), `show`, `list`,
+  `index [--write]`, `cites` and `import`; with `index:` configured each pushed commit also
+  regenerates the index. Entries (`kb:RegisterEntry`) are never work; the
+  query graph adds `kb:narrows`, `kb:supersedes` and the derived inverse `kb:supersededBy`.
+  `validate` checks the registers, and `validate --since REV` refuses an entry file changed
+  other than by inserted lines.
+
+### Changed
+
+- **Breaking:** MCP `kanban_move_item` and `kanban_add_comment` push by default in a repo with an `origin` remote, as the CLI's `move` and `comment` have since #1279: one race-free commit on origin's copy, judged there, with the CLI's retries. Pass `"push": false` to edit locally as before; a repo with no remote is unchanged. A successful pushed reply carries `item_id` (the file's spelling), `item`, `pushed` and `sha`; the local move reply now carries `item_id` too. A pushed write refused replies `{"error": ...}` as before; any other failure adds the CLI's `exit_code` (4: origin unreachable, nothing written locally). `kanban_create_item`, `kanban_update_item` and `kanban_next_id` are unchanged (#1283).
+
+### Fixed
+
+- **An explicit id could take a number `next-id` reserved** before its item was written:
+  `hypothesis create --id`, `measure create --id`, `experiment create`, `paper create` and
+  `create_item(item_id=…)` / `create_item_and_push(item_id=…)` now refuse it, naming the
+  record (`reserved by <allocated_by> at <time>`). Allocation records now carry
+  `reserved`: `next-id` writes `true` (a number handed out, no item yet), a create writes
+  `false` (its item consumed the number). Only `reserved: true` records, and older ones
+  with no `reserved` field, block an explicit id; a create's record never does, so a
+  deleted item's id can be created again. A `next-id` reservation stops blocking once its
+  number is created (a later `reserved: false` record for the same id consumes it).
+  Records written before this version have no `reserved` field and still block an
+  explicit id until they roll off the file's last 100; the way out is to create the id
+  as the reserver (`$YURTLE_AGENT` set to the record's `allocated_by`) or to remove the
+  record from `_ID_ALLOCATIONS.json`. Under `per_type` a reservation holds its number
+  in its own id space (`H-3` reserves `H-003`); under `id_numbering: global`, in every
+  dashed id space. A local create checks the checkout's `_ID_ALLOCATIONS.json` and the
+  already-fetched default branch's; `--push` checks origin's inside its compare-and-swap.
+  A reserver may use its own number only with `$YURTLE_AGENT` set to the record's
+  `allocated_by` (git `user.name` is shared by every session, so it never proves a
+  record is yours; the refusal says to set `$YURTLE_AGENT` when the record names your
+  `user.name`), and only in the record's own id space. Records never expire; one
+  dropped from the file no longer reserves (#1290).
+- **test_1224's fragment guard accepted a bare `assert fragment.is_file()`** as handling
+  a released `changelog.d/<N>.md` fragment; an existence check now counts only as a branch
+  condition (`if`/`elif`/`while`, a ternary, or a skip condition), never inside an
+  `assert` or a bare expression (#1293).
+
 ## [3.5.0] - 2026-10-30
 
 ### Added
