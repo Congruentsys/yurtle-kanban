@@ -353,3 +353,82 @@ def test_refusal_names_who_and_when(tmp_path, monkeypatch) -> None:
     assert result.exit_code != 0, out
     assert f"reserved by {RESERVER}" in out, out
     assert "2026-11-01" in out, f"the refusal does not say when it was reserved: {out}"
+
+
+# --- 6. driver ruling: the reserver may take its own reserved number --------------------------
+# A record blocks an explicit id only when the creating actor (resolved as `allocated_by` is
+# written: --agent / $YURTLE_AGENT, then git user.name) differs from the record's
+# `allocated_by`. Section 2's tests are the different-actor controls.
+
+
+def run_as(repo: Repo, monkeypatch, actor: str, argv: list[str], push: bool):
+    monkeypatch.setenv("YURTLE_AGENT", actor)
+    result = repo.cli(monkeypatch, *argv, *(["--push"] if push else []))
+    return result, " ".join(output_of(result).split())
+
+
+@pytest.mark.parametrize("mode", MODES)
+@PUSH
+def test_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode, push) -> None:
+    repo = make(tmp_path, mode)
+    reserved = reserved_for(mode, "H-003")
+    repo.seed({}, [record(reserved, by=RESERVER)])
+    result, out = run_as(repo, monkeypatch, RESERVER, ENTRY["hypothesis"][0]("H-003"), push)
+    assert_created(repo, result, out, "H-003", push)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@PUSH
+def test_reserver_may_use_its_own_next_id(tmp_path, monkeypatch, mode, push) -> None:
+    """End to end: A runs `next-id` as RESERVER, then creates that number with `--id` as the
+    same actor."""
+    repo = make(tmp_path, mode)
+    reserve_prefix = "H" if mode == "per_type" else "CHORE"
+    monkeypatch.setenv("YURTLE_AGENT", RESERVER)
+    got = repo.cli(monkeypatch, "next-id", reserve_prefix, "--json")
+    assert got.exit_code == 0, output_of(got)
+    assert json.loads(output_of(got))["id"] == f"{reserve_prefix}-001", output_of(got)
+    result, out = run_as(repo, monkeypatch, RESERVER, ENTRY["hypothesis"][0]("H-001"), push)
+    assert_created(repo, result, out, "H-001", push)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@PUSH
+def test_other_actor_still_refused_after_own_next_id(tmp_path, monkeypatch, mode, push) -> None:
+    """Control for the test above: the same next-id record refuses a DIFFERENT actor."""
+    repo = make(tmp_path, mode)
+    reserve_prefix = "H" if mode == "per_type" else "CHORE"
+    monkeypatch.setenv("YURTLE_AGENT", RESERVER)
+    got = repo.cli(monkeypatch, "next-id", reserve_prefix, "--json")
+    assert got.exit_code == 0, output_of(got)
+    tip = repo.remote_tip()
+    result, out = run_as(
+        repo, monkeypatch, "creator-agent/s-create01", ENTRY["hypothesis"][0]("H-001"), push
+    )
+    assert_refused(repo, result, out, "H-001", f"{reserve_prefix}-001", tip)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("remote", [True, False], ids=["origin", "no-remote"])
+def test_service_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode, remote) -> None:
+    repo = make(tmp_path, mode)
+    repo.seed({}, [record(reserved_for(mode, "EXP-003"), by=RESERVER)])
+    if not remote:
+        git(repo.a, "remote", "remove", "origin")
+    monkeypatch.setenv("YURTLE_AGENT", RESERVER)
+    monkeypatch.chdir(repo.a)
+    result = repo.service().create_item_and_push(
+        WorkItemType.EXPEDITION, "Explicit exp", item_id="EXP-003"
+    )
+    assert result["success"] is True, result
+    assert "EXP-003" in (repo.remote_ids() if remote else repo.local_ids())
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_service_create_item_reserver_may_use_its_own_record(tmp_path, monkeypatch, mode) -> None:
+    repo = make(tmp_path, mode)
+    repo.seed({}, [record(reserved_for(mode, "EXP-003"), by=RESERVER)])
+    monkeypatch.setenv("YURTLE_AGENT", RESERVER)
+    monkeypatch.chdir(repo.a)
+    repo.service().create_item(WorkItemType.EXPEDITION, "Explicit exp", item_id="EXP-003")
+    assert "EXP-003" in repo.local_ids()
