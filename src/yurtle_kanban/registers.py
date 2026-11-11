@@ -18,7 +18,6 @@ are never work: the scan skips them, so `next`, `claim`, `board`, `list` and
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 import os
 import re
@@ -254,6 +253,15 @@ def load_registers(
                 raise InputRefused(
                     f"register '{reg.name}': `{key}` {value} is inside register "
                     f"'{inside.name}''s folder {inside.path}"
+                )
+        if reg.index is not None:
+            twin = next((o for o in found if o is not reg and reg.index in (o.index, o.exempt)),
+                        None)
+            if twin is not None:
+                which = "index" if twin.index == reg.index else "exempt"
+                raise InputRefused(
+                    f"register '{reg.name}': `index` {reg.index} is also register "
+                    f"'{twin.name}''s `{which}`: each register's index is its own file"
                 )
     return found
 
@@ -833,14 +841,18 @@ class Registers:
             out.append(f"{entry.path}: {cite} has {len(digests)} kb:textDigest events: its "
                        "text is written once")
         filled = entry.text is not None or entry.digest is not None
+        written = False  # an event with a digest seen: the fill
         for ev in entry.events:
+            written = written or "textDigest" in ev
             status = ev.get("status")
-            if status is None or status in reg.statuses or status == RESERVED:
+            if status is None or status in reg.statuses:
                 continue
+            if status == RESERVED and not written:
+                continue  # alloc's event, before any fill
             if status == VOID and not filled:
                 continue  # a gap `import` voided
-            why = "a filled entry is never void" if status == VOID else (
-                f"not a status of register '{reg.name}'")
+            why = (f"a filled entry is never {status}" if status in (RESERVED, VOID)
+                   else f"not a status of register '{reg.name}'")
             out.append(f"{entry.path}: {cite} has an event with status {status!r}: {why}")
         for kind, target in entry.relations:
             t = reg.number_of(target)
@@ -1142,6 +1154,12 @@ class Registers:
                     content = read(numbered[n][0])
                     held = None if content is None else parse_entry(reg, numbered[n][0],
                                                                     content)
+                    if held is not None and held.text is None:
+                        return Refuse(
+                            f"{reg.cite(n)} is {held.status}: import does not fill a "
+                            "held number (use `register fill`, or leave it out of the "
+                            "file); nothing was imported"
+                        )
                     if held is not None and held.text is not None and (
                         normalise_text(held.text) != spec["text"]
                     ):
@@ -1177,38 +1195,44 @@ class Registers:
 
 
 def _append_only_violation(old: str, new: str) -> str | None:
-    """Why `new` is not `old` grown as an entry may grow, or None. `new` must be
-    `old` byte for byte plus inserted lines: inside the yurtle block before its
-    closing fence, and once under `## Text` when `old` had no text and no digest
-    (the first fill)."""
-    old_lines = old.splitlines(keepends=True)
-    new_lines = new.splitlines(keepends=True)
+    """Why `new` is not `old` grown as an entry may grow, or None (#1294 review r2).
+
+    Structural, not a line diff: `new` must be `old` with insertions at exactly two
+    cut points. (1) Immediately before the old yurtle block's closing fence: whole
+    lines, none starting with three backticks, so no insertion can close the block
+    early or open another. (2) Only when `old` had no text and no digest (the first
+    fill): right after the `## Text` heading line, any text at all."""
     span = _block_span(old)
-    if span is None:
-        return "the entry had no yurtle block"
-    open_line = old[: span[0]].count("\n") - 1  # the ```yurtle line
-    close_line = old[: span[1]].count("\n")  # the closing fence line
-    heading = old.find(_TEXT_HEADING)
-    text_lines: set[int] = set()
-    if heading >= 0:
-        at = old[: heading + 1].count("\n")  # the `## Text` line
-        body = normalise_text(old[heading + len(_TEXT_HEADING): span[0] - len(_BLOCK_OPEN)])
-        if not body and "kb:textDigest" not in old[span[0]: span[1]]:
-            text_lines = {at + 1, at + 2}  # the first fill, just under the heading
-    text_inserts = 0
-    ops = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False).get_opcodes()
-    for tag, i1, _, j1, _ in ops:
-        if tag == "equal":
+    heading = old.find(_TEXT_HEADING[:-1])  # "\n## Text\n"
+    if span is None or heading < 0 or heading >= span[0]:
+        return "the entry at the base had no `## Text` section and yurtle block"
+    close = span[1]
+    cut = heading + len(_TEXT_HEADING) - 1
+    body = normalise_text(old[cut: span[0] - len(_BLOCK_OPEN)])
+    first_fill = not body.strip() and "kb:textDigest" not in old[span[0]: close]
+    head, mid, tail = old[:cut], old[cut:close], old[close:]
+    if not (new.startswith(head) and new.endswith(tail)
+            and len(new) >= len(head) + len(mid) + len(tail)):
+        return "a line outside the yurtle block (or the block's own lines) changed"
+    middle = new[len(head): len(new) - len(tail)]
+    starts = [0]
+    if first_fill:  # wherever the old rest of the file follows the inserted text
+        starts, k = [], middle.find(mid)
+        while k >= 0:
+            starts.append(k)
+            k = middle.find(mid, k + 1)
+    for k in starts:
+        if not middle.startswith(mid, k):
             continue
-        if tag != "insert":
-            return f"line {i1 + 1} was {'deleted' if tag == 'delete' else 'changed'}"
-        if open_line < i1 <= close_line:
+        appended = middle[k + len(mid):]
+        if appended and not appended.endswith("\n"):
             continue
-        if i1 in text_lines and text_inserts == 0:
-            text_inserts += 1
+        if any(line.startswith("```") for line in appended.splitlines()):
             continue
-        return f"a line was inserted at line {j1 + 1}, outside the yurtle block"
-    return None
+        return None
+    if not middle.startswith(mid) and not first_fill:
+        return "text was inserted, but the entry already had its text"
+    return "lines were inserted other than before the yurtle block's closing fence"
 
 
 def _glob_regex(glob: str) -> re.Pattern[str]:
