@@ -45,6 +45,8 @@ from .config import (
 )
 from .hooks import HookContext, HookEngine, HookEvent
 from .inputs import GIT_ENV, check_identity, resolve_actor, same_actor
+from .registers import ENTRY_TYPE as REGISTER_ENTRY_TYPE
+from .registers import register_prefixes
 from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
 
 if TYPE_CHECKING:
@@ -1266,6 +1268,9 @@ class KanbanService:
                     continue
                 logger.warning(f"{file_path}: frontmatter field `{key}` {why}; ignored")
                 del frontmatter[key]
+
+            if frontmatter.get("type") == REGISTER_ENTRY_TYPE:
+                return None  # a register entry is never work (#1294)
 
             # Get required fields
             item_id = frontmatter.get("id")
@@ -3850,7 +3855,12 @@ class KanbanService:
         """The highest number in any dashed id space across allocation `records`,
         frontmatter `ids` and filename `stems` (#1288): `id_numbering: global`'s
         max. Paper-scoped `H130.n` ids neither count nor are counted."""
+        # a register's entries have their own id space (#1294)
+        own = register_prefixes(self.config.registers)
         record_ids = [str(r.get("id", "")) for r in records]
+        if own:
+            ids = [i for i in ids if (self._dashed_space(i) or "").upper() not in own]
+            stems = [s for s in stems if s.split("-", 1)[0].upper() not in own]
         max_num = max((self._dashed_number(i) for i in [*record_ids, *ids]), default=0)
         spaces = self._dashed_prefixes() | {
             space for i in [*record_ids, *ids] if (space := self._dashed_space(i))
