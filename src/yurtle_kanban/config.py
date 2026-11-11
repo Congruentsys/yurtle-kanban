@@ -752,6 +752,9 @@ class KanbanConfig:
     # `id_numbering:` as the config says it, unchecked: None when absent. Read it
     # through `id_numbering_mode()`, which refuses an unknown value (#1288)
     id_numbering: Any = None
+    # `registers:` as the config says it, unchecked: None when absent. Read and
+    # checked by `registers.load_registers` (#1294)
+    registers: Any = None
     # the repo this config belongs to (set by load); themes resolve there first (#287)
     repo_root: Path | None = field(default=None, repr=False, compare=False)
     # where the repo's `.kanban/themes/` is read when not the working tree: a
@@ -867,6 +870,7 @@ class KanbanConfig:
         config = cls._from_mapping(data, repo_root, theme_source)
         # top level, beside `boards:` (or `kanban:`); checked where it is used (#1288)
         config.id_numbering = data.get("id_numbering")
+        config.registers = data.get("registers")  # checked where used (#1294)
         return config
 
     @classmethod
@@ -1035,6 +1039,8 @@ class KanbanConfig:
 
         if self.id_numbering is not None:  # kept on a rewrite (#1288)
             data["id_numbering"] = self.id_numbering
+        if self.registers is not None:  # kept on a rewrite (#1294)
+            data["registers"] = self.registers
 
         return data
 
@@ -1053,6 +1059,8 @@ class KanbanConfig:
 
         if self.id_numbering is not None:  # kept on a rewrite (#1288)
             data["id_numbering"] = self.id_numbering
+        if self.registers is not None:  # kept on a rewrite (#1294)
+            data["registers"] = self.registers
 
         return data
 

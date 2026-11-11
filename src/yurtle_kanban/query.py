@@ -270,6 +270,14 @@ class UnifiedGraph:
         ug = cls()
         items = service.scan()
         ug.add_items(items)
+        # register entries are not work items, but they are graph data (#1294)
+        from .models import InputRefused
+        from .registers import Registers
+
+        try:
+            Registers(service).add_to_graph(ug.graph)
+        except InputRefused as e:  # a bad `registers:` config: `validate` names it
+            logger.warning(f"register entries left out of the graph: {e}")
         return ug
 
 

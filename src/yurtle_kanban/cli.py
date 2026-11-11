@@ -80,6 +80,7 @@ from .models import (
     id_prefix,
     unknown_priority_message,
 )
+from .registers import register, register_problems
 from .service import (
     BoardHalted,
     ControlState,
@@ -2504,7 +2505,11 @@ def _aware_stamp(value: object) -> bool:
 @main.command()
 @click.option("--fix", is_flag=True, help="Attempt to fix issues (rename files)")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def validate(fix: bool, as_json: bool):
+@click.option(
+    "--since", "since", metavar="REV",
+    help="Also check that register entry files changed since REV only by appended lines",
+)
+def validate(fix: bool, as_json: bool, since: str | None):
     """Validate work items for consistency issues.
 
     Checks:
@@ -2518,6 +2523,9 @@ def validate(fix: bool, as_json: bool):
     - A superseded or duplicate item's superseded_by is on a board, with no cycle
     - .kanban/control.yaml, when present, reads (a mode of halt or running)
     - id_numbering, when set, is per_type or global
+    - registers (#1294): the config, one file per number, text digests, relations
+      (to older entries, no cycle), cites in the scanned files, the committed index;
+      with --since, entry files changed only by appended lines
     """
     service = get_service()
     items = service.get_items()
@@ -2527,6 +2535,7 @@ def validate(fix: bool, as_json: bool):
         service.config.id_numbering_mode()
     except InputRefused as e:
         issues.append({"type": "bad_id_numbering", "message": f"{e} (#1288)"})
+    issues += register_problems(service, since)  # (#1294)
     control = service.control_state(worktree=True)  # (#582)
     if control.error:
         issues.append({
@@ -2696,6 +2705,8 @@ def validate(fix: bool, as_json: bool):
             )
         elif issue["type"] == "bad_id_numbering":
             console.print(f"[red]BAD CONFIG:[/red] {safe(issue['message'])}", soft_wrap=True)
+        elif issue["type"] in ("register", "bad_register_config"):
+            console.print(f"[red]REGISTER:[/red] {safe(issue['message'])}", soft_wrap=True)
         elif issue["type"] == "bad_control_file":
             console.print(
                 f"[red]BAD CONTROL FILE:[/red] {safe(issue['message'])}", soft_wrap=True
@@ -2951,6 +2962,9 @@ main.add_command(voyage)
 
 # upgrade-check: scan a repo for 2.x usages 3.x changed (#1231)
 main.add_command(upgrade_check)
+
+# register: append-only numbered registers (#1294)
+main.add_command(register)
 
 
 if __name__ == "__main__":
