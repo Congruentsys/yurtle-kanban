@@ -110,6 +110,14 @@ class Register:
             return from_letters(text)
         return int(text) if re.fullmatch(r"[1-9][0-9]*", text) else None
 
+    def parse_cite(self, token: object) -> int | None:
+        """A cited number: `parse`, but a zero-padded integer (`007`) is the integer
+        it pads (a cite of an id is padded as the id is)."""
+        text = str(token).strip()
+        if self.sequence == "integer" and (m := re.fullmatch(r"0*([1-9][0-9]*)", text)):
+            return int(m.group(1))
+        return self.parse(text)
+
     def cite(self, n: int) -> str:
         return self.cite_form.replace("{n}", self.render(n))
 
@@ -134,7 +142,7 @@ def _str_list(value: object, where: str, key: str) -> tuple[str, ...]:
 
 def _default_pattern(cite_form: str, sequence: str) -> str:
     before, _, after = cite_form.partition("{n}")
-    number = "([a-z]+)" if sequence == "alpha" else "([1-9][0-9]*)"
+    number = "([a-z]+)" if sequence == "alpha" else "0*([1-9][0-9]*)"  # padded too
     tail = "(?![a-z])" if sequence == "alpha" else "(?![0-9])"
     return rf"(?<![A-Za-z0-9_]){re.escape(before)}{number}{re.escape(after)}{tail}"
 
@@ -167,9 +175,13 @@ def load_registers(
         unknown = sorted(str(k) for k in spec if k not in _KEYS)
         if unknown:
             raise InputRefused(f"{where}: unknown key `{unknown[0]}`")
-        path = spec.get("path")
-        if not isinstance(path, str) or not path.strip().strip("/"):
-            raise InputRefused(f"{where}: `path` is required, got {_shape(path)}")
+        path = _folder(spec.get("path"), where, "path")
+        for other in found:
+            if _nested(path, other.path):
+                raise InputRefused(
+                    f"{where}: `path` {path} overlaps register '{other.name}''s "
+                    f"{other.path}: each register has a folder of its own"
+                )
         prefix = spec.get("id_prefix")
         if not isinstance(prefix, str) or not _PREFIX_RE.fullmatch(prefix):
             raise InputRefused(
@@ -227,13 +239,42 @@ def load_registers(
             value = spec.get(key)
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise InputRefused(f"{where}: `{key}` must be a path, got {_shape(value)}")
-            optional[key] = value.strip().strip("/") if value else None
+            optional[key] = _folder(value, where, key) if value else None
         found.append(Register(
-            name=name, path=path.strip().strip("/"), id_prefix=prefix, cite_form=cite_form,
+            name=name, path=path, id_prefix=prefix, cite_form=cite_form,
             cite_pattern=pattern, scan=scan, statuses=statuses, relations=relations,
             index=optional["index"], exempt=optional["exempt"], sequence=sequence,
         ))
+    for reg in found:
+        for key in ("index", "exempt"):
+            value = getattr(reg, key)
+            inside = next((o for o in found if value and (
+                value == o.path or value.startswith(o.path + "/"))), None)
+            if inside is not None:
+                raise InputRefused(
+                    f"register '{reg.name}': `{key}` {value} is inside register "
+                    f"'{inside.name}''s folder {inside.path}"
+                )
     return found
+
+
+def _folder(value: object, where: str, key: str) -> str:
+    """A repo-relative path from the config: no `.`/`..` part, not absolute."""
+    if not isinstance(value, str) or not value.strip():
+        raise InputRefused(f"{where}: `{key}` is required, got {_shape(value)}")
+    text = value.strip()
+    parts = [p for p in text.split("/") if p]
+    if text.startswith("/") or not parts or any(p in (".", "..") for p in parts):
+        raise InputRefused(
+            f"{where}: `{key}` must be a path inside the repo with no `.` or `..` "
+            f"part, got {text!r}"
+        )
+    return "/".join(parts)
+
+
+def _nested(a: str, b: str) -> bool:
+    """Whether folder `a` is `b` or inside it, or `b` inside `a`."""
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
 
 
 def register_prefixes(raw: object) -> set[str]:
@@ -442,6 +483,25 @@ def _check_line(value: str, what: str) -> str:
     return value
 
 
+def _board_prefixes(service: KanbanService) -> set[str]:
+    """The id prefixes of the item types the CONFIGURED boards' themes define: what
+    a register may not share. A theme that does not load is the board's to report."""
+    config = service.config
+    try:
+        if config.is_multi_board:
+            themes = [b.get_theme(service.repo_root, config.theme_source) for b in config.boards]
+        else:
+            themes = [config.get_theme()]
+    except Exception:
+        return set()
+    out = set()
+    for theme in themes:
+        for type_id, type_def in ((theme or {}).get("item_types") or {}).items():
+            pre = type_def.get("id_prefix") if isinstance(type_def, dict) else None
+            out.add(str(pre or str(type_id)[:4]).upper())
+    return out
+
+
 # --- the registers of one repo --------------------------------------------------------
 
 
@@ -452,11 +512,7 @@ class Registers:
     def __init__(self, service: KanbanService) -> None:
         self.service = service
         self.root = service.repo_root
-        try:
-            work = service._dashed_prefixes()
-        except Exception:  # a theme that does not load is the board's to report
-            work = set()
-        self.registers = load_registers(service.config.registers, work)
+        self.registers = load_registers(service.config.registers, _board_prefixes(service))
 
     def get(self, name: str) -> Register:
         for reg in self.registers:
@@ -568,8 +624,11 @@ class Registers:
         return out
 
     def index(self, reg: Register) -> str:
-        """The generated markdown index of `reg`."""
-        entries = self.entries(reg)[0]
+        """The generated markdown index of `reg`, from the working tree."""
+        return self.index_text(reg, self.entries(reg)[0])
+
+    def index_text(self, reg: Register, entries: dict[int, list[Entry]]) -> str:
+        """The generated markdown index of `reg`'s `entries`."""
         derived = self.derived(reg, entries)
         lines = [
             f"# Register: {reg.name}",
@@ -617,16 +676,17 @@ class Registers:
                     found.add(rel)
         return sorted(found)
 
-    def _cites_in(self, reg: Register, rel: str) -> list[tuple[int, int, str]]:
-        """(line, number, token) of every cite in a file."""
+    def _cites_in(self, reg: Register, rel: str) -> list[tuple[int, int, str]] | None:
+        """(line, number, token) of every cite in a file; None when it can't be
+        read as UTF-8."""
         try:
             text = (self.root / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            return []
+            return None
         out = []
         for line_no, line in enumerate(text.split("\n"), 1):
             for m in reg.cite_pattern.finditer(line):
-                n = reg.parse(m.group(1) or "")
+                n = reg.parse_cite(m.group(1) or "")
                 if n is not None:
                     out.append((line_no, n, m.group(0)))
         return out
@@ -659,26 +719,33 @@ class Registers:
             out.append({**row, "number": n})
         return out
 
-    def cites(self, reg: Register) -> tuple[list[tuple[str, int, int, str]], list[str]]:
+    def cites(
+        self, reg: Register
+    ) -> tuple[list[tuple[str, int, int, str]], list[str], list[str]]:
         """Every cite the scan finds and no exemption covers, as (path, line,
-        number, token); and a problem for each stale exemption row."""
+        number, token); a problem for each stale exemption row; and a problem for
+        each scanned file that is not UTF-8 (it is never skipped silently)."""
         rows = self.exemptions(reg)
         exempt = {(r["path"], r["line"], r["number"]) for r in rows}
-        found = [
-            (rel, line, n, token)
-            for rel in self._scanned(reg)
-            for line, n, token in self._cites_in(reg, rel)
-            if (rel, line, n) not in exempt
-        ]
+        found = []
+        unreadable = []
+        for rel in self._scanned(reg):
+            cites = self._cites_in(reg, rel)
+            if cites is None:
+                unreadable.append(f"{rel}: not readable as UTF-8 text, so register "
+                                  f"'{reg.name}' cannot check its cites")
+                continue
+            found += [(rel, line, n, token) for line, n, token in cites
+                      if (rel, line, n) not in exempt]
         stale = []
         for r in rows:
-            held = {(line, n) for line, n, _ in self._cites_in(reg, r["path"])}
+            held = {(line, n) for line, n, _ in self._cites_in(reg, r["path"]) or []}
             if (r["line"], r["number"]) not in held:
                 stale.append(
                     f"{r['path']}:{r['line']}: stale exemption in {reg.exempt}: the line "
                     f"no longer cites {reg.cite(r['number'])}"
                 )
-        return found, stale
+        return found, stale, unreadable
 
     # validate
 
@@ -701,11 +768,11 @@ class Registers:
                     out += self._entry_problems(reg, entry, entries)
             out += self._cycles(reg, entries)
             try:
-                found, stale = self.cites(reg)
+                found, stale, unreadable = self.cites(reg)
             except InputRefused as e:
                 out.append(str(e))
             else:
-                out += stale
+                out += stale + unreadable
                 out += [
                     f"{rel}:{line} cites {token}, which is not an entry of register "
                     f"'{reg.name}'"
@@ -720,8 +787,34 @@ class Registers:
                 elif held_text.rstrip() != self.index(reg).rstrip():
                     out.append(f"{reg.index}: register '{reg.name}''s index is stale or "
                                f"edited: run `register index {reg.name} --write`")
+        out += self._stray_entry_files()
         if since is not None:
             out += self._since(since)
+        return out
+
+    def _stray_entry_files(self) -> list[str]:
+        """Each tracked `type: register-entry` file outside every register folder:
+        it is on no board and in no register, so it would vanish unreported."""
+        svc = self.service
+        grep = svc._git_z("grep", "-z", "-n", "-I", "-E", "--full-name",
+                          "^type: register-entry", "--", "*.md")
+        folders = [self._git_rel(reg.path) + "/" for reg in self.registers]
+        out = []
+        top = svc._git_toplevel()
+        seen: set[str] = set()
+        for line in grep.stdout.split("\n"):
+            name = line.split("\0", 1)[0]
+            if not name or name in seen or any(name.startswith(f) for f in folders):
+                continue
+            seen.add(name)
+            try:
+                head = _FRONTMATTER_RE.match((top / name).read_text(encoding="utf-8"))
+                front = yaml.safe_load(head.group(1)) if head else None
+            except (OSError, UnicodeDecodeError, yaml.YAMLError):
+                continue
+            if isinstance(front, dict) and front.get("type") == ENTRY_TYPE:
+                out.append(f"{self._root_rel(name)} is a register entry outside every "
+                           "register's folder: move it into its register or delete it")
         return out
 
     def _entry_problems(
@@ -735,6 +828,20 @@ class Registers:
             out.append(f"{entry.path}: {cite}'s text does not match its kb:textDigest")
         if entry.digest is None and entry.text is not None:
             out.append(f"{entry.path}: {cite} has text but no kb:textDigest")
+        digests = [ev for ev in entry.events if "textDigest" in ev]
+        if len(digests) > 1:
+            out.append(f"{entry.path}: {cite} has {len(digests)} kb:textDigest events: its "
+                       "text is written once")
+        filled = entry.text is not None or entry.digest is not None
+        for ev in entry.events:
+            status = ev.get("status")
+            if status is None or status in reg.statuses or status == RESERVED:
+                continue
+            if status == VOID and not filled:
+                continue  # a gap `import` voided
+            why = "a filled entry is never void" if status == VOID else (
+                f"not a status of register '{reg.name}'")
+            out.append(f"{entry.path}: {cite} has an event with status {status!r}: {why}")
         for kind, target in entry.relations:
             t = reg.number_of(target)
             if kind not in reg.relations:
@@ -815,9 +922,10 @@ class Registers:
                     new = (top / name).read_text(encoding="utf-8")
                 except (OSError, UnicodeDecodeError):
                     new = ""
-                if not _insert_only(old, new):
-                    out.append(f"{rel}: changed since {rev} other than by appended lines "
-                               "(an entry is append-only)")
+                why = _append_only_violation(old, new)
+                if why is not None:
+                    out.append(f"{rel}: changed since {rev} other than by appending to its "
+                               f"yurtle block (an entry is append-only): {why}")
         return out
 
     # graph
@@ -859,6 +967,31 @@ class Registers:
 
     # writes
 
+    def _entries_at(
+        self, reg: Register, read: Read, files: dict[str, str]
+    ) -> dict[int, list[Entry]]:
+        """The entries of `read`'s tree with `files` (git-relative path -> text, the
+        change being built) written over it."""
+        folder = self._git_rel(reg.path) + "/"
+        names = set(self._names(reg, read.rev))
+        names |= {k for k in files if k.startswith(folder) and k.endswith(".md")}
+        found: dict[int, list[Entry]] = {}
+        for name in sorted(names):
+            content = files[name] if name in files else read(name)
+            entry = None if content is None else parse_entry(reg, self._root_rel(name), content)
+            if entry is not None:
+                found.setdefault(entry.number, []).append(entry)
+        return dict(sorted(found.items()))
+
+    def _change(self, reg: Register, read: Read, files: dict[str, str], message: str,
+                data: object = None) -> Change:
+        """A Change writing `files`, and with an `index:` configured the index
+        regenerated from the same tree, in the same commit."""
+        if reg.index is not None:
+            files = {**files, self._git_rel(reg.index):
+                     self.index_text(reg, self._entries_at(reg, read, files))}
+        return Change(files, message, data=data)
+
     def _entry_at(self, reg: Register, read: Read, n: int) -> tuple[str, str] | Refuse:
         held = self._numbered(reg, read.rev).get(n, [])
         if not held:
@@ -883,9 +1016,9 @@ class Registers:
             rel = f"{self._git_rel(reg.path)}/{name}"
             text = render_entry(reg, n, title, actor, at, created=date.fromisoformat(at[:10]),
                                 allocated_for=by)
-            return Change(
-                {rel: text}, f"Allocate {reg.cite(n)} ({reg.entry_id(n)}) in register "
-                f"{reg.name}: {title}", data=reg.cite(n),
+            return self._change(
+                reg, read, {rel: text}, f"Allocate {reg.cite(n)} ({reg.entry_id(n)}) in "
+                f"register {reg.name}: {title}", data=reg.cite(n),
             )
 
         return self.service.sync_and_push(mutate)
@@ -933,8 +1066,8 @@ class Registers:
             new = content[:cut] + text + "\n\n" + content[cut:]
             new = _append(new, lines + _event(
                 reg.statuses[0], actor, at, textDigest=text_digest(text)))
-            return Change({rel: new}, f"Fill {reg.cite(n)} in register {reg.name}",
-                          data=reg.cite(n))
+            return self._change(reg, read, {rel: new},
+                                f"Fill {reg.cite(n)} in register {reg.name}", data=reg.cite(n))
 
         return self.service.sync_and_push(mutate)
 
@@ -967,8 +1100,9 @@ class Registers:
             extra = {} if title is None else {"title": title}
             new = _append(content, _event(status or entry.status, actor, at, **extra))
             what = ", ".join(x for x in (status, title and f"title {title!r}") if x)
-            return Change({rel: new}, f"Set {reg.cite(n)} in register {reg.name}: {what}",
-                          data=reg.cite(n))
+            return self._change(reg, read, {rel: new},
+                                f"Set {reg.cite(n)} in register {reg.name}: {what}",
+                                data=reg.cite(n))
 
         return self.service.sync_and_push(mutate)
 
@@ -1002,6 +1136,20 @@ class Registers:
             files: dict[str, str] = {}
             for n in range(1, max(found) + 1):
                 if n in numbered:
+                    spec = found.get(n)
+                    if spec is None or not spec["text"] or len(numbered[n]) != 1:
+                        continue
+                    content = read(numbered[n][0])
+                    held = None if content is None else parse_entry(reg, numbered[n][0],
+                                                                    content)
+                    if held is not None and held.text is not None and (
+                        normalise_text(held.text) != spec["text"]
+                    ):
+                        return Refuse(
+                            f"{reg.cite(n)} is already filled with other text than the "
+                            "file gives it: an entry's text never changes; nothing was "
+                            "imported"
+                        )
                     continue
                 spec = found.get(n)
                 if spec is None:
@@ -1022,17 +1170,45 @@ class Registers:
             if not files:
                 return NoOp(f"register {reg.name} already holds every imported number")
             cites = ", ".join(reg.cite(self._number_of_name(reg, f) or 0) for f in files)
-            return Change(files, f"Import {len(files)} entries into register {reg.name}: "
-                          f"{cites}")
+            return self._change(reg, read, files, f"Import {len(files)} entries into "
+                                f"register {reg.name}: {cites}")
 
         return self.service.sync_and_push(mutate)
 
 
-def _insert_only(old: str, new: str) -> bool:
-    ops = difflib.SequenceMatcher(
-        a=old.splitlines(), b=new.splitlines(), autojunk=False
-    ).get_opcodes()
-    return all(op[0] in ("equal", "insert") for op in ops)
+def _append_only_violation(old: str, new: str) -> str | None:
+    """Why `new` is not `old` grown as an entry may grow, or None. `new` must be
+    `old` byte for byte plus inserted lines: inside the yurtle block before its
+    closing fence, and once under `## Text` when `old` had no text and no digest
+    (the first fill)."""
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    span = _block_span(old)
+    if span is None:
+        return "the entry had no yurtle block"
+    open_line = old[: span[0]].count("\n") - 1  # the ```yurtle line
+    close_line = old[: span[1]].count("\n")  # the closing fence line
+    heading = old.find(_TEXT_HEADING)
+    text_lines: set[int] = set()
+    if heading >= 0:
+        at = old[: heading + 1].count("\n")  # the `## Text` line
+        body = normalise_text(old[heading + len(_TEXT_HEADING): span[0] - len(_BLOCK_OPEN)])
+        if not body and "kb:textDigest" not in old[span[0]: span[1]]:
+            text_lines = {at + 1, at + 2}  # the first fill, just under the heading
+    text_inserts = 0
+    ops = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False).get_opcodes()
+    for tag, i1, _, j1, _ in ops:
+        if tag == "equal":
+            continue
+        if tag != "insert":
+            return f"line {i1 + 1} was {'deleted' if tag == 'delete' else 'changed'}"
+        if open_line < i1 <= close_line:
+            continue
+        if i1 in text_lines and text_inserts == 0:
+            text_inserts += 1
+            continue
+        return f"a line was inserted at line {j1 + 1}, outside the yurtle block"
+    return None
 
 
 def _glob_regex(glob: str) -> re.Pattern[str]:
@@ -1215,7 +1391,9 @@ def register_cites(name: str, number: str) -> None:
     """List the files (and lines) that cite an entry, exemptions aside."""
     regs, reg = _open(name)
     n = regs.number(reg, number)
-    found, _ = regs.cites(reg)
+    found, _, unreadable = regs.cites(reg)
+    for problem in unreadable:
+        click.echo(f"warning: {problem}", err=True)
     hits = [(rel, line) for rel, line, m, _ in found if m == n]
     if not hits:
         click.echo(f"no file cites {reg.cite(n)}")

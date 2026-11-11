@@ -371,10 +371,12 @@ yurtle-kanban register import decisions --from OLD.md --pattern '^## (?P<n>\d+) 
 - **Race-free and durable.** `alloc`, `fill`, `set` and `import` each push one
   compare-and-swap commit to origin's default branch, as `create --push` does, without touching
   your checkout. A reserved number is a file, so it counts as taken; gaps are never refilled
-  (`import` writes a `void` entry for each).
+  (`import` writes a `void` entry for each). With `index:` configured, each of these commits
+  also carries the index, regenerated from origin's tree, so origin always validates.
 - **Append-only.** After `alloc`, every change only inserts lines: the text once (with
   `kb:textDigest`), relation triples on the NEWER entry (`kb:narrows`, `kb:supersedes`, to
-  older entries only), and `kb:statusChange` events for status and title. The older entry's
+  older entries only), and `kb:statusChange` events for status and title, all inside the
+  yurtle block. The older entry's
   "superseded by" / "narrowed by" is derived; the graph (`query --sparql`) exposes the inverse
   as `kb:supersededBy`.
 - **`validate`** checks one file per number, each text against its digest, relations (to
