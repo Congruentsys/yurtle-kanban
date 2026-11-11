@@ -2380,7 +2380,7 @@ class KanbanService:
             item_id = self._format_id(prefix, self._get_next_id_number(prefix))
         else:
             self._refuse_global_holder(item_id)  # before anything is written (#1288)
-            self._refuse_reserved(item_id, self._local_records(), self._actor_or_none())
+            self._refuse_reserved_here(item_id)  # (#1290)
 
         # Determine file path
         if path is None:
@@ -2570,7 +2570,7 @@ class KanbanService:
         if item_id is not None:
             try:
                 self._refuse_global_holder(item_id)  # (#1288)
-                self._refuse_reserved(item_id, self._local_records(), actor)  # (#1290)
+                self._refuse_reserved_here(item_id)  # (#1290)
             except InputRefused as e:
                 return self._push_failed(str(e))
         current_id = item_id or self._format_id(prefix, self._get_next_id_number(prefix))
@@ -2687,7 +2687,7 @@ class KanbanService:
                     )
                 try:  # a number base's allocation records reserve (#1290)
                     judge._refuse_reserved(
-                        item_id, judge._records_at(base), actor, " on the default branch"
+                        item_id, judge._records_at(base), " on the default branch"
                     )
                 except InputRefused as e:
                     raise _CasRefusedError(str(e)) from None
@@ -3942,40 +3942,55 @@ class KanbanService:
         where = f"{lock_rel.as_posix()} at {rev}"
         return _parse_allocations(_allocations_text(shown.stdout, where), where)
 
-    def _actor_or_none(self) -> str | None:
-        """The actor an allocation record would name (`resolve_actor`: $YURTLE_AGENT,
-        then git user.name), or None when there is none (#1290)."""
+    def _exempt_actor(self) -> str | None:
+        """The actor whose own reservations an explicit id may take (#1290): only an
+        explicit one ($YURTLE_AGENT), never git user.name, which every session on a
+        machine shares (`resolve_actor`'s coordination rule); None when unset, and
+        then every record blocks."""
         try:
-            return resolve_actor(None, cwd=self.repo_root)
+            return resolve_actor(None, allow_git_fallback=False, cwd=self.repo_root)
         except InputRefused:
             return None
+
+    def _refuse_reserved_here(self, item_id: str) -> None:
+        """`_refuse_reserved` against the checkout's records and, as
+        `_refuse_global_holder` reads it, the already-fetched origin/<default>'s
+        (no network; a git failure reading it leaves the local check) (#1290)."""
+        self._refuse_reserved(item_id, self._local_records())
+        with suppress(subprocess.TimeoutExpired, OSError):
+            ref = self._fetched_default()
+            if ref is not None:
+                records = self._records_at(ref)
+                self._refuse_reserved(item_id, records, " on the fetched default branch")
 
     def _refuse_reserved(
         self,
         item_id: str,
         records: list[dict[str, Any]],
-        actor: str | None,
         where: str = "",
     ) -> None:
         """Refuse an explicit `item_id` whose number an allocation record reserves
-        for another actor (#1290): a record of the same number in the same id space
-        (`H-3` reserves `H-003`, `H130.3` reserves `H130.3`), or, under
-        `id_numbering: global`, of the same number in any dashed id space. A record
-        `allocated_by` the `actor` itself does not block: the reserver may use its
-        own number. Records never expire; one dropped from the file no longer
-        reserves. Raises `InputRefused` naming the record, who made it and when."""
+        (#1290): a record of the same number in the same id space (`H-3` reserves
+        `H-003`, `H130.3` reserves `H130.3`), or, under `id_numbering: global`, of
+        the same number in any dashed id space. A record of the same id space
+        `allocated_by` the explicit actor (`_exempt_actor`) does not block: the
+        reserver may use its own number, never another prefix's. Records never
+        expire; one dropped from the file no longer reserves. Raises
+        `InputRefused` naming the record, who made it and when."""
         key = self._id_key(item_id)
         if key is None:
             return
         space = self._dashed_space(item_id)
         shared = space is not None and self._numbers_globally(space)
         number = self._dashed_number(item_id) if shared else 0
+        actor = self._exempt_actor()
         for record in records:
             rid = str(record.get("id", ""))
             by = record.get("allocated_by")
-            if actor is not None and isinstance(by, str) and same_actor(by, actor):
+            same_space = self._id_key(rid) == key
+            if not same_space and not (shared and self._dashed_number(rid) == number):
                 continue
-            if self._id_key(rid) != key and not (shared and self._dashed_number(rid) == number):
+            if same_space and actor is not None and isinstance(by, str) and same_actor(by, actor):
                 continue
             raise InputRefused(
                 f"{item_id}'s number is reserved by {by or 'an unnamed actor'} at "
