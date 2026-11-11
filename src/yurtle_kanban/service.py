@@ -44,7 +44,7 @@ from .config import (
     _under,
 )
 from .hooks import HookContext, HookEngine, HookEvent
-from .inputs import GIT_ENV, check_identity, resolve_actor, same_actor
+from .inputs import AGENT_ENV, GIT_ENV, _git_user_name, check_identity, resolve_actor, same_actor
 from .sync import Change, Mutate, NoOp, Outcome, Read, Refuse
 
 if TYPE_CHECKING:
@@ -3999,7 +3999,22 @@ class KanbanService:
                 + (": under `id_numbering: global` every prefix shares one sequence"
                    if shared and self._id_key(rid) != key else "")
                 + "); nothing was created"
+                + self._own_reservation_hint(by)
             )
+
+    def _own_reservation_hint(self, by: object) -> str:
+        """A hint to set $YURTLE_AGENT when it is unset and the record names this
+        checkout's git user.name: that name may be this session's, but sessions share
+        it, so it never exempts (#1290 review r2); else nothing."""
+        if not isinstance(by, str) or os.environ.get(AGENT_ENV) is not None:
+            return ""
+        name = _git_user_name(self.repo_root)
+        if name is None or not same_actor(by, name):
+            return ""
+        return (
+            f"; if this is your reservation, set ${AGENT_ENV} (sessions share git "
+            "user.name, so it cannot prove the record is yours)"
+        )
 
     def _fetched_default(self) -> str | None:
         """The already-fetched `refs/remotes/origin/<default>`, when this clone has
