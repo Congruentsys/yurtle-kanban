@@ -783,24 +783,32 @@ class Registers:
     def _since(self, rev: str) -> list[str]:
         """Each entry file changed since `rev` other than by inserted lines."""
         svc = self.service
-        ok = svc._git_run("rev-parse", "--verify", "-q", f"{rev}^{{commit}}")
+        ok = svc._git_run("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
         if ok.returncode != 0:
             return [f"--since {rev}: not a commit"]
         folders = [self._git_rel(reg.path) for reg in self.registers]
         if not folders:
             return []
-        diff = svc._git_z(
-            "diff", "--no-renames", "--name-status", "-z", rev, "--", *folders
-        )
+        diff = svc._git_z("diff", "--name-status", "-z", rev, "--", *folders)
         parts = [p for p in diff.stdout.split("\0") if p]
+        changes: list[tuple[str, str]] = []
+        while parts:
+            status = parts.pop(0)
+            if status[:1] in ("R", "C") and len(parts) >= 2:  # old path, then new
+                old_name, new_name = parts.pop(0), parts.pop(0)
+                if status.startswith("R"):
+                    changes.append(("D", old_name))
+                changes.append(("A", new_name))
+            elif parts:
+                changes.append((status, parts.pop(0)))
         out = []
         top = svc._git_toplevel()
-        for status, name in zip(parts[::2], parts[1::2]):
+        for status, name in changes:
             if not name.endswith(".md"):
                 continue
             rel = self._root_rel(name)
             if status.startswith("D"):
-                out.append(f"{rel}: an entry file was deleted since {rev}")
+                out.append(f"{rel}: an entry file was deleted or renamed since {rev}")
             elif status.startswith("M") or status.startswith("T"):
                 old = svc._git_run("show", f"{rev}:{name}").stdout
                 try:
