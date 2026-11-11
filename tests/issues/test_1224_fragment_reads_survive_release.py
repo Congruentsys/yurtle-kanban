@@ -8,7 +8,9 @@ any function that builds a path to a real numbered fragment (directly, or throug
 module constant such as ``FRAGMENT = ROOT / "changelog.d" / "1207.md"``) must also
 handle the fragment being gone — an ``.exists()`` / ``.is_file()`` /
 ``os.path.exists()`` / ``os.path.isfile()`` check on the fragment itself or an exact
-alias of it (#1226; not its ``.parent``, which survives a release), a ``try`` around the
+alias of it (#1226; not its ``.parent``, which survives a release) used as a branch
+condition (#1293: an ``if``/``while`` or ternary test, or a skip condition; never inside
+an ``assert`` or a bare expression, which raise or do nothing), a ``try`` around the
 read that catches ``FileNotFoundError`` (or ``OSError``), or a ``pytest.skip`` /
 ``pytest.importorskip`` / ``skipif``. A fallback to CHANGELOG.md counts only through
 such a branch: a bare mention of it guards nothing (#1226 r1). A fragment whose
@@ -172,14 +174,35 @@ def _catches_missing(handler: ast.ExceptHandler) -> bool:
     return any(isinstance(t, ast.Name) and t.id in MISSING_ERRORS for t in types)
 
 
+def _branch_condition_nodes(func: ast.AST) -> set[int]:
+    """The ids of every node inside a branch condition: an `if`/`elif`/`while` test, a
+    ternary's test, a comprehension's `if`, or the condition of a `pytest.skip` /
+    `skipif` call. An existence check counts as a guard only there: inside an `assert`
+    or as a bare expression statement it branches on nothing, and raises (or does
+    nothing) once a release deletes the fragment (#1293)."""
+    tests: list[ast.AST] = []
+    for n in ast.walk(func):
+        if isinstance(n, (ast.If, ast.While, ast.IfExp)):
+            tests.append(n.test)
+        elif isinstance(n, ast.comprehension):
+            tests.extend(n.ifs)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                and n.func.attr in {"skip", "skipif"}:
+            tests.extend(n.args)
+            tests.extend(k.value for k in n.keywords)
+    return {id(m) for t in tests for m in ast.walk(t)}
+
+
 def _guarded(func: ast.AST, fragment_names: set[str],
              dir_names: frozenset[str] = frozenset()) -> bool:
     """The function branches on the fragment being gone: `.exists()`/`.is_file()` on
-    the fragment itself (#1226 — not on any other path, nor its `.parent`), the same
+    the fragment itself (#1226 — not on any other path, nor its `.parent`) as a branch
+    condition (#1293 — never inside an `assert` or a bare expression), the same
     through `os.path.exists`/`os.path.isfile` (r1), a `try` around a fragment read
     that catches FileNotFoundError (r1), or a pytest skip. A CHANGELOG.md fallback is
     accepted only through one of these branches — a bare mention guards nothing (r1)."""
     names = _local_fragments(func, fragment_names, dir_names)
+    conditions = _branch_condition_nodes(func)
 
     def reads_fragment(nodes: list[ast.stmt]) -> bool:
         body = ast.Module(body=nodes, type_ignores=[])
@@ -187,13 +210,14 @@ def _guarded(func: ast.AST, fragment_names: set[str],
 
     for n in ast.walk(func):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-            if n.func.attr in GUARD_ATTRS \
+            if n.func.attr in GUARD_ATTRS and id(n) in conditions \
                     and _is_fragment_receiver(n.func.value, names, dir_names):
                 return True
             if n.func.attr in SKIP_ATTRS and isinstance(n.func.value, ast.Name) \
                     and n.func.value.id == "pytest":
                 return True
-        if isinstance(n, ast.Call) and _is_os_path_guard(n) and n.args \
+        if isinstance(n, ast.Call) and _is_os_path_guard(n) and id(n) in conditions \
+                and n.args \
                 and _is_fragment_receiver(n.args[0], names, dir_names):
             return True
         if isinstance(n, ast.Try) and any(_catches_missing(h) for h in n.handlers) \

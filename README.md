@@ -137,7 +137,7 @@ yurtle-kanban export --format json
 | `comment` | Add comment to item (`--body TEXT` or `--body-file PATH\|-`; `--agent`); pushed to origin by default with an `origin` remote, `--no-push` adds it locally |
 | `export` | Export board to HTML/Markdown/JSON |
 | `query` | **Hybrid search: SPARQL, semantic, or natural language** |
-| `validate` | Check for ID mismatches, duplicate IDs across boards, dependency cycles and dangling `depends_on` targets |
+| `validate` | Check for ID mismatches, duplicate IDs across boards, dependency cycles and dangling `depends_on` targets; registers too (`--since REV`: entry files changed only by appended lines) |
 | `upgrade-check` | Read-only, heuristic scan of a repo (`[PATH]`, default the repo root) for 2.x usages 3.x changed: options 3.0 removed in scripts, docs and skills (`move -a`, `comment --author`, `comment ID TEXT`, …), `--resolution obsolete\|merged`, raw status checks a nautical/hdd/spec board's native names break, `comment`/`move` calls with no `--agent`; names what it does not check (see UPGRADING.md); `--json`; exit 1 with findings, 3 if the scan fails |
 | `voyage/epic` | Campaign management: `create`, `show`, `add` (`add` is pushed to origin by default with an `origin` remote; `--no-push` links locally) |
 | `idea` | HDD: Create research/feature ideas |
@@ -147,6 +147,7 @@ yurtle-kanban export --format json
 | `experiment` | HDD: `create`, `run` (timestamped runs), `status` (run history) |
 | `measure` | HDD: Create metrics/measures |
 | `hdd` | HDD: `backfill` (turtle blocks), `registry` (cross-ref index), `validate` (link checking) |
+| `register` | Append-only numbered registers (decisions, directives, numbered lists): `alloc`, `fill`, `set`, `show`, `list`, `index`, `cites`, `import` (see [Numbered registers](#numbered-registers)) |
 | `rank` | Set priority rank and value summary on items; pushed to origin by default with an `origin` remote, `--no-push` ranks locally |
 
 ### Identity and free text
@@ -332,6 +333,60 @@ id_numbering: per_type   # the default (also when the key is absent): today's be
 - Any other value is refused: `validate` reports it and `create` / `next-id` allocate nothing.
   `next-id` prints the mode it allocated under (`id_numbering` in `--json`). Padding is
   unchanged: at least three digits, never truncated.
+
+### Numbered registers
+
+A register is an append-only numbered list that lives beside the board: decisions (`D1`,
+`D2`, …), standing rulings, letter series (`S3a` … `S3z`, `S3aa`). Each entry is one file of
+the non-work type `register-entry` (`kb:RegisterEntry`), so it never appears in `board`,
+`list`, `next` or `claim`, and `move` refuses it (#1294). Configure registers at the top level
+of `.kanban/config.yaml`:
+
+```yaml
+registers:
+  - name: decisions
+    path: registers/decisions/          # one file per entry: DEC-001-<slug>.md
+    id_prefix: DEC                      # its own id space, under per_type and global alike
+    cite_form: "D{n}"                   # how documents cite an entry
+    cite_pattern: '(?<![A-Za-z0-9_])D([1-9][0-9]*)(?![A-Za-z0-9_])'   # group 1 = n
+    scan: ["docs/**"]                   # where `cites` and `validate` look for cites
+    statuses: [open, decided]           # default [in_force]; `reserved`/`void` are built in
+    relations: [narrows, supersedes]    # the default
+    index: docs/DECISIONS.md            # optional committed, generated index
+    exempt: docs/registers/decisions-exempt.yaml   # rows {path, line, number, reason}
+    sequence: integer                   # or alpha: a, b, … z, aa, ab, …
+```
+
+```bash
+yurtle-kanban register alloc decisions --title "Which licence" --by EXP-012 --agent "$ME"   # prints D1
+yurtle-kanban register fill decisions 1 --text-file ruling.md --agent "$ME"
+yurtle-kanban register fill decisions 2 --text-file r2.md --supersedes 1 --agent "$ME"
+yurtle-kanban register set decisions 1 --status decided --title "MIT now" --agent "$ME"
+yurtle-kanban register show decisions 1     # title, status, "superseded by D2", text
+yurtle-kanban register cites decisions 1    # files that cite D1, exemptions aside
+yurtle-kanban register index decisions --write
+yurtle-kanban register import decisions --from OLD.md --pattern '^## (?P<n>\d+) — (?P<date>[0-9-]+) — (?P<title>.+)$' --agent "$ME"
+```
+
+- **Race-free and durable.** `alloc`, `fill`, `set` and `import` each push one
+  compare-and-swap commit to origin's default branch, as `create --push` does, without touching
+  your checkout. A reserved number is a file, so it counts as taken; gaps are never refilled
+  (`import` writes a `void` entry for each). With `index:` configured, each of these commits
+  also carries the index, regenerated from origin's tree, so origin always validates.
+- **Append-only.** After `alloc`, every change only inserts lines: the text once (with
+  `kb:textDigest`), relation triples on the NEWER entry (`kb:narrows`, `kb:supersedes`, to
+  older entries only), and `kb:statusChange` events for status and title, all inside the
+  yurtle block. The older entry's
+  "superseded by" / "narrowed by" is derived; the graph (`query --sparql`) exposes the inverse
+  as `kb:supersededBy`.
+- **`validate`** checks one file per number, each text against its digest, relations (to
+  existing, older entries; no cycle), every cite the `scan` finds (an exemption row clears one;
+  a row whose line no longer holds the cite is stale, an error), and that a committed `index`
+  equals the generated one. `validate --since REV` also refuses an entry file changed since
+  `REV` other than by inserted lines. It compares `REV` with HEAD's commit, never the working
+  tree, so commit first. `validate --since` checks a change for ordinary
+  non-append edits to entries; it is not a defence against a committer who subverts git
+  itself (history rewrites, hooks, a forged `REV`).
 
 ## Themes
 
