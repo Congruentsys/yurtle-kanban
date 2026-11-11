@@ -3994,7 +3994,8 @@ class KanbanService:
     ) -> None:
         """Refuse an explicit `item_id` whose number an allocation record reserves
         (#1290): only `next-id`'s records (`reserved: true`) and legacy ones with no
-        `reserved` field reserve, a create's (`reserved: false`) never does. Such a
+        `reserved` field reserve, a create's (`reserved: false`) never does, and a
+        reservation a LATER create's record of the same id consumes no longer does. Such a
         record reserves its number in its own id space (`H-3` reserves `H-003`,
         `H130.3` reserves `H130.3`), and under `id_numbering: global` in every
         dashed id space. A record of the same id space
@@ -4009,9 +4010,15 @@ class KanbanService:
         shared = space is not None and self._numbers_globally(space)
         number = self._dashed_number(item_id) if shared else 0
         actor = self._exempt_actor()
-        for record in records:
+        consumed: set[tuple[str, int]] = set()  # ids a later create's record holds
+        for record in reversed(records):  # newest first: a later create consumes it
+            rkey = self._id_key(str(record.get("id", "")))
             if record.get("reserved", True) is not True:
+                if rkey is not None:
+                    consumed.add(rkey)
                 continue  # a create's record: its item consumed the number
+            if rkey in consumed:
+                continue  # the reservation was used by a later create
             rid = str(record.get("id", ""))
             by = record.get("allocated_by")
             same_space = self._id_key(rid) == key
